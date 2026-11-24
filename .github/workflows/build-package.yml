@@ -266,10 +266,9 @@ jobs:
             python3 -c 'import os; b=open("pkg/nativejelly","rb").read(); assert os.environ["NJ_SENTRY_DSN_DEV"].encode() in b; assert os.environ["NJ_POSTHOG_KEY_DEV"].encode() in b'
           else
             # `none` (JellyRust): telemetry/sender.rs compiles no endpoint in, so none may reach the build.
+            # (`tel:<hash>` is in pkg/.build-config either way: it hashes the configuration, empty or not.)
             [ -z "$NJ_SENTRY_DSN$NJ_POSTHOG_KEY$NJ_SENTRY_DSN_DEV$NJ_POSTHOG_KEY_DEV" ] \
               || { echo '::error::telemetry credentials are present in a none-telemetry build'; exit 1; }
-            ! grep -q 'tel:' pkg/.build-config \
-              || { echo '::error::telemetry endpoints reached a none-telemetry build'; exit 1; }
           fi
           # ...and carry the stamp to the caller's downstream jobs under a NON-HIDDEN name:
           # upload-artifact silently drops dotfiles, so `pkg/.build-config` would never arrive and
