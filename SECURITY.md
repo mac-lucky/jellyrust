@@ -36,7 +36,7 @@ looking at:
   fails only its validity-date check (the television has no battery-backed clock) and a public key
   was remembered for that exact host and port from an earlier fully verified connection, the
   request is repeated with the chain-and-date check replaced by a pin on that key; the name check
-  stays on. Telemetry and any host with no remembered key never take this path (`net.rs`,
+  stays on. A host with no remembered key never takes this path (`net.rs`,
   `net::keypin`). The product path talks only to the Jellyfin server whose address you enter.
   Over `http://`, your password, access token and everything JellyRust exchanges with that
   server travel without encryption — enter `https://` for a server you reach over the internet.
@@ -73,21 +73,9 @@ looking at:
 No account of its own, no server, no payment path, and no user-generated content. It signs in to
 **your** Jellyfin server and talks only to it.
 
-**It can have telemetry.** A binary built with `NJ_SENTRY_DSN` / `NJ_POSTHOG_KEY` set carries a
-Sentry DSN and a PostHog project key — both **write-only ingest credentials**, publishable by
-design, which permit sending to a project and grant no read of anything in it. A build without them
-sends no reports at all. First run asks about crash reports
-and product analytics separately. The first answer remains a draft; answering the second records
-both choices, and only a **Share** answer enables that category and permits its POSTs to
-`ingest.de.sentry.io` or `eu.i.posthog.com`. `BACK` navigates without recording a refusal. Later
-changes live under Account → Settings → Privacy & data, where **Done** commits and `BACK` discards.
-The Sentry
-**auth token** is the real secret in this system: it can read and delete the project, and it must
-never enter the binary — keep it only as a CI secret for `sentry-cli`.
-
-In scope for a report, and worth naming since a "no telemetry endpoint" line told researchers not to
-look here: the consent gate failing open, an identifier existing before product analytics is
-explicitly enabled or surviving its withdrawal, anything that gets a runtime string past
-`diag::schema`'s no-owned-strings guarantee,
-and the spool's file mode or its contents. [PRIVACY.md](PRIVACY.md) is the full account of what
-leaves the television.
+**It has no telemetry.** `telemetry/sender.rs` compiles no Sentry or PostHog endpoint into any
+build (`NJ_SENTRY_DSN` and `NJ_POSTHOG_KEY` are ignored), releases are built with `telemetry: none`,
+the crash-report and analytics choices are not offered, and nothing is spooled for sending. The app
+never contacts plex.tv or Plex's metadata provider (`catalog/account.rs`, `catalog/discover.rs`).
+A build that sends anything to a host other than the Jellyfin server you entered is a valid report,
+and a serious one. [PRIVACY.md](PRIVACY.md) is the full account of what the app stores.
