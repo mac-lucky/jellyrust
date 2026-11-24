@@ -18,8 +18,12 @@ filled by rank) give way where Litefin's look says otherwise.
   `nativejelly-storage` helper names, crate names, `/tmp/nativejelly-*` trigger files, `NJ_*` env
   vars and `tools/nativejelly-*`. `site/` is upstream's nativejelly.com website and is not
   published from here.
-- Remotes: `origin` is GitHub `mac-lucky/jellyrust` (public, Actions off, so upstream's
-  `.github/workflows` never run). `upstream` is sostk, fetch only.
+- Remotes: `origin` is GitHub `mac-lucky/jellyrust` (public). `upstream` is sostk, fetch only.
+  Actions runs upstream's `ci.yml` and `simulators.yml` on every push and PR; `release.yml`,
+  `nightly.yml`, `pages.yml` and `ci-metrics.yml` are disabled in the repo settings, not deleted,
+  so upstream merges stay small. `release.yml` cannot work here as it stands: it ships with
+  `telemetry: production` (which needs upstream's Sentry/PostHog variables) and
+  `ci/verify-published.sh` asks `sostk/native-jelly` about the release.
 - Branch `main` carries everything and is public: never rewrite or force-push it. Sync upstream with
   `git fetch upstream && git merge upstream/main`, then `make check` and fresh sim screenshots. Expect conflicts where upstream touches the id or name.
 - Credits: `CONTRIBUTORS.md` and the About page (`settings.about.body`, all five locales) list the
@@ -40,8 +44,7 @@ filled by rank) give way where Litefin's look says otherwise.
 - Install (debug flavour, its own app beside any other): `make ipk`, then install the ipk with the
   owner's Homebrew Channel installer, which lives outside this repo. Stable,
   once the owner approves: `make FLAVOR=stable RELEASE=1 ipk`. A new id is a new app: it does not
-  inherit the sign-in or data of any `com.sostk.nativejelly*` install. TV rules: `../../CLAUDE.md`
-  (Safety, foreground check, screenshots).
+  inherit the sign-in or data of any `com.sostk.nativejelly*` install.
 - Never type a password into the app: it logs keys and typed text to `/tmp`. Sign in with Quick
   Connect.
 - Sim screenshots against the household server: the owner signs in once through Quick Connect.

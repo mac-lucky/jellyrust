@@ -528,7 +528,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.trademarks.body"
   },
   "settings.legal.contact.body": {
-    "value": "Privacy questions and security reports go to github.com/mac-lucky/jellyrust/issues. Please do not include access tokens, server addresses or personal media information in a report.",
+    "value": "Privacy questions go to github.com/mac-lucky/jellyrust/issues. Report security problems privately at github.com/mac-lucky/jellyrust/security/advisories/new, not in a public issue. Please do not include access tokens, server addresses or personal media information in a report.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.contact.body"
   },
   "settings.legal.opensource.body": {
