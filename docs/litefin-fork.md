@@ -19,11 +19,17 @@ filled by rank) give way where Litefin's look says otherwise.
   vars and `tools/nativejelly-*`. `site/` is upstream's nativejelly.com website and is not
   published from here.
 - Remotes: `origin` is GitHub `mac-lucky/jellyrust` (public). `upstream` is sostk, fetch only.
-  Actions runs upstream's `ci.yml` and `simulators.yml` on every push and PR; `release.yml`,
-  `nightly.yml`, `pages.yml` and `ci-metrics.yml` are disabled in the repo settings, not deleted,
-  so upstream merges stay small. `release.yml` cannot work here as it stands: it ships with
-  `telemetry: production` (which needs upstream's Sentry/PostHog variables) and
-  `ci/verify-published.sh` asks `sostk/native-jelly` about the release.
+  Actions runs upstream's `ci.yml` and `simulators.yml` on every push and PR, and `release.yml`
+  on dispatch (it bumps the version, pushes the bump and tag to `main`, builds with
+  `telemetry: none` and publishes; it needs `docs/release-notes/vX.Y.Z.md` and
+  `docs/release-audits/vX.Y.Z.md` for the new version first). `nightly.yml`, `pages.yml` and
+  `ci-metrics.yml` are disabled in the repo settings, not deleted, so upstream merges stay small.
+  The simulator job does not replay upstream's recordings in `tests/fixtures/replay/`: they walk
+  screens the Litefin look replaced. The files stay, as unit-test inputs.
+- Homebrew Channel listing: `docs/webosbrew-package.yml`, submitted as
+  `packages/com.macluckylab.jellyrust.yml` on `main` of the `mac-lucky/apps-repo` fork (that
+  branch is the head of webosbrew/apps-repo#280, beside the IPTV app). Change both together;
+  its screenshots are `docs/screenshots/jellyrust/`, pinned to the release tag.
 - Branch `main` carries everything and is public: never rewrite or force-push it. Sync upstream with
   `git fetch upstream && git merge upstream/main`, then `make check` and fresh sim screenshots. Expect conflicts where upstream touches the id or name.
 - Credits: `CONTRIBUTORS.md` and the About page (`settings.about.body`, all five locales) list the

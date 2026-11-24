@@ -79,7 +79,8 @@ on:
         default: false
     secrets:
       SENTRY_AUTH_TOKEN:
-        required: true
+        # Not required: a `none` build (JellyRust's releases) uploads no debug files.
+        required: false
     outputs:
       ipk:
         description: Path to the built .ipk inside the runner's workspace (pkg/*.ipk).
@@ -106,8 +107,8 @@ jobs:
             *) echo "::error::flavor must be stable, debug, or nightly, got '$FLAVOR'"; exit 1 ;;
           esac
           case "$TELEMETRY" in
-            production|development) ;;
-            *) echo "::error::telemetry must be production or development, got '$TELEMETRY'"; exit 1 ;;
+            production|development|none) ;;
+            *) echo "::error::telemetry must be production, development or none, got '$TELEMETRY'"; exit 1 ;;
           esac
           # The manifest filename and the Homebrew Channel listing are both keyed to the STABLE
           # app id — a manifest generated for a flavoured id would name a package the Channel does
@@ -257,12 +258,18 @@ jobs:
             echo "telemetry fingerprints (sha256, first 16):"
             printf '  sentry  %s\n' "$(printf %s "$NJ_SENTRY_DSN"  | sha256sum | cut -c1-16)"
             printf '  posthog %s\n' "$(printf %s "$NJ_POSTHOG_KEY" | sha256sum | cut -c1-16)"
-          else
+          elif [ "$TELEMETRY" = development ]; then
             [ -n "$NJ_SENTRY_DSN_DEV" ] || { echo '::error::NJ_SENTRY_DSN_DEV is required for a development-telemetry build.'; exit 1; }
             [ -n "$NJ_POSTHOG_KEY_DEV" ] || { echo '::error::NJ_POSTHOG_KEY_DEV is required for a development-telemetry build.'; exit 1; }
             [ -z "$NJ_SENTRY_DSN$NJ_POSTHOG_KEY" ] || { echo '::error::production telemetry is present in a development-telemetry build.'; exit 1; }
             grep -q 'tel:' pkg/.build-config
             python3 -c 'import os; b=open("pkg/nativejelly","rb").read(); assert os.environ["NJ_SENTRY_DSN_DEV"].encode() in b; assert os.environ["NJ_POSTHOG_KEY_DEV"].encode() in b'
+          else
+            # `none` (JellyRust): telemetry/sender.rs compiles no endpoint in, so none may reach the build.
+            [ -z "$NJ_SENTRY_DSN$NJ_POSTHOG_KEY$NJ_SENTRY_DSN_DEV$NJ_POSTHOG_KEY_DEV" ] \
+              || { echo '::error::telemetry credentials are present in a none-telemetry build'; exit 1; }
+            ! grep -q 'tel:' pkg/.build-config \
+              || { echo '::error::telemetry endpoints reached a none-telemetry build'; exit 1; }
           fi
           # ...and carry the stamp to the caller's downstream jobs under a NON-HIDDEN name:
           # upload-artifact silently drops dotfiles, so `pkg/.build-config` would never arrive and
@@ -281,6 +288,7 @@ jobs:
             || { echo "::error::packaged the wrong flavour — pkg/ holds $(ls pkg/*.ipk 2>&1)"; exit 1; }
 
       - name: Upload debug files to Sentry
+        if: inputs.telemetry != 'none'
         # **In the same job as the build, deliberately.** `pkg/nativejelly.debug` is 75 MB and exists
         # only here; carrying it between jobs as an artifact would cost an upload and a download to
         # move a file whose only consumer is this step. It also keeps the pairing local: the binary
