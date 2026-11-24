@@ -421,8 +421,9 @@ jobs:
           # template or from the previous release with its version line left unedited would
           # otherwise publish under a stale display name — cosmetic before this change (one wrong
           # string buried in the body), now the release's own canonical title.
-          echo "$title_line" | grep -qE "^# ${tag} — .+" \
-            || { echo "::error::$note's first line ('$title_line') must read exactly '# $tag — <theme>' — it becomes the release title"; exit 1; }
+          # JellyRust's notes write an ASCII " - " (its public-text rule); upstream's write an em dash.
+          echo "$title_line" | grep -qE "^# ${tag} (—|-) .+" \
+            || { echo "::error::$note's first line ('$title_line') must read exactly '# $tag - <theme>' — it becomes the release title"; exit 1; }
           title="$(echo "$title_line" | sed -e 's/^# *//')"
           echo "title=$title" >> "$GITHUB_OUTPUT"
           tail -n +2 dist/body-full.md | sed '/./,$!d' > dist/body.md
