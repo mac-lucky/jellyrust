@@ -1,9 +1,9 @@
-//! Application-owned live backdrop schedule and chrome material state.
+//! Application-owned live backdrop schedule and the dev glass dial. The shared chrome wears no
+//! glass any more (the Litefin rail is flat on the page, `docs/litefin-look.md` 11.2).
 //! Every dynamic surface enters `backdrop` through the painter; the dispatcher supplies z bands.
 //! The layer walk, geometric occlusion and region validity live in `backdrop`, with no route tests.
 
 use crate::ui::glassload::Dial;
-use crate::ui::widgets::TabBand;
 use super::backdrop::{Sources, Z};
 use std::{rc::Rc, cell::RefCell};
 
@@ -11,9 +11,6 @@ use std::{rc::Rc, cell::RefCell};
 /// screen, and the dev load dial.
 pub(crate) struct GlassPlan {
     pub(crate) sources: Rc<RefCell<Sources>>,
-    /// Persistent state for the shared top tab track: visible lifetime, adaptive density and this
-    /// frame's material. The strip borrows it during paint; the Bridge never owns a second copy.
-    tab: TabBand,
     /// The dev backdrop-glass load dial and the blurred-transition prototype beside it
     /// (`/tmp/nativejelly-glassload`, `/tmp/nativejelly-navblur`).
     dial: Dial,
@@ -23,7 +20,6 @@ impl GlassPlan {
     pub(crate) fn new() -> Self {
         let plan = Self {
             sources: Rc::new(RefCell::new(Sources::default())),
-            tab: TabBand::new(),
             dial: Dial::new(),
         };
         // The dial's step and armed bit are read by instruments that hold no borrow of this type,
@@ -34,33 +30,6 @@ impl GlassPlan {
 
     pub(crate) fn walk(&self, ceiling: Z) -> super::backdrop::Scope {
         super::backdrop::enter(self.sources.clone(), ceiling)
-    }
-
-    pub(crate) fn step_tab_band(&mut self, dt: f32) {
-        self.tab.step(dt);
-    }
-
-    pub(crate) fn tab_band_mut(&mut self) -> &mut TabBand {
-        &mut self.tab
-    }
-
-    pub(crate) fn tab_face(&self) -> Option<nj_gfx::gfx::GlassFace> {
-        self.tab.face()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn seed_tab_density_for_test(&mut self, value: f32) {
-        self.tab.seed_density(value);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn tab_density_for_test(&self) -> f32 {
-        self.tab.density()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_tab_face_for_test(&mut self, face: nj_gfx::gfx::GlassFace) {
-        self.tab.set_face(face);
     }
 
     /// Arm the load dial from `/tmp/nativejelly-glassload`'s content.
@@ -146,24 +115,5 @@ mod tests {
             assert!(decide(Request {z:Z::CHROME,rect:canvas(),valid:true}, &[],
                 &[Damage {z:Z::PAGE,rect:canvas()}]).refresh);
         }
-    }
-
-    /// The tab band is frame-plan state. Mutating one plan's solve/material must leave another
-    /// plan at its fresh values; a process static or Bridge-owned field cannot satisfy this.
-    #[test]
-    fn two_glass_plans_own_independent_tab_bands() {
-        let _guard = nj_base::testlock::serial();
-        let mut a = GlassPlan::new();
-        let b = GlassPlan::new();
-        a.seed_tab_density_for_test(0.73);
-        a.set_tab_face_for_test(nj_gfx::gfx::GlassFace {
-            scrim_top: [0.1, 0.2, 0.3, 0.4],
-            scrim_bot: [0.5, 0.6, 0.7, 0.8],
-            rim: [0.0; 4], rim_lit: [0.0; 4], rim_w: 1.0,
-        });
-        assert!((a.tab_density_for_test() - 0.73).abs() < 1e-6);
-        assert_eq!(a.tab_face().unwrap().scrim_top, [0.1, 0.2, 0.3, 0.4]);
-        assert_eq!(b.tab_density_for_test(), 0.0);
-        assert!(b.tab_face().is_none());
     }
 }

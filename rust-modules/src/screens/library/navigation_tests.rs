@@ -136,7 +136,7 @@ impl Fixture {
         }
     }
     fn screen(&self) -> LibraryScreen {
-        let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Movie);
+        let mut page = LibraryScreen::new(ENTRY, InstanceId(19), None);
         page.sync(&self.cx(&FocusEngine::new()));
         page
     }
@@ -189,7 +189,8 @@ fn shows_requested_before_discovery_stays_loading_and_never_fetches_the_foreign_
     let _guard = nj_base::testlock::serial();
     let mut fixture = Fixture::new(0, 12, 0);
     fixture.directory = Default::default();
-    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Show);
+    let shows = crate::screens::registry::LibrarySectionIdentity { sid: crate::catalog::ServerId::UNSET, key: 2 };
+    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), Some(shows.clone()));
     let mut engine = FocusEngine::new();
     for i in 0..30 {
         let effects = fixture.step(
@@ -200,8 +201,7 @@ fn shows_requested_before_discovery_stays_loading_and_never_fetches_the_foreign_
                 dt_us: 16_000,
             }),
         );
-        assert_eq!(page.kind, SecKind::Show);
-        assert_eq!(page.wanted_kind, Some(SecKind::Show));
+        assert_eq!(page.wanted, Some(shows.clone()));
         assert_eq!(page.readout, Readout::Loading);
         assert!(page.pair.detail.elems.is_empty());
         assert!(!effects.iter().any(|effect| matches!(
@@ -249,101 +249,10 @@ fn shows_requested_before_discovery_stays_loading_and_never_fetches_the_foreign_
         ScreenEvent::StoreChanged(StoreId::Browse.ord(), 1),
     );
     assert_eq!(page.kind, SecKind::Show);
-    assert_eq!(page.wanted_kind, None);
+    assert_eq!(page.wanted, None);
     assert_eq!(page.readout, Readout::Grid);
     assert_eq!(page.pair.detail.elems.len(), 12);
     assert!((0..12).all(|i| fixture.listing.view().item(i).unwrap().kind == 1));
-}
-
-#[test]
-fn an_external_sources_selection_reseats_the_library_row_once_not_on_metadata_refresh() {
-    let _guard = nj_base::testlock::serial();
-    let mut fixture = Fixture::new(12, 12, 0);
-    let mut page = fixture.screen();
-    page.initial = false;
-    let mut engine = FocusEngine::new();
-    assert!(
-        page.libraries.iter().any(|(elem, _)| *elem == MORE),
-        "the fixture must have actual overflow"
-    );
-    engine.set(OWNER, page.key(MORE), Some(LIBRARY_GROUP), By::Restore);
-    let effects = fixture.step(&mut page, &mut engine, ScreenEvent::Activate(MORE));
-    assert!(effects.iter().any(|effect| matches!(
-        effect,
-        AppFx::Library(LibraryReq::Menu {
-            kind: crate::screens::registry::LibraryMenuKind::Sources,
-            ..
-        })
-    )));
-    let target = SectionAddress {
-        epoch: fixture.epoch,
-        sid: crate::catalog::ServerId::UNSET,
-        section: 3,
-    };
-    fixture.step(
-        &mut page,
-        &mut engine,
-        ScreenEvent::App(AppMsg::LibrarySelect(target)),
-    );
-    let effects = fixture.step(
-        &mut page,
-        &mut engine,
-        ScreenEvent::Tick(Tick {
-            ms: 80,
-            dt_us: 80_000,
-        }),
-    );
-    assert!(effects.iter().any(|effect| matches!(effect, AppFx::Store(_, StoreCmd::Browse(
-        BrowseCmd::Addressed { target: actual, work: LibraryWork::Commit { select: true, .. } })) if *actual == target)));
-    fixture.publish(2, 12);
-    fixture.step(
-        &mut page,
-        &mut engine,
-        ScreenEvent::StoreChanged(StoreId::Browse.ord(), 1),
-    );
-    let selected = page
-        .libraries
-        .iter()
-        .position(|(_, index)| *index == 2)
-        .unwrap();
-    assert!(
-        selected > 0,
-        "a first-slot fallback must not accidentally satisfy this test"
-    );
-    let wanted = page.key(page.libraries[selected].0);
-    fixture.step(
-        &mut page,
-        &mut engine,
-        ScreenEvent::Tick(Tick {
-            ms: 96,
-            dt_us: 16_000,
-        }),
-    );
-    assert_eq!(
-        engine.current(OWNER),
-        Some(wanted),
-        "the row must seat the library selected in Sources"
-    );
-    engine.set(OWNER, page.key(MORE), Some(LIBRARY_GROUP), By::Dir);
-    fixture.publish(2, 24);
-    fixture.step(
-        &mut page,
-        &mut engine,
-        ScreenEvent::StoreChanged(StoreId::Browse.ord(), 2),
-    );
-    fixture.step(
-        &mut page,
-        &mut engine,
-        ScreenEvent::Tick(Tick {
-            ms: 112,
-            dt_us: 16_000,
-        }),
-    );
-    assert_eq!(
-        engine.current(OWNER),
-        Some(page.key(MORE)),
-        "same-selection refresh must not leash the cursor"
-    );
 }
 
 #[test]
@@ -373,23 +282,25 @@ fn source_controls_and_document_groups_match_bare_shelves_full_and_failed_conten
         let mut engine = FocusEngine::new();
         let mut groups = Vec::new();
         page.groups(&fixture.cx(&engine), &mut groups);
+        // The page shows one library: no row of library pills leads the document.
         let mut expected = Vec::new();
-        if libraries > 1 {
-            expected.push(LIBRARY_GROUP);
-        }
+        expected.push(page.tabs);
         expected.extend(page.shelves.iter().map(|shelf| shelf.group));
         assert_eq!(page.shelves.len(), shelves);
-        // An empty answer keeps the heading row (its TYPE chip leaves the empty listing); only a
+        // An empty answer keeps the heading row (its View Mode leaves the empty listing); only a
         // failure or the absence of any library drops it.
         let head = items > 0 || (libraries > 0 && !failed);
         if head {
             expected.push(page.toolbar_group());
         }
-        if items > 0 {
-            expected.push(page.pair.groups_config().detail);
-        }
         if failed {
             expected.push(STATUS_GROUP);
+        }
+        if page.pair.master.shown() {
+            expected.push(page.pair.groups_config().master);
+        }
+        if items > 0 {
+            expected.push(page.pair.groups_config().detail);
         }
         assert_eq!(
             groups.iter().map(|group| group.id).collect::<Vec<_>>(),
@@ -449,7 +360,7 @@ fn source_controls_and_document_groups_match_bare_shelves_full_and_failed_conten
             );
             let key = engine.current(OWNER).unwrap();
             assert!(
-                [TYPE, SORT, FILTER].contains(&key.elem),
+                [SHUFFLE, SORT, FILTER, TYPE].contains(&key.elem),
                 "Source is never a toolbar stop"
             );
             assert_eq!(
@@ -458,13 +369,12 @@ fn source_controls_and_document_groups_match_bare_shelves_full_and_failed_conten
                     .find(|group| group.id == page.toolbar_group())
                     .unwrap()
                     .len,
-                3
+                4
             );
+            for _ in 0..3 { fixture.direction(&mut page, &mut engine, Dir::Left); }
+            assert_eq!(engine.current(OWNER).unwrap().elem, SHUFFLE);
             fixture.direction(&mut page, &mut engine, Dir::Left);
-            fixture.direction(&mut page, &mut engine, Dir::Left);
-            assert_eq!(engine.current(OWNER).unwrap().elem, TYPE);
-            fixture.direction(&mut page, &mut engine, Dir::Left);
-            assert_eq!(engine.current(OWNER).unwrap().elem, TYPE);
+            assert_eq!(engine.current(OWNER).unwrap().elem, SHUFFLE);
             fixture.direction(&mut page, &mut engine, Dir::Right);
             assert_eq!(engine.current(OWNER).unwrap().elem, SORT);
             fixture.direction(&mut page, &mut engine, Dir::Right);
@@ -477,6 +387,12 @@ fn source_controls_and_document_groups_match_bare_shelves_full_and_failed_conten
 
 /// How the page was reached, as far as the focus engine can tell: a pointer click on the strip's
 /// tab, a keyboard OK on it, or a boot/trigger open with nothing focused at all.
+/// The first library of `kind` in the fixture's table, as the rail's popover addresses it.
+fn section_of(fixture: &Fixture, kind: SecKind) -> crate::screens::registry::LibrarySectionIdentity {
+    let section = fixture.sections.iter().find(|s| s.kind == kind).expect("the fixture lists that kind");
+    crate::screens::registry::LibrarySectionIdentity { sid: section.sid.expect("a server"), key: section.key }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Opened {
     Pointer,
@@ -490,7 +406,7 @@ fn opened_before_its_shelves(kind: SecKind, opened: Opened) -> (Fixture, Library
     let mut fixture = Fixture::new(1, 24, 0);
     for section in &mut fixture.sections { section.kind = kind; }
     fixture.publish(0, 24);
-    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), kind);
+    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), None);
     let mut engine = FocusEngine::new();
     let tab = FocusKey { entry: ENTRY, elem: crate::ui::dispatch::STRIP_BASE + 1 };
     match opened {
@@ -536,8 +452,8 @@ fn a_shelf_landing_after_the_head_seat_moves_that_seat_onto_the_first_shelf() {
             let (mut fixture, mut page, mut engine) = opened_before_its_shelves(kind, opened);
             assert_eq!(
                 engine.current(OWNER).and_then(|key| page.group_of(&key.elem, &fixture.cx(&engine))),
-                Some(page.toolbar_group()),
-                "{kind:?}/{opened:?}: with no shelves yet, the head of the document is the grid's heading"
+                Some(page.pair.groups_config().detail),
+                "{kind:?}/{opened:?}: with no shelves yet, the page seats the grid's first title (Litefin)"
             );
             land_shelves(&mut fixture, &mut page, &mut engine);
             assert_eq!(
@@ -562,9 +478,9 @@ fn a_shelf_landing_never_moves_a_seat_the_user_chose() {
     let _guard = nj_base::testlock::serial();
     let (mut fixture, mut page, mut engine) = opened_before_its_shelves(SecKind::Movie, Opened::Pointer);
     fixture.direction(&mut page, &mut engine, Dir::Right);
-    assert_eq!(engine.current(OWNER), Some(page.key(SORT)));
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[1])));
     land_shelves(&mut fixture, &mut page, &mut engine);
-    assert_eq!(engine.current(OWNER), Some(page.key(SORT)), "the user's own move outranks the page's seat");
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[1])), "the user's own move outranks the page's seat");
 }
 
 /// Pressing OK on the page's own seat is a choice as surely as moving is, and it moves nothing
@@ -574,10 +490,11 @@ fn a_shelf_landing_never_moves_a_seat_the_user_chose() {
 fn a_shelf_landing_never_moves_a_seat_the_user_activated() {
     let _guard = nj_base::testlock::serial();
     let (mut fixture, mut page, mut engine) = opened_before_its_shelves(SecKind::Movie, Opened::Keyboard);
-    assert_eq!(engine.current(OWNER), Some(page.key(TYPE)));
-    fixture.step(&mut page, &mut engine, ScreenEvent::Activate(TYPE));
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[0])));
+    let first = page.pair.detail.elems[0];
+    fixture.step(&mut page, &mut engine, ScreenEvent::Activate(first));
     land_shelves(&mut fixture, &mut page, &mut engine);
-    assert_eq!(engine.current(OWNER), Some(page.key(TYPE)), "an activated seat is the user's");
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[0])), "an activated seat is the user's");
 }
 
 /// …and the press is claimed where it STARTS, not where it commits: OK-down on the seat arms a
@@ -592,10 +509,10 @@ fn a_shelf_landing_never_moves_a_seat_the_user_began_to_press() {
         kind: InputKind::Key { key, sym: 0, wcode: 0, edge, at_edge: false },
     });
     let (mut fixture, mut page, mut engine) = opened_before_its_shelves(SecKind::Movie, Opened::Keyboard);
-    assert_eq!(engine.current(OWNER), Some(page.key(TYPE)));
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[0])));
     fixture.step(&mut page, &mut engine, press(Key::Ok, Edge::Down));
     land_shelves(&mut fixture, &mut page, &mut engine);
-    assert_eq!(engine.current(OWNER), Some(page.key(TYPE)), "a press begun on the seat keeps it");
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[0])), "a press begun on the seat keeps it");
 }
 
 /// A pointer resting on the seat is the reader's too (a Magic Remote hovers without clicking), and
@@ -604,19 +521,20 @@ fn a_shelf_landing_never_moves_a_seat_the_user_began_to_press() {
 fn a_shelf_landing_never_moves_a_seat_the_pointer_is_on() {
     let _guard = nj_base::testlock::serial();
     let (mut fixture, mut page, mut engine) = opened_before_its_shelves(SecKind::Movie, Opened::Pointer);
-    assert_eq!(engine.current(OWNER), Some(page.key(TYPE)));
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[0])));
+    let first = page.pair.detail.elems[0];
     fixture.step(&mut page, &mut engine, ScreenEvent::Input(nj_machine::machine::InputEvent {
         at: Tick::default(),
         source: nj_machine::machine::Source::Sdl,
-        kind: InputKind::Pointer { x: 0.0, y: 0.0, hit: Some(TYPE) },
+        kind: InputKind::Pointer { x: 0.0, y: 0.0, hit: Some(first) },
     }));
     land_shelves(&mut fixture, &mut page, &mut engine);
-    assert_eq!(engine.current(OWNER), Some(page.key(TYPE)), "a hovered seat is the user's");
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[0])), "a hovered seat is the user's");
 }
 
 /// **A restored seat is the reader's, even at the head.** Movies → Shows → Movies after leaving
-/// focus on SORT: returning to Movies restores its saved viewport (scroll 0) and the engine's
-/// remembered SORT, and the page's re-entry seat lands there. That seat is a restore, not the
+/// focus on the second title: returning to Movies restores its saved viewport (scroll 0) and the
+/// engine's remembered title, and the page's re-entry seat lands there. That seat is a restore, not the
 /// page's own choice, so a shelf landing that follows must leave it where the reader left it.
 #[test]
 fn a_shelf_landing_never_moves_a_restored_seat_at_the_head() {
@@ -624,7 +542,7 @@ fn a_shelf_landing_never_moves_a_restored_seat_at_the_head() {
     let mut fixture = Fixture::new(2, 24, 0);
     fixture.sections[1].kind = SecKind::Show;
     fixture.publish(0, 24);
-    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Movie);
+    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), None);
     let mut engine = FocusEngine::new();
     let mut ms = 0;
     let mut frames = |fixture: &Fixture, page: &mut LibraryScreen, engine: &mut FocusEngine<u32>, n: u32| {
@@ -635,21 +553,20 @@ fn a_shelf_landing_never_moves_a_restored_seat_at_the_head() {
     };
     fixture.step(&mut page, &mut engine, ScreenEvent::Mount);
     frames(&fixture, &mut page, &mut engine, 3);
-    assert!(page.libraries.is_empty(), "one library per kind draws no selector");
-    assert_eq!(engine.current(OWNER), Some(page.key(TYPE)));
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[0])));
     fixture.direction(&mut page, &mut engine, Dir::Right);
-    assert_eq!(engine.current(OWNER), Some(page.key(SORT)));
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[1])));
     for (kind, section) in [(SecKind::Show, 1), (SecKind::Movie, 0)] {
-        fixture.step(&mut page, &mut engine, ScreenEvent::App(AppMsg::Library(LibraryCmd::Enter(kind))));
+        fixture.step(&mut page, &mut engine, ScreenEvent::App(AppMsg::Library(LibraryCmd::Enter(section_of(&fixture, kind)))));
         frames(&fixture, &mut page, &mut engine, 2);
         fixture.publish(section, 24);
         fixture.step(&mut page, &mut engine, ScreenEvent::StoreChanged(StoreId::Browse.ord(), 1));
         frames(&fixture, &mut page, &mut engine, 60);
         assert_eq!(page.kind, kind);
     }
-    assert_eq!(engine.current(OWNER), Some(page.key(SORT)), "the return restores the reader's seat");
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[1])), "the return restores the reader's seat");
     land_shelves(&mut fixture, &mut page, &mut engine);
-    assert_eq!(engine.current(OWNER), Some(page.key(SORT)), "a restored seat is the reader's");
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[1])), "a restored seat is the reader's");
 }
 
 /// **The engine's memory of a seat the PAGE placed is not a choice the reader made.** Every seat
@@ -663,7 +580,7 @@ fn a_page_placed_seat_remembered_by_the_engine_is_not_a_restore() {
     let mut fixture = Fixture::new(2, 24, 0);
     fixture.sections[1].kind = SecKind::Show;
     fixture.publish(0, 24);
-    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Movie);
+    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), None);
     let mut engine = FocusEngine::new();
     let mut ms = 0;
     let mut frames = |fixture: &Fixture, page: &mut LibraryScreen, engine: &mut FocusEngine<u32>, n: u32| {
@@ -680,13 +597,13 @@ fn a_page_placed_seat_remembered_by_the_engine_is_not_a_restore() {
     };
     fixture.step(&mut page, &mut engine, ScreenEvent::Mount);
     frames(&fixture, &mut page, &mut engine, 3);
-    assert_eq!(engine.current(OWNER), Some(page.key(TYPE)), "Movies: grid first, so the page seats Type");
+    assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[0])), "Movies: grid first, so the page seats its first title");
     land(&mut fixture, &mut page, &mut engine, 0);
     frames(&fixture, &mut page, &mut engine, 3);
     assert_eq!(engine.current(OWNER), Some(page.key(page.shelves[0].elems[0])), "Movies: the seat follows the shelves");
     fixture._stores.browse_run(BrowseCmd::SetCur(1));
     fixture.hubs = fixture._stores.browse.borrow_mut().hubs_snapshot();
-    fixture.step(&mut page, &mut engine, ScreenEvent::App(AppMsg::Library(LibraryCmd::Enter(SecKind::Show))));
+    fixture.step(&mut page, &mut engine, ScreenEvent::App(AppMsg::Library(LibraryCmd::Enter(section_of(&fixture, SecKind::Show)))));
     frames(&fixture, &mut page, &mut engine, 2);
     fixture.publish(1, 24);
     fixture.step(&mut page, &mut engine, ScreenEvent::StoreChanged(StoreId::Browse.ord(), 1));
@@ -730,11 +647,12 @@ fn down_right_up_on_the_shelves_lands_on_the_tile_above() {
         "DOWN lands under the cursor, not on the lower shelf's previous focus");
 }
 
-/// The poster wall under the heading closes the same square: DOWN from a heading chip lands on
-/// the grid tile under that chip, not on a remembered cell rows away (which dragged the page deep
-/// into All from its heading).
+/// The poster wall under the head closes the same square: DOWN from the controls reaches the
+/// alphabet bar on the letter of the title the grid remembers, and DOWN from a letter lands on
+/// the grid tile under that letter, not on a remembered cell rows away (which dragged the page
+/// deep into the grid from its head).
 #[test]
-fn down_from_a_heading_chip_lands_on_the_grid_tile_under_it() {
+fn down_from_a_letter_lands_on_the_grid_tile_under_it() {
     let _guard = nj_base::testlock::serial();
     let fixture = Fixture::new(1, 24, 0);
     let mut page = fixture.screen();
@@ -745,16 +663,20 @@ fn down_from_a_heading_chip_lands_on_the_grid_tile_under_it() {
     engine.remember_projected(ENTRY, grid, deep);
     let seat = page.key(FILTER);
     fixture.step(&mut page, &mut engine, ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::Elem(seat) }));
-    let chip = page.place(&FILTER, &fixture.cx(&engine), At::SpringTarget).unwrap().rect;
+    fixture.direction(&mut page, &mut engine, Dir::Down);
+    let letter = engine.current(OWNER).unwrap();
+    assert_eq!(page.group_of(&letter.elem, &fixture.cx(&engine)), Some(page.pair.groups_config().master));
+    assert!(page.pair.master.start_for_elem(letter.elem).is_some_and(|start| start <= 15),
+        "the bar seats the remembered title's letter");
+    let above = page.place(&letter.elem, &fixture.cx(&engine), At::SpringTarget).unwrap().rect;
     let under = (0..page.layout.cols()).map(|col| page.pair.detail.elem_at(col).unwrap())
         .min_by(|a, b| {
-            let d = |elem: &u32| (page.place(elem, &fixture.cx(&engine), At::SpringTarget).unwrap().rect.cx() - chip.cx()).abs();
+            let d = |elem: &u32| (page.place(elem, &fixture.cx(&engine), At::SpringTarget).unwrap().rect.cx() - above.cx()).abs();
             d(a).total_cmp(&d(b))
         }).unwrap();
-    assert_ne!(under, page.pair.detail.elem_at(0).unwrap(), "the fixture's FILTER chip stands over a later column");
     fixture.direction(&mut page, &mut engine, Dir::Down);
     assert_eq!(engine.current(OWNER), Some(page.key(under)),
-        "DOWN from FILTER lands in the grid's first row under the chip");
+        "DOWN from a letter lands in the grid's first row under it");
 }
 
 /// **Field report, 0.7.0: "sometimes on TV Shows I jump right to All."** Movies and Shows are one
@@ -769,7 +691,7 @@ fn walking_through_one_sections_heading_is_not_a_restore_in_the_next() {
     let mut fixture = Fixture::new(2, 24, 0);
     fixture.sections[1].kind = SecKind::Show;
     fixture.publish(0, 24);
-    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Movie);
+    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), None);
     let mut engine = FocusEngine::new();
     let mut ms = 0;
     let mut frames = |fixture: &Fixture, page: &mut LibraryScreen, engine: &mut FocusEngine<u32>, n: u32| {
@@ -793,10 +715,12 @@ fn walking_through_one_sections_heading_is_not_a_restore_in_the_next() {
     for dir in [Dir::Down, Dir::Down, Dir::Down, Dir::Up, Dir::Up, Dir::Up] {
         fixture.direction(&mut page, &mut engine, dir);
     }
-    assert_eq!(engine.current(OWNER), Some(page.key(page.shelves[0].elems[0])));
+    // The centred controls row hands the walk back up nearest its own centre, mid-shelf.
+    assert_eq!(engine.current(OWNER).and_then(|key| page.group_of(&key.elem, &fixture.cx(&engine))),
+        Some(page.shelves[0].group));
     fixture._stores.browse_run(BrowseCmd::SetCur(1));
     fixture.hubs = fixture._stores.browse.borrow_mut().hubs_snapshot();
-    fixture.step(&mut page, &mut engine, ScreenEvent::App(AppMsg::Library(LibraryCmd::Enter(SecKind::Show))));
+    fixture.step(&mut page, &mut engine, ScreenEvent::App(AppMsg::Library(LibraryCmd::Enter(section_of(&fixture, SecKind::Show)))));
     frames(&fixture, &mut page, &mut engine, 2);
     fixture.publish(1, 24);
     fixture.step(&mut page, &mut engine, ScreenEvent::StoreChanged(StoreId::Browse.ord(), 1));

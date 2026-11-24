@@ -121,6 +121,25 @@ pub struct PmsMovie {
     /// A collection's member count (`childCount`) — its tile's caption, "12 items". 0 on every
     /// other kind, where the listing's count fields mean leaves rather than members.
     pub(crate) child_count: i64,
+    /// The community score out of 10 (Jellyfin `CommunityRating`, Plex `audienceRating`), 0 when
+    /// the server sent none: the star on the Home hero's meta line. Defaulted, and kept off the
+    /// wire at 0, so a recording made before the field existed still round-trips canonically.
+    #[serde(default, skip_serializing_if = "no_score")]
+    pub(crate) score: f32,
+    /// A show's or a season's episodes still to watch (`leafCount - viewedLeafCount`, Jellyfin's
+    /// `UnplayedItemCount`) — the card's unplayed-count badge. 0 on every other kind, and then kept
+    /// off the wire, so a row recorded before the field (a detail reply's Related tiles) still
+    /// round-trips canonically.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) unplayed: i64,
+}
+
+fn no_score(score: &f32) -> bool {
+    *score == 0.0
+}
+
+fn is_zero(v: &i64) -> bool {
+    *v == 0
 }
 
 impl PmsMovie {
@@ -313,9 +332,13 @@ pub(crate) fn parse_item(it: &crate::catalog::Metadata, sid: ServerId) -> PmsMov
     if m.kind == KIND_COLLECTION {
         m.child_count = it.child_count.max(0);
     }
+    if matches!(m.kind, 1 | 2) {
+        m.unplayed = (it.leaf_count - it.viewed_leaf_count).max(0);
+    }
     m.title = clean(&it.title);
     m.year = it.year as c_int;
     m.rating = clean(&it.content_rating);
+    m.score = it.audience_rating as f32;
     m.dur_ns = if it.duration > 0 {
         it.duration * 1_000_000
     } else {
@@ -754,12 +777,16 @@ struct SourceBuild {
 /// was aimed at even if the registry re-points that slot mid-request.
 fn fetch_source(c: &crate::catalog::Client, sid: ServerId) -> Option<SourceBuild> {
     if let Some(j) = c.jf() {
-        // Continue Watching and the shelves need nothing from each other: asked together.
-        let (shelves, cw) = std::thread::scope(|s| {
+        // The rows and the hero need nothing from each other: asked together. Next Up and the
+        // hero pool are extras: either failing leaves its row out (the hero then draws from the
+        // shelves), never the whole source.
+        let (shelves, cw, next_up, hero) = std::thread::scope(|s| {
             let cw = nj_base::task::beside(s, "home-continue", || j.continue_watching_items(HUB_FETCH_COUNT));
-            (j.home_shelves(HUB_FETCH_COUNT), cw.finish())
+            let next_up = nj_base::task::beside(s, "home-next-up", || j.next_up_items(HUB_FETCH_COUNT));
+            let hero = nj_base::task::beside(s, "home-hero", || j.hero_items(JF_HERO_COUNT));
+            (j.home_shelves(HUB_FETCH_COUNT), cw.finish(), next_up.finish(), hero.finish())
         });
-        return Some(project_jf(&shelves?, &cw?, sid));
+        return Some(project_jf(&shelves?, &cw?, &next_up.unwrap_or_default(), &hero.unwrap_or_default(), sid));
     }
     let mc = c.home_hubs(HUB_FETCH_COUNT)?;
     // The Continue Watching shelf comes from the DEDICATED hub (see `project`). Its failure fails
@@ -866,13 +893,25 @@ fn home_shelf(id: &str, key: &str, title: &str, library: &str, identifier_is_uni
     }
 }
 
-/// [`project`] for a Jellyfin source: its library shelves (`/Items/Latest` per view) and its
-/// Continue Watching deck (`/UserItems/Resume` + `/Shows/NextUp`), rows built straight from the
-/// `BaseItemDto`s. Same rules — listable types only, a row needs a title and a poster, an empty
-/// shelf is dropped, a heading names its library when two shelves share an identifier.
+/// Home's My Media row: the libraries themselves ([`jf_row::library`]), ahead of the deck.
+pub(crate) const HUB_MY_MEDIA: &str = crate::jf::Jf::HOME_MY_MEDIA;
+/// Home's Next Up row, right after Continue Watching: Litefin keeps the two apart.
+pub(crate) const HUB_NEXT_UP: &str = "home.nextup";
+/// A source's hero pool, carried as a shelf that never becomes a row ([`merge_with_scope`]).
+const HUB_HERO: &str = "home.hero";
+/// How many heroes a Jellyfin source asks for: Litefin's default carousel count.
+const JF_HERO_COUNT: i64 = 5;
+
+/// [`project`] for a Jellyfin source, in Litefin's row order: its Continue Watching deck
+/// (`/UserItems/Resume`), then Next Up, My Media and one Latest row per library as shelves (the
+/// merge lifts My Media ahead of the deck), and the hero pool as a [`HUB_HERO`] shelf. Rows are
+/// built straight from the `BaseItemDto`s by the same rules: listable types only, a row needs a
+/// title and a poster (a hero also a backdrop), an empty shelf is dropped.
 fn project_jf(
     shelves: &[crate::jf::JfShelf],
     cw: &[crate::jf::models::BaseItemDto],
+    next_up: &[crate::jf::models::BaseItemDto],
+    hero: &[crate::jf::models::BaseItemDto],
     sid: ServerId,
 ) -> SourceBuild {
     let keep = |it: &crate::jf::models::BaseItemDto, sec: i64| {
@@ -884,16 +923,23 @@ fn project_jf(
     out.cw = cw.iter()
         .filter_map(|it| keep(it, 0).map(|m| CwItem { last_viewed_at: jf_row::last_played(it), m }))
         .collect();
-    for shelf in shelves {
-        let items: Vec<PmsMovie> = shelf.items.iter().filter_map(|it| keep(it, shelf.section)).collect();
-        if items.is_empty() {
-            continue;
+    let mut push = |id: &str, key: &str, title: &str, library: &str, total: usize, items: Vec<PmsMovie>| {
+        if !items.is_empty() {
+            out.shelves.push(home_shelf(id, key, title, library, true, total, items));
         }
-        let identifier_is_unique =
-            shelves.iter().filter(|s| s.identifier == shelf.identifier).count() <= 1;
-        out.shelves.push(home_shelf(&shelf.identifier, &shelf.key, &shelf.title, &shelf.library,
-            identifier_is_unique, shelf.items.len(), items));
+    };
+    push(HUB_NEXT_UP, "", nj_platform::i18n::msg::home_next_up(), "", next_up.len(),
+        next_up.iter().filter_map(|it| keep(it, 0)).collect());
+    for shelf in shelves {
+        let items: Vec<PmsMovie> = if shelf.identifier == HUB_MY_MEDIA {
+            shelf.items.iter().filter_map(|view| jf_row::library(view, sid)).collect()
+        } else {
+            shelf.items.iter().filter_map(|it| keep(it, shelf.section)).collect()
+        };
+        push(&shelf.identifier, &shelf.key, &shelf.title, &shelf.library, shelf.items.len(), items);
     }
+    push(HUB_HERO, "", "", "", hero.len(),
+        hero.iter().filter_map(|it| keep(it, 0)).filter(|m| !m.art.is_empty()).collect());
     out
 }
 
@@ -939,12 +985,15 @@ pub(crate) fn allot(budget: usize, want: &[usize]) -> Vec<usize> {
 /// gradeable on the host.
 ///
 /// The shape of Home, in order:
+/// 0. **My Media** ([`HUB_MY_MEDIA`]), each source's libraries, Litefin's first row.
 /// 1. **Continue Watching**, merged across every source and sorted by `lastViewedAt` descending, so
 ///    a borrowed item holds first position exactly when the owner watched it last. It carries NO
 ///    annotation (see [`HubRow::source`]). This is the official client's own shape: the owner's
 ///    screenshots show a friend's two films sitting BETWEEN their own three, in one row.
 /// 2. **Every other shelf**, source by source in roster order — the owned server's first, then each
 ///    shared server's, contiguously, because adjacency is the grouping device.
+///
+/// A source's [`HUB_HERO`] shelf is no row: it is the hero pool, when any source sent one.
 ///
 /// A source that has never answered contributes nothing at all: no heading, no empty shelf, no
 /// placeholder row. One that answered and has since failed keeps the shelves it last had, which is
@@ -955,7 +1004,7 @@ fn merge(srcs: &[Src]) -> HubBuild {
     merge_with_scope(srcs, &BrowseScope::standalone())
 }
 
-fn merge_with_scope(srcs: &[Src], scope: &BrowseScope) -> HubBuild {
+fn merge_with_scope<'a>(srcs: &'a [Src], scope: &BrowseScope) -> HubBuild {
     let pins = &scope.pins;
     let live: Vec<(&str, &SourceBuild)> = srcs
         .iter()
@@ -970,6 +1019,38 @@ fn merge_with_scope(srcs: &[Src], scope: &BrowseScope) -> HubBuild {
     // borrowed film in Continue Watching to nobody, and `own_items_first` would think our own
     // library already opened the door.
     let mut row_handle: Vec<&str> = Vec::new();
+    // One shelf published as a row of its own source's cards.
+    fn publish<'h>(cat: &mut Vec<PmsMovie>, hubs: &mut Vec<HubRow>, handles: &mut Vec<&'h str>,
+        handle: &'h str, sh: &Shelf, items: &[&PmsMovie]) {
+        let start = cat.len();
+        for m in items {
+            cat.push((*m).clone());
+            handles.push(handle);
+        }
+        hubs.push(HubRow {
+            title: sh.title.clone(),
+            hub_id: sh.hub_id.clone(),
+            key: sh.key.clone(),
+            source: handle.to_string(),
+            total: sh.total,
+            start,
+            len: cat.len() - start,
+        });
+    }
+    // What a shelf may publish: its pinned cards, up to the shelf cap.
+    let pinned = |sh: &'a Shelf| -> Vec<&'a PmsMovie> {
+        sh.items.iter().filter(|m| item_pinned(pins, m)).take(MAX_SHELF_ITEMS).collect()
+    };
+
+    // ---- 0. My Media ----
+    for (handle, b) in &live {
+        for sh in b.shelves.iter().filter(|sh| sh.hub_id == HUB_MY_MEDIA) {
+            let items = pinned(sh);
+            if !items.is_empty() {
+                publish(&mut new_cat, &mut new_hubs, &mut row_handle, handle, sh, &items);
+            }
+        }
+    }
 
     // ---- 1. the merged deck ----
     let mut cw: Vec<(&str, &CwItem)> = live
@@ -980,11 +1061,12 @@ fn merge_with_scope(srcs: &[Src], scope: &BrowseScope) -> HubBuild {
     // stable: equal timestamps keep source order, so the owned server wins a tie
     cw.sort_by(|a, b| b.1.last_viewed_at.cmp(&a.1.last_viewed_at));
     cw.truncate(MAX_SHELF_ITEMS);
+    let deck = new_cat.len();
     for (h, c) in &cw {
         new_cat.push(c.m.clone());
         row_handle.push(h);
     }
-    if !new_cat.is_empty() {
+    if new_cat.len() > deck {
         new_hubs.push(HubRow {
             // the hub id the rest of the module matches on (hero-pool eligibility,
             // `hub_is_continue`), rather than the dedicated hub's own "continueWatching"
@@ -993,8 +1075,8 @@ fn merge_with_scope(srcs: &[Src], scope: &BrowseScope) -> HubBuild {
             key: String::new(),
             source: String::new(),
             total: 0,
-            start: 0,
-            len: new_cat.len(),
+            start: deck,
+            len: new_cat.len() - deck,
         });
     }
 
@@ -1004,18 +1086,13 @@ fn merge_with_scope(srcs: &[Src], scope: &BrowseScope) -> HubBuild {
     // library cannot spend a pinned one's row budget (nor can items past the cap, which are never
     // drawn), and a shelf left with nothing contributes no `HubRow` below, which is how an unpinned
     // library's whole shelf disappears rather than becoming an empty heading.
+    // My Media went first and the hero pool is no row: both publish nothing here.
     let publishable: Vec<Vec<Vec<&PmsMovie>>> = live
         .iter()
         .map(|(_, b)| {
             b.shelves
                 .iter()
-                .map(|sh| {
-                    sh.items
-                        .iter()
-                        .filter(|m| item_pinned(pins, m))
-                        .take(MAX_SHELF_ITEMS)
-                        .collect()
-                })
+                .map(|sh| if sh.hub_id == HUB_MY_MEDIA || sh.hub_id == HUB_HERO { Vec::new() } else { pinned(sh) })
                 .collect()
         })
         .collect();
@@ -1036,38 +1113,39 @@ fn merge_with_scope(srcs: &[Src], scope: &BrowseScope) -> HubBuild {
             if items.is_empty() {
                 continue;
             }
-            let start = new_cat.len();
-            for m in items {
-                new_cat.push((*m).clone());
-                row_handle.push(handle);
-            }
-            rows_left -= new_cat.len() - start;
-            new_hubs.push(HubRow {
-                title: sh.title.clone(),
-                hub_id: sh.hub_id.clone(),
-                key: sh.key.clone(),
-                source: (*handle).to_string(),
-                total: sh.total,
-                start,
-                len: new_cat.len() - start,
-            });
+            rows_left -= items.len();
+            publish(&mut new_cat, &mut new_hubs, &mut row_handle, handle, sh, items);
         }
     }
 
     // ---- 3. the rotating hero pool ----
-    // Continue Watching items first, then Recently Added, deduped by the item's IDENTITY. Require
-    // landscape `art` (the hero draws a full-bleed backdrop) and skip seasons (a bare "Season 1"
-    // makes a poor billboard). Capped at HERO_MAX.
+    // A source's own pool (Jellyfin's random films and series, [`HUB_HERO`]) wins: its cards join
+    // the catalog without a row. Without one, Continue Watching items first, then Recently Added.
+    // Either way deduped by the item's IDENTITY, with landscape `art` required (the hero draws a
+    // backdrop) and seasons skipped (a bare "Season 1" makes a poor billboard). Capped at HERO_MAX.
     let mut new_pool: Vec<HeroSlot> = Vec::new();
-    for hub in &new_hubs {
+    let mut pool_spans: Vec<(usize, usize)> = Vec::new();
+    for (handle, b) in &live {
+        for sh in b.shelves.iter().filter(|sh| sh.hub_id == HUB_HERO) {
+            let start = new_cat.len();
+            for m in pinned(sh) {
+                new_cat.push(m.clone());
+                row_handle.push(handle);
+            }
+            pool_spans.push((start, new_cat.len() - start));
+        }
+    }
+    if pool_spans.iter().all(|&(_, len)| len == 0) {
         // Match on the locale-independent hubIdentifier, not the localized display title:
         // "home.continue" plus every Recently Added variant (home.movies.recent,
         // home.television.recent, promoted <type>.recentlyadded.<id>) all carry "recent".
-        let eligible = hub.hub_id == "home.continue" || hub.hub_id.contains("recent");
-        if !eligible {
-            continue;
-        }
-        for idx in hub.start..hub.start + hub.len {
+        pool_spans = new_hubs.iter()
+            .filter(|hub| hub.hub_id == "home.continue" || hub.hub_id.contains("recent"))
+            .map(|hub| (hub.start, hub.len))
+            .collect();
+    }
+    for (start, len) in pool_spans {
+        for idx in start..start + len {
             if new_pool.len() >= HERO_MAX {
                 break;
             }

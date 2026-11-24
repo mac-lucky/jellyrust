@@ -46,6 +46,8 @@ struct RetryContext {
     resume_ns: i64,
     audio_sid: i64,
     sub_sid: i64,
+    /// `sub_sid` 0 is an Off somebody chose ([`PlaybackSession::cur_sub_off`]).
+    sub_off: bool,
     sub_offset_ms: i64,
     direct_play_mode: DirectPlayMode,
     /// Issue #266: resolve this retry WITHOUT the audio enhancement. Set only by a start-failure
@@ -100,9 +102,9 @@ pub(crate) struct PlaybackSession {
     /// publishes of it. Cleared by the next start that is not refused and with the playback verdict.
     pub(crate) native_start_refused: Option<StartRefusal>,
     /// The viewer left this item for the next one from its credits (Up Next, or Skip on a `final`
-    /// credits marker). Jellyfin marks an item played from a stop only at 90 % or later (measured on
-    /// 12.0: 89 % stays unwatched, 91 % is played) and long credits start before that, so a stop below
-    /// [`past_watched_threshold`] then marks it played explicitly. Read and cleared by [`scrobble_stop`].
+    /// credits marker). Jellyfin marks an item played from a stop only past its `MaxResumePct` (a
+    /// server setting, 90 by default, strict `>`) and long credits start before that, so the stop then
+    /// marks it played explicitly. Read and cleared by [`scrobble_stop`].
     pub(crate) finished: bool,
     /// Error retained after releasing a terminal Engine; retired by a new request or stop.
     engine_failure: Option<crate::player::RuntimeFailure>,
@@ -276,6 +278,11 @@ pub(crate) struct PlaybackSession {
     /// (unaffected by the audio enhancement's remux) apart from
     /// [`super::plan::SubtitleEffect::Embedded`] (needs a forced burn to survive one, M7).
     cur_sub_sidecar: bool,
+    /// Somebody chose Off for this playback: the viewer in the player's menu or before play, or the
+    /// server's remembered Off it started from. Only then do the reports send `-1`
+    /// ([`reported_sub_sid`]): the server stores any index a report carries as the film's
+    /// remembered pick, so a film that merely played without a subtitle must say nothing.
+    cur_sub_off: bool,
     /// How the playing CONVERSION delivers [`Self::cur_sub_sid`], as its negotiation answered
     /// (`MediaStream.DeliveryMethod`). `None` on direct play — the client draws the file's own
     /// track — and while no subtitle is on. It, not "is this a transcode", decides whether the
@@ -463,6 +470,7 @@ impl PlaybackSession {
         cur_audio: None,
         cur_sub_sid: 0,
         cur_sub_sidecar: false,
+        cur_sub_off: false,
         cur_sub_delivery: None,
         cur_sub_pref_lang: None,
         sess: String::new(),
@@ -542,6 +550,7 @@ impl PlaybackSession {
             cur_audio,
             cur_sub_sid,
             cur_sub_sidecar,
+            cur_sub_off,
             cur_sub_delivery,
             cur_sub_pref_lang,
             sess,
@@ -602,6 +611,7 @@ impl PlaybackSession {
             cur_audio: cur_audio.clone(),
             cur_sub_sid: *cur_sub_sid,
             cur_sub_sidecar: *cur_sub_sidecar,
+            cur_sub_off: *cur_sub_off,
             cur_sub_delivery: cur_sub_delivery.clone(),
             cur_sub_pref_lang: cur_sub_pref_lang.clone(),
             sess: sess.clone(),
@@ -986,7 +996,7 @@ fn publish_applied_route_projection(ps: &PlaybackSession) {
 fn commit_in_place_route_projection(ps: &PlaybackSession, quality_contract: bool) {
     let projection = route_projection(ps);
     let audio_stream_id = projection.audio.as_ref().map_or(0, |a| a.sid);
-    let subtitle_stream_id = projection.subtitle_sid;
+    let subtitle_stream_id = reported_sub_sid(ps);
     let mut control = PLAYER_CONTROL.lock().unwrap_or_else(|e| e.into_inner());
     match control.phase {
         ControlPhase::Stable | ControlPhase::StagingUser(_) | ControlPhase::Completing(_) => {
@@ -2571,7 +2581,6 @@ fn observe_active_hls(
     }
 }
 
-#[cfg(test)]
 fn active_encoder() -> String {
     PLAYER_CONTROL
         .lock()
@@ -4462,6 +4471,15 @@ pub(crate) fn set_subtitle(ps: &mut PlaybackSession, sid: i64) {
 pub(crate) fn cur_sub_sid(ps: &PlaybackSession) -> i64 {
     ps.cur_sub_sid
 }
+/// The subtitle the timeline reports name ([`crate::catalog::TimelineReport::subtitle_stream_id`]):
+/// the live track, `-1` for an Off somebody chose ([`PlaybackSession::cur_sub_off`]), else `0`,
+/// which is sent as nothing.
+fn reported_sub_sid(ps: &PlaybackSession) -> i64 {
+    match ps.cur_sub_sid {
+        0 if ps.cur_sub_off => -1,
+        sid => sid,
+    }
+}
 /// Whether the client renderer may draw the selected subtitle: always on direct play, and on a
 /// conversion only when the server delivers it softly — muxed in or as its own file. A burned
 /// subtitle is already in the picture, and drawing it again would double the line.
@@ -4895,15 +4913,10 @@ struct ScrobbleWork {
     presented: bool,
     transcode_session: String,
     timeline_stop: Option<TimelineStopCompletion>,
-    /// Mark the item played once the `stopped` report is in, if it landed below the server's own
-    /// threshold (`PlaybackSession::finished`).
+    /// Mark the item played once the `stopped` report is in (`PlaybackSession::finished`).
     mark_played: bool,
-}
-
-/// Is `ms` into an item `dur_ms` long at or past the point where Jellyfin marks it played from a
-/// stop? False for an unknown duration. Past it, a second mark would only count a second play.
-fn past_watched_threshold(ms: i64, dur_ms: i64) -> bool {
-    dur_ms > 0 && ms.saturating_mul(100) >= dur_ms.saturating_mul(90)
+    /// `Stopped` for a stop; `Paused` for a parked playback's report ([`report_parked`]).
+    state: crate::catalog::TimelineState,
 }
 
 impl ScrobbleWork {
@@ -4921,7 +4934,7 @@ impl ScrobbleWork {
                 self.client.is_some_and(|c| {
                     c.timeline(&crate::catalog::TimelineReport {
                         rating_key: &rk,
-                        state: crate::catalog::TimelineState::Stopped,
+                        state: self.state,
                         time_ms: t_ms,
                         duration_ms: d_ms,
                         session: &self.session,
@@ -4934,14 +4947,16 @@ impl ScrobbleWork {
                 })
             };
             nj_base::eventlog::log(&format!(
-                "timeline stopped t={}s/{}s ok={}",
+                "timeline {} t={}s/{}s ok={}",
+                self.state.as_str(),
                 t_ms / 1000,
                 d_ms / 1000,
                 ok as i32,
             ));
-            // Only a stop BELOW the server's own threshold needs this: past it the report just
-            // posted already counted the play.
-            if self.mark_played && d_ms > 0 && !past_watched_threshold(t_ms, d_ms) {
+            // Always, rather than below a client copy of the server's threshold: `MaxResumePct` is
+            // the server's setting, and a bare mark on an item the stop already counted counts no
+            // second play (`BaseItem.MarkPlayed` increments only with a `datePlayed`).
+            if self.mark_played {
                 let marked = self.client.is_some_and(|c| c.scrobble(&rk));
                 nj_base::eventlog::log(&format!("marked played at the credits ok={}", marked as i32));
             }
@@ -4984,7 +4999,7 @@ pub(crate) fn scrobble_stop(
         return;
     }
     let (logical_session, pq, pqi) = (sess(ps), pq_id(ps), pq_item_id(ps));
-    let (aud, sub) = (cur_audio_sid(ps), cur_sub_sid(ps)); // the selection this playback reported under
+    let (aud, sub) = (cur_audio_sid(ps), reported_sub_sid(ps)); // the selection this playback reported under
     let mark_played = std::mem::take(&mut ps.finished);
     let tsession = take_active_encoder();
     let session = if tsession.is_empty() {
@@ -5013,7 +5028,7 @@ pub(crate) fn scrobble_stop(
     drain_scrobble();
     let timeline_stop =
         (final_report.is_some() || report_th.is_some()).then(|| TIMELINE_STOP_FENCE.announce());
-    let work = std::sync::Arc::new(std::sync::Mutex::new(Some(ScrobbleWork {
+    spawn_scrobble(ScrobbleWork {
         client,
         final_report,
         report_th,
@@ -5026,7 +5041,55 @@ pub(crate) fn scrobble_stop(
         transcode_session: tsession,
         timeline_stop,
         mark_played,
-    })));
+        state: crate::catalog::TimelineState::Stopped,
+    });
+}
+
+/// A parked playback's report (`app::run`'s app-switch park), on the same ordered lane as a stop's:
+/// `Paused` where the picture stopped when the OS takes the screen, `Stopped` there when the app
+/// closes before the foreground restore. Without them the server shows the TV playing on, its
+/// position advancing, until its idle sweep ends the session five minutes later at the last
+/// heartbeat. A `Stopped` is a real stop ([`scrobble_stop`]): the encoder ends with it, and a
+/// playback the server never heard start posts nothing (`presented: false`). The caller sends a
+/// `Paused` only for a playback that has shown a picture: the server would take it as a start.
+pub(crate) fn report_parked(
+    ps: &mut PlaybackSession,
+    state: crate::catalog::TimelineState,
+    pos_ns: i64,
+    dur_ns: i64,
+) {
+    let rk = cur_rk(ps);
+    if preview_request(ps) || rk.is_empty() || dur_ns <= 0 {
+        return;
+    }
+    let report = Some((rk, pos_ns.max(0) / 1_000_000, dur_ns / 1_000_000));
+    if state == crate::catalog::TimelineState::Stopped {
+        return scrobble_stop(ps, report, None, false);
+    }
+    // The detached reporter can no longer post (its lease died with the suspend's teardown), and a
+    // POST it is still making holds `TIMELINE_EFFECT`, so this report lands after it.
+    drain_scrobble();
+    let encoder = active_encoder();
+    spawn_scrobble(ScrobbleWork {
+        client: cur_client(ps),
+        final_report: report,
+        report_th: None,
+        session: if encoder.is_empty() { sess(ps) } else { encoder },
+        play_queue_id: pq_id(ps),
+        play_queue_item_id: pq_item_id(ps),
+        audio_stream_id: cur_audio_sid(ps),
+        subtitle_stream_id: reported_sub_sid(ps),
+        presented: true,
+        transcode_session: String::new(),
+        timeline_stop: None,
+        mark_played: false,
+        state,
+    });
+}
+
+/// Run one [`ScrobbleWork`] on the `scrobble` worker that [`drain_scrobble`] waits for.
+fn spawn_scrobble(work: ScrobbleWork) {
+    let work = std::sync::Arc::new(std::sync::Mutex::new(Some(work)));
     let worker = work.clone();
     let join_generation = SCROBBLE_JOIN.reserve();
     let h = nj_base::task::spawn_small_keeping("scrobble", move || {
@@ -5187,6 +5250,11 @@ impl TimelineStopFence {
             .announced
     }
 
+    fn landed(&self) -> bool {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.completed >= state.announced
+    }
+
     fn wait(&self, required: u64) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         while state.completed < required {
@@ -5226,6 +5294,13 @@ impl Drop for TimelineStopCompletion {
     }
 }
 
+/// Has every announced `stopped` report, and the mark-played after it, been attempted? What the
+/// post-playback refreshes (`app::run`: Home's hubs, the uncovered Detail page) wait for, so they
+/// read the resume point and watched state the stop committed. Never blocks.
+pub(crate) fn stop_reports_landed() -> bool {
+    TIMELINE_STOP_FENCE.landed()
+}
+
 /// Wait for pending [`scrobble_stop`] work to finish its ordered timeline/transcode attempts.
 ///
 /// Production uses this before another stop, before Retry starts a replacement encoder, and at
@@ -5253,8 +5328,8 @@ pub(crate) fn transcode_seek(ps: &mut PlaybackSession, offset_secs: i64) -> Opti
     }
     // A claim's worker owns `Applying` and has no vocabulary for a seek rebuilding the encoder out
     // from under it (see `claim_in_flight`'s doc, and the pump's own gate on its seek branches).
-    // Every caller of `transcode_seek` reaches it directly from a pump seek branch, never from
-    // inside a claim's own settle path, so this holds unconditionally today.
+    // Every caller of `transcode_seek` reaches it directly from the pump (a seek branch, a source
+    // recovery), never from inside a claim's own settle path, so this holds unconditionally today.
     if claim_in_flight() {
         return None;
     }
@@ -6118,10 +6193,12 @@ impl ResolveEnv {
             audio_sid: cur_audio_sid(ps),
             sub_sid: cur_sub_sid(ps),
             subtitle_override: None,
+            subtitle_off: false,
             audio_explicit: false,
             cached_item: meta.cached_playing(sid, rk, ""),
             quality: quality(),
             direct_play_mode: direct_play_mode(),
+            voice: voice_preference(),
             src_kbps: resolve_src_kbps(meta.current(), sid, rk),
             omit_queue_continuous: false,
             preview: false,
@@ -6168,9 +6245,11 @@ fn playback_preview_with_capability(
         .collect();
     let audio = if chosen.is_empty() { &d.audio[..] } else { &chosen[..] };
     if mode == DirectPlayMode::Forced {
+        // Force ignores a voice exclusion it cannot honour (`pick_dp_audio_mode`), and never
+        // carries a sidecar, which is not in the file it feeds.
         return (!part.is_empty() && part_is_streamable(part)
             && video_feed_supported(vcodec, presentation, &crate::catalog::capabilities::start_caps())
-            && audio.iter().any(|a| audio_direct_plays(mode, &a.codec, a.channels)))
+            && audio.iter().any(|a| !a.external && audio_direct_plays(mode, &a.codec, a.channels)))
             .then_some(Preview::DirectPlay);
     }
     let p = playback_preview_of(
@@ -6180,6 +6259,8 @@ fn playback_preview_with_capability(
         d.height,
         presentation,
         audio,
+        // the voice preference a Play would capture; a chosen track plays whatever it says
+        if chosen.is_empty() { voice_preference() } else { VoicePreference::Any },
     )?;
     // The user's quality ceiling is the LAST gate `build_stream` applies, so it is the last one
     // here too — and it can only ever downgrade, never promote. Without this the facts row would
@@ -6470,6 +6551,7 @@ fn request_play_inner(
         s.cur_audio = None;
         s.cur_sub_sid = 0;
         s.cur_sub_sidecar = false;
+        s.cur_sub_off = false;
         // The outgoing item's enhancement outcome is not this one's; the landing installs its own.
         s.cur_enhancement = EnhancementOutcome::Off;
         // Retire the OUTGOING item's queue before its successor resolves: this names the episode
@@ -6515,6 +6597,7 @@ fn request_play_inner(
         env.audio_sid = retry.audio_sid;
         env.sub_sid = retry.sub_sid;
         env.subtitle_override = Some(retry.sub_sid);
+        env.subtitle_off = retry.sub_off;
     }
     // The viewer's pre-play choice. A retry already carries the selection the first attempt
     // installed (which is this choice), so it applies only to a fresh request.
@@ -6526,6 +6609,7 @@ fn request_play_inner(
         if let Some(subtitle) = choice.subtitle {
             env.sub_sid = subtitle;
             env.subtitle_override = Some(subtitle);
+            env.subtitle_off = subtitle == 0;
         }
         crate::player::log(&format!(
             "route: viewer chose before play audio={} subtitle={}",
@@ -6691,6 +6775,7 @@ fn current_retry_context(ps: &PlaybackSession, resume_ns: i64) -> RetryContext {
         resume_ns: resume_ns.max(0),
         audio_sid: cur_audio_sid(ps),
         sub_sid: cur_sub_sid(ps),
+        sub_off: ps.cur_sub_off,
         sub_offset_ms: crate::player::subtitle_offset_ms(),
         direct_play_mode: ps.direct_play_mode,
         suppress_enhancement: false,
@@ -6849,6 +6934,17 @@ pub(crate) fn cancel_play(ps: &mut PlaybackSession) {
     cancel_playback_request(ps, has_url(ps));
     if let Some(landing) = abandoned {
         retire_abandoned_plan(landing.plan);
+    }
+}
+
+/// [`cancel_play`] for the exit ritual, which stops the playback next: a released pipeline's
+/// retained failure and position are that stop's to report (`player::stop_bufferfeed` consumes
+/// them), not the withdrawn resolve's to forget.
+pub(crate) fn cancel_play_for_exit(ps: &mut PlaybackSession) {
+    let retained = ps.engine_failure.map(|cause| (cause, ps.requested_resume_ns));
+    cancel_play(ps);
+    if let Some((cause, resume_ns)) = retained {
+        note_engine_failure(ps, cause, resume_ns);
     }
 }
 
@@ -7066,6 +7162,7 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut crate::stores::metadata::Meta
             // Negative = an external sidecar the client draws itself (`sub_render_ordinal`'s own
             // convention); `None` (Off) never sets `sub_sid` either, so this reads `false` for it.
             cur_sub_sidecar: plan.sub_render_ordinal.is_some_and(|ord| ord < 0),
+            cur_sub_off: plan.sub_off,
             cur_sub_delivery: plan.sub_delivery,
             cur_sub_pref_lang: plan.sub_pref_lang,
             sess: plan.sess,
@@ -7594,7 +7691,8 @@ fn install_retranscode_outcome(ps: &mut PlaybackSession, applied: &AppliedRetran
 }
 
 /// Frame-thread PMS I/O which has not moved to a worker yet: the automatic ABR watchdog's encoder
-/// rebuild, a seek during a transcode, the Original recovery's admission probe. A deliberate,
+/// rebuild, a seek during a transcode, a transcode restarted after its reconnect was refused, the
+/// Original recovery's admission probe. A deliberate,
 /// labelled exception to the frame-thread blocking guard, not a fresh regression; see
 /// [`execute_retranscode_claim`]'s doc for what did move.
 fn pending_split_block() -> nj_base::task::AllowBlocking {
@@ -8723,11 +8821,15 @@ pub(crate) fn enhancement_test_session(route: EnhTestFixture) -> (PlaybackSessio
 
 /// Commit an audio-track pick: NATIVE switch (feed the chosen stream from the same direct-play
 /// file — no transcode, keeps 4K HEVC) when the item direct-plays AND the target codec is
-/// direct-playable; else a server re-transcode with that stream selected. `audio.ordinal` is the
+/// direct-playable AND the track is in that file (not an external sidecar, ordinal -1); else a
+/// server re-transcode with that stream selected. `audio.ordinal` is the
 /// CONTAINER audio ordinal (the menu converts its row via metadata::audio_ordinal); `audio` itself
 /// is the frozen `CarriedAudio` snapshot (issue #266) the menu built via `CarriedAudio::from_stream`.
 pub(crate) fn commit_audio_selection(ps: &mut PlaybackSession, audio: CarriedAudio) {
-    if forced_direct_play(ps) && !audio_track_direct_plays(ps, &audio.codec, audio.channels) {
+    // A track with no container ordinal is an external sidecar the file direct play reads does
+    // not hold (`metadata::audio_ordinal`): only a server conversion can carry it.
+    let direct_plays = audio.ordinal >= 0 && audio_track_direct_plays(ps, &audio.codec, audio.channels);
+    if forced_direct_play(ps) && !direct_plays {
         ps.play_verdict = Some(PlayVerdict::Forced(ForcedFailure::AudioNeedsConversion));
         return;
     }
@@ -8748,7 +8850,6 @@ pub(crate) fn commit_audio_selection(ps: &mut PlaybackSession, audio: CarriedAud
     // Original candidate; the queued reload below crosses its own action boundary afterwards.
     let _edit = begin_user_contract_boundary();
     let family = live_family(ps);
-    let direct_plays = audio_track_direct_plays(ps, &audio.codec, audio.channels);
     match family {
         // The recovery declaration captures one exact source/audio pairing. Once the user changes
         // that pairing while HLS is live, do not later resurrect the old track behind their back.
@@ -8863,6 +8964,7 @@ pub(crate) fn commit_subtitle_selection(
     // track. Issue #266 I6 reads this back through `facts` to tell a sidecar (unaffected by the
     // audio enhancement) apart from an embedded pick (needs a forced burn, M7).
     ps.cur_sub_sidecar = stream_id != 0 && sub_idx < 0;
+    ps.cur_sub_off = stream_id == 0;
     if !transcoding {
         // This is an immediate client-rendered change: unlike a burn/audio rebuild it is already
         // part of the applied stream contract. Publish projection + reporter tracks as one reducer
@@ -8875,7 +8977,7 @@ pub(crate) fn commit_subtitle_selection(
         return;
     }
     if transcoding {
-        crate::player::request_transcode_refresh(ps); // retranscode PUTs the selection itself
+        crate::player::request_transcode_refresh(ps); // the retranscode asks for the new pick
     }
 }
 
@@ -8895,7 +8997,7 @@ pub(crate) fn begin_timeline_reporting(ps: &PlaybackSession) -> Option<TimelineL
         play_queue_id: pq_id(ps),
         play_queue_item_id: pq_item_id(ps),
         audio_stream_id: cur_audio_sid(ps),
-        subtitle_stream_id: cur_sub_sid(ps),
+        subtitle_stream_id: reported_sub_sid(ps),
     };
     if projection.rating_key.is_empty() || !projection.sid.is_set() {
         return None;
@@ -9115,6 +9217,22 @@ pub(crate) fn set_episode_navigation(value: EpisodeNavigation) -> bool {
     saved
 }
 
+/// Cached after durable storage; a play captures it into [`ResolveEnv`] at the request.
+static VOICE_PREFERENCE: AtomicU8 = AtomicU8::new(0);
+pub(crate) fn voice_preference() -> VoicePreference { VoicePreference::from_index(VOICE_PREFERENCE.load(Ordering::Relaxed)) }
+pub(crate) fn restore_voice_preference(value: VoicePreference) {
+    #[cfg(test)]
+    nj_base::testlock::assert_held("voice preference");
+    VOICE_PREFERENCE.store(value.index(), Ordering::Relaxed);
+}
+pub(crate) fn set_voice_preference(value: VoicePreference) -> bool {
+    let saved = crate::catalog::session::update_with_outcome(|s| Some(s.with_voice_preference(value)))
+        .is_some_and(|write| matches!(write.classify(),
+            crate::catalog::session::async_persistence::CompletionOutcome::Durable(_)));
+    if saved { restore_voice_preference(value); nj_machine::idle::invalidate(); }
+    saved
+}
+
 /// Neighbours of the current episode in this server's refreshed neighbourhood.
 /// Extras/movies and unresolved selections offer no episode controls.
 pub(crate) fn episode_neighbours(ps: &PlaybackSession) -> (bool, bool) {
@@ -9162,5 +9280,26 @@ mod playback_navigation_settings_tests {
         assert!(!failed_dpad && !failed_buttons);
         assert_eq!(instant_dpad_seeking(), InstantDpadSeeking::On);
         assert_eq!(episode_navigation(), EpisodeNavigation::Off);
+    }
+
+    /// The dubbing/lektor preference a play captures moves only once its write is durable.
+    #[test]
+    fn the_voice_preference_publishes_only_after_a_durable_write() {
+        let _g = nj_base::testlock::serial();
+        let _session = crate::catalog::session::TempSession::new("voice-preference");
+        struct Restore(VoicePreference);
+        impl Drop for Restore { fn drop(&mut self) { restore_voice_preference(self.0); } }
+        let _restore = Restore(voice_preference());
+        assert!(set_voice_preference(VoicePreference::DubbingNoLektor));
+        assert_eq!(voice_preference(), VoicePreference::DubbingNoLektor);
+        assert_eq!(crate::catalog::session::load().voice_preference(), VoicePreference::DubbingNoLektor);
+        let blocker = std::env::temp_dir().join(format!("nj-voice-blocker-{}", std::process::id()));
+        std::fs::write(&blocker, b"x").unwrap();
+        crate::catalog::session::redirect_for_test(Some(blocker.join("auth.json")));
+        let failed = set_voice_preference(VoicePreference::NoAiLektor);
+        crate::catalog::session::redirect_for_test(None);
+        std::fs::remove_file(blocker).unwrap();
+        assert!(!failed);
+        assert_eq!(voice_preference(), VoicePreference::DubbingNoLektor, "a failed write publishes nothing");
     }
 }

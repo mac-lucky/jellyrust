@@ -28,15 +28,17 @@ pub const fn rgb8(r: u8, g: u8, b: u8) -> [f32; 4] {
 // Neutral — achromatic. These two stops are the ones the renderer paints with directly; the rest of
 // the palette is `ui::theme`'s private primitive layer, which imports these so a code is still
 // written down in exactly one place.
-/// The app ground, Apple TV's shelf gray `#2c2c2e` (`theme::SURFACE_APP`'s stop).
-pub const NEUTRAL_500: [f32; 4] = rgb8(0x2c, 0x2c, 0x2e);
-/// The scrim ink, near-black `#050508` (`theme::scrim`'s stop).
-pub const NEUTRAL_1000: [f32; 4] = rgb8(0x05, 0x05, 0x08);
+/// The app ground (`theme::SURFACE_APP`'s stop): Litefin's black theme page background `#000000`
+/// (`docs/litefin-look.md` 2.1, OLED black). It was Apple TV's shelf gray `#2c2c2e` upstream.
+pub const NEUTRAL_500: [f32; 4] = rgb8(0x00, 0x00, 0x00);
+/// The scrim ink (`theme::scrim`'s stop): black, because every Litefin gradient over artwork is
+/// `rgba(0,0,0,a)` (`docs/litefin-look.md` 5, 10). It was a near-black `#050508` upstream.
+pub const NEUTRAL_1000: [f32; 4] = rgb8(0x00, 0x00, 0x00);
 
 /// GL clear color — 3-float (`frame_clear` takes r,g,b, no alpha). The app's DEFAULT base, and
 /// `theme::SURFACE_APP` itself rather than a second copy of its code (both are [`NEUTRAL_500`]):
-/// browsing screens clear to the Apple-TV gray, which is what makes a route change read as a
-/// seamless dip. Home overdraws it with `SURFACE_APP` (the identical gray). Two punches through to
+/// browsing screens clear to the page black, which is what makes a route change read as a
+/// seamless dip. Home overdraws it with `SURFACE_APP` (the identical black). Two punches through to
 /// the hardware video plane use transparent black instead: the player route, and the detail page
 /// while a trailer preview has presented a frame (`gfx::frame_clear_through`).
 pub const CLEAR_RGB: (f32, f32, f32) = (NEUTRAL_500[0], NEUTRAL_500[1], NEUTRAL_500[2]);
@@ -156,4 +158,34 @@ pub mod size {
     /// and read as an instrument, not as ordinary couch copy.  It must never migrate into product
     /// chrome or prose; `app::diagnostics` is its sole owner.
     pub const DIAGNOSTIC: c_int = 20;
+
+    /// Litefin's type sizes (`docs/litefin-look.md` 2.2 and the per-screen sections), named by
+    /// pixel: Litefin sets CSS px at 1 CSS px = 1 screen px, mostly below [`CAPTION`], and this
+    /// fork copies its look on purpose. Round the spec's px to the nearest rung (19.2 -> `S19`,
+    /// 22.4 -> `S22`, 51.2 -> `S51`). Sizes from 80 up do not exist on the TV (80 font slots), so
+    /// Litefin's 80/96 px login type uses [`HERO`]. A rung the upstream ladder already has is an
+    /// alias, so each value is still written once.
+    pub mod lf {
+        use std::os::raw::c_int;
+        pub const S16: c_int = 16;
+        pub const S17: c_int = 17;
+        pub const S18: c_int = 18;
+        pub const S19: c_int = 19;
+        pub const S20: c_int = 20;
+        pub const S21: c_int = 21;
+        pub const S22: c_int = super::MICRO;
+        pub const S24: c_int = super::CAPTION;
+        pub const S25: c_int = 25;
+        pub const S26: c_int = super::LABEL;
+        pub const S27: c_int = 27;
+        pub const S28: c_int = super::BODY;
+        pub const S29: c_int = 29;
+        pub const S30: c_int = 30;
+        pub const S32: c_int = super::HEADLINE;
+        pub const S35: c_int = 35;
+        pub const S40: c_int = super::TITLE;
+        pub const S51: c_int = 51;
+        pub const S56: c_int = 56;
+        pub const S72: c_int = super::HERO;
+    }
 }

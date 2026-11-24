@@ -12,7 +12,8 @@
 //! * [`models`] — the Jellyfin DTOs.
 //! * [`images`] — artwork paths and the image request each resolves to.
 //! * [`convert`] — DTO → the full item record the detail page and player read, markers.
-//! * `api` / `playback` — the operations.
+//! * `api` / `playback` — the operations; [`person`] — a person's own record (the biography).
+//! * [`favorites`] — the Favorites page's lists and the rail's Random pick.
 //! * [`address`] / [`store`] — what a typed server address can mean, and the kept sign-in.
 #![allow(dead_code)]
 
@@ -21,9 +22,11 @@ mod api;
 pub mod auth;
 pub mod blurhash;
 pub mod convert;
+pub(crate) mod favorites;
 pub mod ids;
 pub mod images;
 pub mod models;
+pub(crate) mod person;
 pub(crate) mod playback;
 pub mod plaintext;
 pub(crate) mod preferences;

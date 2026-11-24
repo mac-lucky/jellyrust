@@ -202,6 +202,7 @@ pub(super) struct JfLoopback {
     info: std::sync::Arc<std::sync::Mutex<String>>,
     converted: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     by_request: std::sync::Arc<std::sync::Mutex<Option<fn(&serde_json::Value) -> String>>>,
+    item: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl JfLoopback {
@@ -225,6 +226,9 @@ impl JfLoopback {
         let converted_answer = converted.clone();
         let by_request = std::sync::Arc::new(std::sync::Mutex::new(None::<fn(&serde_json::Value) -> String>));
         let by_request_answer = by_request.clone();
+        let item = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let item_answer = item.clone();
+        let item_path = format!("/Items/{JF_GUID}?");
         let handle = std::thread::spawn(move || {
             loop {
                 match nj_base::testnet::accept(&listener) {
@@ -254,8 +258,12 @@ impl JfLoopback {
                             body: String::from_utf8_lossy(&body).into_owned(),
                             at: std::time::Instant::now(),
                         });
+                        let item_body = item_answer.lock().unwrap_or_else(|e| e.into_inner()).clone()
+                            .filter(|_| line.starts_with("GET ") && path.starts_with(&item_path));
                         if path.starts_with("/Users/Me") {
                             write_json(&mut socket, me.as_bytes());
+                        } else if let Some(body) = item_body {
+                            write_json(&mut socket, body.as_bytes());
                         } else if path.contains("/PlaybackInfo") {
                             std::thread::sleep(delay);
                             let ask = serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_default();
@@ -308,7 +316,14 @@ impl JfLoopback {
             ..Default::default()
         });
         let _ = jf_rk();
-        JfLoopback { sid, done, handle, log, info, converted, by_request }
+        JfLoopback { sid, done, handle, log, info, converted, by_request, item }
+    }
+
+    /// Answer the item read (`GET /Items/{JF_GUID}?userId=`) with `item`, a `BaseItemDto`: a play
+    /// whose `ResolveEnv` holds no cached item then fetches its tracks from it, through
+    /// `jf::convert`, as a play from Home does.
+    pub(super) fn answer_item(&self, item: &str) {
+        *self.item.lock().unwrap_or_else(|e| e.into_inner()) = Some(item.to_string());
     }
 
     /// Answer every later `PlaybackInfo` with `info`.
@@ -382,6 +397,7 @@ pub(super) fn fourk_item_with_subs(
         rk: "rk-4k".into(),
         audio,
         subs,
+        subs_off: false,
         video_fps: 23.976,
         width: 3840,
         height: 2160,

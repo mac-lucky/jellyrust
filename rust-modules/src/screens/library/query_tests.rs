@@ -169,7 +169,7 @@ fn accepted_queries_reset_engine_grid_memory_but_keep_the_toolbar_during_loading
                 else {
                     unreachable!()
                 };
-                let mut remounted = LibraryScreen::new(ENTRY, InstanceId(20), SecKind::Movie);
+                let mut remounted = LibraryScreen::new(ENTRY, InstanceId(20), None);
                 remounted.restore(&memory);
                 page = remounted;
                 page.step(

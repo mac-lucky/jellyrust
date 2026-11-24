@@ -289,3 +289,51 @@ fn the_local_subtitle_pickers_never_touch_the_jellyfin_preferences() {
         assert_eq!(field.kind().title(), nj_platform::i18n::msg::settings_playback_title(), "{field:?}: the crumb names the page it opened from");
     }
 }
+
+/// Each Remember picker writes its own server field and only that one.
+#[test]
+fn each_remember_picker_writes_its_own_field() {
+    let _serial = nj_base::testlock::serial();
+    let _session = crate::catalog::session::TempSession::new("picker-remember");
+    let prefs = AudioPreferences { remember_audio_selections: true, remember_subtitle_selections: true, ..Default::default() };
+    for field in [PickerKind::RememberAudio, PickerKind::RememberSubtitles] {
+        let account = Account::new("picker-remember", 25, prefs.clone());
+        let mut page = audio_picker(&account, field);
+        assert_eq!(page.state.checked, key_of(&page, &Value::Remember(true)), "{field:?}: on is checked");
+        let off = key_of(&page, &Value::Remember(false));
+        let emitted = drive(&mut page, ScreenEvent::Activate(off), off);
+        let update = emitted.into_iter().find_map(|e| match e.fx {
+            Fx::App(AppFx::Preferences(PreferenceCmd::Save { update, .. })) => Some(update),
+            _ => None,
+        }).expect("a save");
+        let want = |kind| (kind == field).then_some(false);
+        assert_eq!(update.remember_audio_selections, want(PickerKind::RememberAudio), "{field:?}");
+        assert_eq!(update.remember_subtitle_selections, want(PickerKind::RememberSubtitles), "{field:?}");
+    }
+}
+
+/// The dubbing/lektor picker opens from Audio & Subtitles but is saved on this TV: it loads
+/// nothing from the account, shows the server's note nowhere, and a pick is a local write.
+#[test]
+fn the_voice_picker_is_local_on_the_audio_page() {
+    let _serial = nj_base::testlock::serial();
+    let _session = crate::catalog::session::TempSession::new("picker-voice");
+    let previous = crate::route::voice_preference();
+    crate::route::restore_voice_preference(VoicePreference::Any);
+    let mut page = PickerPage::new(EntryId(0), PickerKind::Voice);
+    let mut emitted = drive(&mut page, ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(GroupId(0)) }), 0);
+    emitted.extend(drive(&mut page, tick(), 0));
+    assert_eq!(preference_commands(&emitted), 0, "no account load");
+    assert!(page.form.index_of_key(RowKey(RETRY_KEY)).is_none(), "no Retry row");
+    assert!(!page.copy.contains(nj_platform::i18n::msg::settings_audio_account_note()), "no account note");
+    assert_eq!(PickerKind::Voice.kind().title(), nj_platform::i18n::msg::settings_audio_title(), "the crumb names Audio & Subtitles");
+    assert_eq!(page.state.checked, key_of(&page, &Value::Voice(VoicePreference::Any)));
+    let never = key_of(&page, &Value::Voice(VoicePreference::DubbingNoLektor));
+    let emitted = drive(&mut page, ScreenEvent::Activate(never), never);
+    let saved = emitted.into_iter().find_map(|e| match e.fx {
+        Fx::App(AppFx::Preferences(PreferenceCmd::VoicePreference { value, .. })) => Some(value),
+        _ => None,
+    });
+    assert_eq!(saved, Some(VoicePreference::DubbingNoLektor));
+    crate::route::restore_voice_preference(previous);
+}

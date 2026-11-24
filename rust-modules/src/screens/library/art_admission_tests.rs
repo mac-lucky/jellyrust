@@ -46,13 +46,14 @@ fn scrolled_grid_admits_only_visible_art_and_never_rewarms_hidden_rows() {
             } else { crate::browse::LibraryType::Primary });
         let mut page = fixture.screen();
         let layout = page.layout;
-        let scroll = layout.row_reveal(20);
+        // Between two row snaps, so the window's buffered rows lie wholly off the panel.
+        let scroll = layout.row_reveal(20) + layout.grid_pitch() * 0.6;
         page.pair.detail.set_geometry(layout, scroll, layout, scroll);
         let (lo, hi) = page.pair.detail.visible_window();
         let visible: Vec<_> = (lo..hi).filter(|&i| crate::ui::card_row::paint_visible(
             painter, page.pair.detail.rect_at(i, false, 1.0), 1.0, false)).collect();
         assert!(lo > 0 && !visible.is_empty() && visible.len() < hi - lo,
-            "the fixture needs both actually visible cards and culled buffered cards");
+            "the fixture needs both actually visible cards and culled buffered cards: {lo}..{hi} visible {visible:?}");
         // The focused card can also be outside the viewport (e.g. while a retained page is
         // translated). Exercise its separate paint path, as well as the ordinary grid loop.
         let hidden_focus = page.key(page.pair.detail.elem_at(0).unwrap());

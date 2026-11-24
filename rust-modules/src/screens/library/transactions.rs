@@ -1,16 +1,6 @@
-//! Semantic deferred transactions for the page and grid fade scopes.
+//! The semantic deferred transaction of the grid fade scope: a query edit waits for the fade.
 
-use crate::browse::SecKind;
-use crate::screens::registry::LibrarySectionIdentity;
 use crate::stores::browse::ListingView;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct SectionTarget {
-    pub epoch: u32,
-    pub index: usize,
-    pub identity: LibrarySectionIdentity,
-    pub kind: SecKind,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct GridTarget {
@@ -36,59 +26,34 @@ pub(super) enum GridAction {
     Sort { key: String, desc: bool },
     Unwatched { desired: bool },
     Genre { id: Option<String> },
+    /// The Genres tab's drill-in (`QueryEdit::Drill`): into one genre, or out of it.
+    Drill { id: Option<String> },
     LibraryType(crate::browse::LibraryType),
 }
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct PendingTransactions {
-    section: Option<SectionTarget>,
     grid: Option<(GridTarget, GridAction)>,
 }
 
 impl PendingTransactions {
-    pub(super) fn section(&self) -> Option<&SectionTarget> { self.section.as_ref() }
     pub(super) fn grid(&self) -> Option<&(GridTarget, GridAction)> { self.grid.as_ref() }
-
-    pub(super) fn request_section(&mut self, target: SectionTarget) {
-        if self.grid.as_ref().is_some_and(|(grid, _)|
-            grid.epoch != target.epoch || grid.sid != target.identity.sid || grid.section != target.identity.key) {
-            self.grid = None;
-        }
-        self.section = Some(target);
-    }
 
     pub(super) fn request_grid(&mut self, target: GridTarget, action: GridAction) {
         self.grid = Some((target, action));
     }
 
-    pub(super) fn cancel_grid(&mut self) { self.grid = None; }
+    pub(super) fn cancel(&mut self) { self.grid = None; }
 
-    pub(super) fn take_section(&mut self, epoch: u32) -> Option<SectionTarget> {
-        self.section.take().filter(|target| target.epoch == epoch)
-    }
-
-    pub(super) fn cancel(&mut self) {
-        self.section = None;
-        self.grid = None;
-    }
-
-    /// Leaving the page commits both semantic halves in deterministic page-then-grid order.
-    pub(super) fn flush(&mut self) -> (Option<SectionTarget>, Option<(GridTarget, GridAction)>) {
-        (self.section.take(), self.grid.take())
-    }
+    /// Leaving the page (or the fade landing) commits the pending edit.
+    pub(super) fn flush(&mut self) -> Option<(GridTarget, GridAction)> { self.grid.take() }
 }
 
-pub(super) const SHAPE: &str = "PendingTransactions{section:Option<{epoch:u32,index:u32,identity:{sid:u32,key:u64},kind:u32}>,grid:Option<{target:{epoch:u32,sid:u32,section:u64,query:u32},action:Sort{key:str,desc:bool}|Unwatched{desired:bool}|Genre{id:Option<str>}|LibraryType{code:u32}}>}";
+pub(super) const SHAPE: &str = "PendingTransactions{grid:Option<{target:{epoch:u32,sid:u32,section:u64,query:u32},action:Sort{key:str,desc:bool}|Unwatched{desired:bool}|Genre{id:Option<str>}|Drill{id:Option<str>}|LibraryType{code:u32}}>}";
 
 impl nj_machine::machine::LogicalState for PendingTransactions {
     fn write(&self, c: &mut nj_machine::machine::Canon) {
-        let Self { section, grid } = self;
-        c.option(section.as_ref(), |c, target| {
-            let SectionTarget { epoch, index, identity, kind } = target;
-            let LibrarySectionIdentity { sid, key } = identity;
-            c.u32(*epoch).u32(*index as u32).u32(u32::from(sid.raw())).u64(*key as u64)
-                .u32(match kind { SecKind::Movie => 0, SecKind::Show => 1 });
-        });
+        let Self { grid } = self;
         c.option(grid.as_ref(), |c, (target, action)| {
             let GridTarget { epoch, sid, section, query } = target;
             c.u32(*epoch).u32(u32::from(sid.raw())).u64(*section as u64).u32(*query);
@@ -97,6 +62,7 @@ impl nj_machine::machine::LogicalState for PendingTransactions {
                 GridAction::Unwatched { desired } => { c.u32(1).bool(*desired); }
                 GridAction::Genre { id } => { c.u32(2).option(id.as_deref(), |c, id| { c.str(id); }); }
                 GridAction::LibraryType(kind) => { c.u32(3).u32(kind.code()); }
+                GridAction::Drill { id } => { c.u32(4).option(id.as_deref(), |c, id| { c.str(id); }); }
             }
         });
     }
@@ -106,18 +72,6 @@ impl nj_machine::machine::LogicalState for PendingTransactions {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn section(index: usize) -> SectionTarget {
-        SectionTarget {
-            epoch: 7,
-            index,
-            identity: LibrarySectionIdentity {
-                sid: crate::catalog::ServerId::from_raw(2),
-                key: 40 + index as i64,
-            },
-            kind: SecKind::Movie,
-        }
-    }
 
     fn grid(query: u32) -> GridTarget {
         GridTarget {
@@ -129,32 +83,12 @@ mod tests {
     }
 
     #[test]
-    fn section_and_grid_transactions_coexist_and_flush_in_order() {
+    fn the_newest_edit_supersedes_and_flush_takes_it_once() {
         let mut pending = PendingTransactions::default();
-        pending.request_section(section(2));
-        pending.request_grid(grid(11), GridAction::Unwatched { desired: true });
-        let (page, query) = pending.flush();
-        assert_eq!(page, Some(section(2)));
-        assert_eq!(query, Some((grid(11), GridAction::Unwatched { desired: true })));
-    }
-
-    #[test]
-    fn newest_request_supersedes_only_its_own_half() {
-        let mut pending = PendingTransactions::default();
-        pending.request_section(section(1));
         pending.request_grid(grid(9), GridAction::Genre { id: Some("7".into()) });
-        pending.request_section(section(2));
         pending.request_grid(grid(9), GridAction::Sort { key: "titleSort".into(), desc: true });
-        assert_eq!(pending.section(), Some(&section(2)));
-        assert_eq!(pending.grid(), Some(&(grid(9), GridAction::Sort { key: "titleSort".into(), desc: true })));
-    }
-
-    #[test]
-    fn stale_epoch_and_wrong_listing_target_are_refused() {
-        let mut pending = PendingTransactions::default();
-        pending.request_section(section(2));
-        assert_eq!(pending.take_section(8), None);
-        assert!(pending.section().is_none());
+        assert_eq!(pending.flush(), Some((grid(9), GridAction::Sort { key: "titleSort".into(), desc: true })));
+        assert_eq!(pending.flush(), None);
     }
 
     #[test]

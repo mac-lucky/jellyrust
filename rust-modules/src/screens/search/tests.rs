@@ -441,7 +441,7 @@ fn a_tile_scrolled_under_the_chrome_is_not_a_pointer_target() {
     fixture.query("chrome").shelves(vec![shelf(Kind::Movie, "t", 4)]);
     let mut screen = fixture.screen();
     let elem = screen.rows[0].elems[0];
-    let floor = crate::ui::widgets::TOP_BAR_BOTTOM;
+    let floor = 0.0; // the page's floor is the screen top: no top bar covers it any more
     let rest = screen.row_rect(0, 0, At::Drawn);
 
     // Fully on screen: hit anywhere inside it.
@@ -464,30 +464,33 @@ fn a_tile_scrolled_under_the_chrome_is_not_a_pointer_target() {
 }
 
 /// Legacy `the_fields_hit_rect_rides_the_scroll_and_stops_at_the_track`: the query field is a
-/// document element, so its hit rect scrolls with it — at rest it is `layout::FIELD` itself, half
-/// under the track it is pressable on the half you can see, and fully under it is not a target.
+/// document element, so its hit rect scrolls with it — at rest it is `layout::FIELD` itself, and
+/// only what stands below the page's floor (the top chrome's edge) is pressable: a box straddling
+/// the floor is pressable on the part you can see, and wholly above it is not a target.
 #[test]
 fn the_fields_hit_rect_rides_the_scroll_and_stops_at_the_track() {
     let _serial = nj_base::testlock::serial();
     let fixture = Fixture::new();
     let mut screen = fixture.screen();
-    let floor = crate::ui::widgets::TOP_BAR_BOTTOM;
+    let floor = 0.0; // the page's floor is the screen top: no top bar covers it any more
     let at_rest = stop_of(&screen, &fixture, None, FIELD).unwrap();
     assert_eq!((at_rest.rect.y, at_rest.rect.h), (layout::FIELD.y, layout::FIELD.h),
         "an unscrolled screen must cost nothing: this is FIELD itself");
-    assert_eq!(hit(&screen, &fixture, &[FIELD], layout::FIELD.cx(), layout::FIELD.cy()), Some(FIELD));
 
-    screen.scroll.jump(layout::FIELD.y - floor + 20.0);
-    let part = stop_of(&screen, &fixture, None, FIELD).unwrap();
-    let visible = part.rect.intersect(part.clip);
-    assert_eq!(visible.y, floor, "floored at the track, not dropped");
-    assert!((visible.h - (layout::FIELD.h - 20.0)).abs() < 0.001,
-        "only the part under the track is taken: y={} h={}", visible.y, visible.h);
-    assert_eq!(hit(&screen, &fixture, &[FIELD], layout::FIELD.cx(), floor + 10.0), Some(FIELD));
-
-    screen.scroll.jump(layout::FIELD.y + layout::FIELD.h - floor + 0.5);
-    assert_eq!(hit(&screen, &fixture, &[FIELD], layout::FIELD.cx(), floor), None,
-        "once the whole box is behind the track it is not a target at all");
+    // Whatever the floor, the stop takes the field's part below it and nothing above it.
+    for scroll in [0.0, -40.0, layout::FIELD.y + layout::FIELD.h - floor + 0.5] {
+        screen.scroll.jump(scroll);
+        let stop = stop_of(&screen, &fixture, None, FIELD).unwrap();
+        assert_eq!(stop.rect.y, layout::FIELD.y - scroll, "the hit rect rides the scroll");
+        let visible = stop.rect.intersect(stop.clip);
+        let below = (stop.rect.y + stop.rect.h - floor).clamp(0.0, stop.rect.h);
+        assert!((visible.h.max(0.0) - below).abs() < 0.001, "scroll {scroll}: {visible:?}");
+        if below > 1.0 {
+            assert_eq!(hit(&screen, &fixture, &[FIELD], layout::FIELD.cx(), stop.rect.y + stop.rect.h - 0.5), Some(FIELD));
+        }
+        assert_eq!(hit(&screen, &fixture, &[FIELD], layout::FIELD.cx(), floor - 1.0), None,
+            "above the floor is chrome the standing strip owns");
+    }
 }
 
 /// Legacy `results.rs`'s `revealing_the_second_shelf_carries_the_query_field_under_the_track`:
@@ -508,7 +511,7 @@ fn revealing_the_second_shelf_carries_the_query_field_under_the_track() {
     step_dir(&mut screen, &fixture, &mut engine, Dir::Down);
     assert!(screen.scroll_target > 0.0, "the second shelf is below the fold and must be revealed");
     for i in 0..120 { frame(&mut screen, &fixture, &engine, i); }
-    let floor = crate::ui::widgets::TOP_BAR_BOTTOM;
+    let floor = 0.0; // the page's floor is the screen top: no top bar covers it any more
     assert!(screen.scroll.pos > layout::FIELD.y + layout::FIELD.h - floor,
         "the field must end up wholly under the track (scroll {})", screen.scroll.pos);
     assert!(stop_of(&screen, &fixture, None, FIELD)

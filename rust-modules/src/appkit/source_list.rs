@@ -1,24 +1,9 @@
-//! **The Sources ROW MODEL** — one list of libraries grouped by server, drawn on two surfaces.
+//! **The Sources ROW MODEL** — one list of libraries grouped by server, with a switch per library.
 //!
-//! The Library toolbar's Source panel (`screens::library::menu`, deliverable A) and the Favorite libraries
-//! editor — first run, and its Settings twin (`crate::screens::onboard`, deliverable F) — show
-//! the SAME list:
-//! your servers, each server's libraries, and which of them are favorites. The canvas says so in as
-//! many words — F "is the same list as A's On Home level, in the flow's own frame rather than a
-//! panel" — so it is one builder, and the two screens differ only in the frame around it, in the
-//! LEVEL they ask for, and in whether the roster-refresh row rides along.
-//!
-//! **They no longer differ in a control.** The panel used to carry a `TabPill::segment` pair at its
-//! top swapping its own two levels; the levels are now a property of the SURFACE, one each and
-//! fixed — the panel is a picker, the editor is the switches — so there is nothing to swap and the
-//! pills are gone. That was never only a tidy-up: with the switch governing the whole app rather
-//! than Home alone, a picker that could turn into an editor would let a library be un-favourited
-//! from inside the list of favourites and then vanish out of it under the cursor.
-//!
-//! Building it twice would have been the ordinary thing to do and the wrong one: the two would
-//! have drifted on exactly the details that make the list readable — which column carries a mark,
-//! which carries a word, what an unreachable group says and where it says it — and each drift
-//! would read as a bug on whichever screen you saw second.
+//! The Favorite libraries editor — first run, and its Settings twin (`crate::screens::onboard`,
+//! deliverable F) — shows your servers, each server's libraries, and which of them are favorites.
+//! litefin: the Library toolbar's Source panel that once drew the same list as a picker (with its
+//! *Check for shared libraries* row) is gone, and its level and tail went with it.
 //!
 //! Pure over its inputs, so it is host-testable without a live section table (which is also why
 //! `browse` hands out owned [`SrcGroup`](crate::browse::SrcGroup)/[`SrcRow`](crate::browse::SrcRow)
@@ -29,65 +14,26 @@ use crate::ui::form::{Form, FormId, FormSection, RowKey, RowKind};
 use crate::ui::table::{Row, Section};
 use std::convert::Infallible;
 
-/// The two levels of the Sources list — **one per surface now, and not swappable from either.**
-/// They were the two halves of one panel, exchanged by segmented pills at its top; see the module
-/// doc for why that control is gone.
-///
-/// They differ in MEDIUM as well as in position, and that is the design's rule: a **mark** says
-/// where you are, a **word** says what is set, and no row ever says both. So Browse draws one tick
-/// and no words, OnHome draws every row's word and no ticks — neither level mirrors the other's
-/// marks.
-///
-/// The Library panel is [`Level::Browse`] and nothing else, and is scoped to the FAVOURITES of the
-/// type being browsed. The Favorite libraries editor is [`Level::OnHome`] and nothing else — it has
-/// no current library to point at, because first run happens before there is a Library screen to
-/// have been on, and it is the one surface that lists every granted library so a non-favourite has
-/// a way back.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Level {
-    /// a picker: one tick, on the library you are looking at; OK closes the panel
-    Browse,
-    /// toggles: `On`/`Off` at the trailing edge; OK flips and the panel stays open
-    OnHome,
-}
-
 /// What a row of the Sources list IS — and so what pressing it does: its identity in the
-/// [`SrcForm`] the list is declared as. The separator above the roster-refresh row is an inert
-/// slot ([`FormSection::separator`]): it takes a layout index and has no identity, so it can never
-/// be focused or pressed.
+/// [`SrcForm`] the list is declared as.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SrcTarget {
-    /// browse (Browse level) or favourite (OnHome level) this section
+    /// favourite (or not) this section
     Library(usize),
-    Recheck,
 }
 
 /// The hand-assigned focus key of each row: a library's key is its directory section index (the
 /// section, not the row's position in a group-ordered list, so a server's libraries landing later
-/// moves no other row's key); the roster refresh sits far above any section index.
+/// moves no other row's key).
 impl FormId for SrcTarget {
     fn key(&self) -> RowKey {
-        RowKey(match self {
-            SrcTarget::Library(section) => *section as u32,
-            SrcTarget::Recheck => 0x0100_0000,
-        })
+        let SrcTarget::Library(section) = self;
+        RowKey(*section as u32)
     }
 }
 
 /// The Sources list as a form: an item's action IS its identity.
 pub(crate) type SrcForm = Form<SrcTarget, SrcTarget, Infallible>;
-
-/// Does the list end with the roster-refresh row?
-///
-/// The panel's does. **The first-run route's does not**, and that is a design call rather than an
-/// omission: a share that arrives later must not reopen a first-run screen, so there is nothing
-/// for a refresh to be FOR there — it appears unpinned in the Library chip's list, "which is where
-/// 'Check for shared libraries' already lives" (`Shared Sources.dc.html` §F).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Tail {
-    Recheck,
-    None,
-}
 
 /// The word a group's state is said in — `None` for the two states that say nothing.
 ///
@@ -111,9 +57,7 @@ fn state_word(s: SourceState) -> Option<&'static str> {
 ///
 /// It has to read as a different KIND of fault from [`unreachable`], because it has a different
 /// remedy and the wrong word costs the user an evening — "not reachable" sends somebody to look at
-/// a router for something no router was ever part of. The remedy is in this same panel, one row
-/// down: *Check for shared libraries* is the `/api/v2/resources` refetch that reissues the per-(user,
-/// server) `accessToken`, which is why this run does not have to carry an instruction as well.
+/// a router for something no router was ever part of.
 fn unauthorized() -> &'static str { nj_platform::i18n::msg::widgets_source_unauthorized() }
 /// Did not answer at all — refused, timed out, or unresolvable.
 fn unreachable() -> &'static str { nj_platform::i18n::msg::widgets_source_unreachable() }
@@ -217,21 +161,11 @@ fn header_accessory(sec: Section, g: &SrcGroup) -> Section {
     }
 }
 
-/// Build the list.
+/// Build the list: a set of switches, every row stating its value as the word `On`/`Off` at the
+/// trailing edge, and no ticks (a word says what is set).
 ///
-/// The levels never mirror each other's marks. **Browse** is a picker: one tick, on the library you
-/// are looking at, and no words. **On Home** is a set of switches: every row states its value as
-/// the word `On`/`Off` at the trailing edge, and no ticks. A mark says where you are, a word says
-/// what is set, and no row is allowed to say both.
-///
-/// Returns the list as a [`SrcForm`]: every library row declared with its [`SrcTarget`], and the
-/// separator above the roster-refresh row an inert slot.
-pub(crate) fn form(
-    level: Level,
-    groups: &[crate::browse::SrcGroup],
-    rows: &[crate::browse::SrcRow],
-    tail: Tail,
-) -> SrcForm {
+/// Returns the list as a [`SrcForm`]: every library row declared with its [`SrcTarget`].
+pub(crate) fn form(groups: &[crate::browse::SrcGroup], rows: &[crate::browse::SrcRow]) -> SrcForm {
     let mut out: Vec<FormSection<SrcTarget, SrcTarget, Infallible>> = Vec::new();
     for (gi, g) in groups.iter().enumerate() {
         let mine = rows.iter().filter(|r| r.src == gi);
@@ -250,45 +184,21 @@ pub(crate) fn form(
         let head = header_accessory(sec, g).dim(!usable(g));
         let mut sec = FormSection::from_head(head);
         for r in mine {
-            let mut row = Row::new(r.title.clone()).server_label();
-            let kind = match level {
-                Level::Browse => {
-                    row = row.checked(r.current).detail(r.count_line.clone());
-                    RowKind::Choice
-                }
-                Level::OnHome => {
-                    row = row
-                        .toggle(r.pinned)
-                        // the LAST pinned library: the value dims, the label keeps live ink, and the
-                        // sub-line states the rule. Not the whole row — dim means unavailable, and this
-                        // is the library that works.
-                        .value_dim(r.last_pinned)
-                        .detail(if r.last_pinned {
-                            nj_platform::i18n::msg::widgets_source_needs_library().to_string()
-                        } else {
-                            r.count_line.clone()
-                        });
-                    RowKind::Toggle
-                }
-            };
+            let row = Row::new(r.title.clone()).server_label()
+                .toggle(r.pinned)
+                // the LAST pinned library: the value dims, the label keeps live ink, and the
+                // sub-line states the rule. Not the whole row — dim means unavailable, and this
+                // is the library that works.
+                .value_dim(r.last_pinned)
+                .detail(if r.last_pinned {
+                    nj_platform::i18n::msg::widgets_source_needs_library().to_string()
+                } else {
+                    r.count_line.clone()
+                });
             let target = SrcTarget::Library(r.section);
-            sec = sec.item(target, kind, target, row);
+            sec = sec.item(target, RowKind::Toggle, target, row);
         }
         out.push(sec);
-    }
-    // …and the one row that is not a library, last, under a separator. It rides BOTH levels, which
-    // is what keeps their row counts — and therefore the panel's height — identical.
-    if tail == Tail::Recheck {
-        if let Some(last) = out.pop() {
-            // no leading glyph, deliberately: on the Browse level that column carries the picker's
-            // tick, and an action mark in it would be a second grammar for one column
-            out.push(last.separator().item(
-                SrcTarget::Recheck,
-                RowKind::Button,
-                SrcTarget::Recheck,
-                Row::new(nj_platform::i18n::msg::widgets_source_new_shares()),
-            ));
-        }
     }
     out.into_iter().fold(Form::new(), Form::section)
 }
@@ -301,14 +211,9 @@ mod tests {
 
     /// The built list as a table sees it: the drawn sections, and the target of every FOCUSABLE row
     /// in layout order (separators and notes have none).
-    fn sections(
-        level: Level,
-        groups: &[SrcGroup],
-        rows: &[crate::browse::SrcRow],
-        tail: Tail,
-    ) -> (Vec<Section>, Vec<SrcTarget>) {
+    fn sections(groups: &[SrcGroup], rows: &[crate::browse::SrcRow]) -> (Vec<Section>, Vec<SrcTarget>) {
         let mut built = FormTable::<SrcTarget, SrcTarget, Infallible>::new(crate::ui::table_screen::BAND_BASE);
-        built.set(form(level, groups, rows, tail), None);
+        built.set(form(groups, rows), None);
         let targets = (0..built.table.n_rows() as usize)
             .filter_map(|i| built.id_at(i).copied())
             .collect();
@@ -434,17 +339,16 @@ mod tests {
     /// the group header (`server_header`), a handle-bearing accessory (`server_accessory`) and the
     /// row label (`server_label`) are marked Server and exempt, EXCEPT that the accessory's app-owned
     /// `state · tier ·` lead is declared (`accessory_app_prefix`) and checked; an accessory with no
-    /// handle is wholly App. The "needs a library" sub-line and the roster-refresh row are checked
-    /// too, at both surfaces' widths: the Library panel's `MENU_MAX_W` cap
-    /// (`screens::library::menu::LibraryMenu::frame`) and the Favorite libraries editor's full
-    /// table width (`RouteLayout::screen().sectioned_table()`, `screens::onboard`).
+    /// handle is wholly App. The "needs a library" sub-line is checked too, at the `MENU_MAX_W` cap
+    /// and at the Favorite libraries editor's full table width
+    /// (`RouteLayout::screen().sectioned_table()`, `screens::onboard`).
     #[test]
     fn every_app_owned_run_fits_its_column_in_every_language() {
         use nj_platform::i18n::{language_on_this_thread_for_test, SHIPPED};
         use crate::ui::route_screen::RouteLayout;
         use crate::ui::table::TableView;
         let widths = [
-            ("library panel", crate::ui::table::MENU_MAX_W),
+            ("menu cap", crate::ui::table::MENU_MAX_W),
             ("favourites editor", RouteLayout::screen().sectioned_table().w),
         ];
         let groups = vec![
@@ -466,13 +370,11 @@ mod tests {
             let _guard = language_on_this_thread_for_test(language);
             let tag = language.tag();
             for (surface, w) in widths {
-                for (level_name, level, tail) in [("browse", Level::Browse, Tail::Recheck), ("on_home", Level::OnHome, Tail::None)] {
-                    let (secs, _) = sections(level, &groups, &rows, tail);
-                    let mut table = TableView::new();
-                    table.compact = false;
-                    table.set_sections(secs, 0, false);
-                    out.extend(table.app_fit_failures(w, &format!("{tag} {surface} {level_name}")));
-                }
+                let (secs, _) = sections(&groups, &rows);
+                let mut table = TableView::new();
+                table.compact = false;
+                table.set_sections(secs, 0, false);
+                out.extend(table.app_fit_failures(w, &format!("{tag} {surface}")));
             }
         }
         crate::ui::table::assert_no_fit_failures(&out);
@@ -481,7 +383,7 @@ mod tests {
     fn one_group_sections(g: SrcGroup) -> Vec<Section> {
         let rows = vec![crate::browse::SrcRow { assorted: false, src: 0, section: 0, title: "Movies".into(), count_line: "1 film".into(),
             pinned: true, last_pinned: false, current: false }];
-        sections(Level::Browse, &[g], &rows, Tail::None).0
+        sections(&[g], &rows).0
     }
 
     /// **Who owns the accessory.** No handle: the whole run is the app's `state · tier` words, so

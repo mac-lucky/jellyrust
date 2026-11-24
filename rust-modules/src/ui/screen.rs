@@ -31,14 +31,12 @@ pub enum RenderStrategy {
     VideoPlane,
 }
 
-/// Borrowed frame data passed to a [`Scrim::lift`]. Shared chrome comes from its application's
-/// captured owner, while the material is the face the application-owned `GlassPlan` resolved and
-/// the normal chrome draw published for this frame. Fixtures without either capability use
-/// `None`; drawing never recovers either value from globals.
+/// Borrowed frame data passed to a [`Scrim::lift`]: the shared rail's publication from its
+/// application's captured owner. Fixtures without one use `None`; drawing never recovers it from
+/// globals.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ScrimLiftRead<'a> {
     pub(crate) chrome: Option<crate::ui::widgets::ChromeRead<'a>>,
-    pub(crate) bar_material: Option<nj_gfx::gfx::GlassFace>,
 }
 
 pub(crate) type ScrimLift = for<'a> fn(ScrimLiftRead<'a>);
@@ -79,9 +77,8 @@ pub struct Scrim {
     /// own screen knows where it landed and how to paint it, and this is minted as a `const` on
     /// that screen's own `Screen::scrim`.
     ///
-    /// Its [`ScrimLiftRead`] argument carries the shared top bar's borrowed render values for this
-    /// frame: captured profile/labels and focus unfurl from the rig's chrome owner, plus the face
-    /// published by the application-owned `GlassPlan`. [`ModalStack::draw_scrims`] passes that one
+    /// Its [`ScrimLiftRead`] argument carries the shared rail's borrowed render values for this
+    /// frame: the captured avatar and its focus from the rig's chrome owner. [`ModalStack::draw_scrims`] passes that one
     /// typed context to every lift it calls (spec phase 12, PX-WIDGETS). Thus a bare `fn` needs no
     /// `Bridge` borrow and performs no global/session read while drawing; a surface with nothing to
     /// lift ([`Scrim::NONE`], [`Scrim::dim`]) simply ignores it (`no_lift`).
@@ -163,8 +160,8 @@ pub trait Screen<H: Host>: Machine<H, Ev = ScreenEvent<H>> + Focusable<H> {
     fn render(&self) -> RenderStrategy;
     /// Whether remounting an evicted child surface can read this page's identity-matched data.
     fn covered_surfaces_ready(&self) -> bool { true }
-    /// May directional navigation or hover seat the container's strip (§6.2)? Home answers
-    /// `false` while snapped to the grid; visible strip controls still accept direct clicks.
+    /// May directional navigation or hover seat the container's rail (§6.2)? Every page that
+    /// wears it answers yes; visible rail controls accept direct clicks either way.
     fn strip_reachable(&self) -> bool {
         true
     }

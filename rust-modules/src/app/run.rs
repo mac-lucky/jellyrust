@@ -269,6 +269,7 @@ pub(crate) unsafe fn run(app: &mut App) {
         fr.underlay_moving |= tree_report.underlay_moving;
         if was_player && super::bridge::player(&app.pages).is_none() { restore_played_entry(app); }
         content_requests(app, fr);
+        super::bridge::chrome_requests(&mut app.pages, &mut app.bridge);
         crate::dev::scenarios::advance_content_boot(app, fr);
         loop_requests(app);
         app.instr.mark(nj_base::diag::heartbeat::Phase::NavCommit); // navcommit
@@ -667,15 +668,16 @@ unsafe fn ingress_token(app: &mut App, fr: &mut Frame, token: &str) -> bool {
 ///
 /// One helper rather than three copies of `set_hud(now + HUD_HEADLESS_MS)`: the deadline and the
 /// cursor are the player INSTANCE's since restructure phase 9, so every one of those copies would
-/// have had to learn the same `player_mut` lookup and the same `publish`. `tab` parks the bottom
-/// tab row (the Info card is tab 0, the Chapters strip tab 1) and moves the ring onto it; `None`
-/// leaves the cursor alone, which is what the track menu and the auto-pause script want.
-pub(crate) fn pin_headless_hud(app: &mut App, now: u32, tab: Option<i32>) {
+/// have had to learn the same `player_mut` lookup and the same `publish`. `on_chapters` seats the
+/// ring on the controls row's Chapters button, where a panel's DOWN past its bottom lands it
+/// (`PlayerReq::FocusTabs`); `false` leaves the cursor alone, which is what the track menu and the
+/// auto-pause script want.
+pub(crate) fn pin_headless_hud(app: &mut App, now: u32, on_chapters: bool) {
     if let Some(player) = super::bridge::player_mut(&mut app.pages) {
         player.hud.extend(now, HUD_HEADLESS_MS);
-        if let Some(tab) = tab {
-            player.hud.nav.focus = 2;
-            player.hud.nav.tab = tab;
+        if on_chapters {
+            player.hud.nav.focus = 1;
+            player.hud.nav.btn = crate::appkit::player_hud::BTN_CHAPTERS;
         }
         player.publish();
     }
@@ -830,8 +832,10 @@ unsafe fn ingest_sdl_event_with_window(app: &mut App, fr: &mut Frame,
             let saved_ns = super::bridge::player_mut(&mut app.pages)
                 .and_then(|player| player.take_queued_jump())
                 .unwrap_or_else(|| intended_pos(&app.player.session));
-            let clock = super::lifecycle::clock_for_suspend_now(&app.player.lifecycle);
-            app.player.lifecycle.suspend(saved_ns, clock);
+            // Always Playing, the owner's rule: a film open when the app went to the background
+            // plays on return, even one the viewer paused just before (on the C1 the OK press
+            // that precedes an app switch often pauses it a second earlier).
+            app.player.lifecycle.suspend(saved_ns, ForegroundClock::Playing);
             // The OS took the screen; whatever the pointer was doing, its button-up is never
             // going to arrive here.
             app.ptr.button_down = false;
@@ -843,7 +847,15 @@ unsafe fn ingest_sdl_event_with_window(app: &mut App, fr: &mut Frame,
                 player.transport_reset(true);
             }
             close_player_overlays(&mut app.pages);
+            // Read before the suspend resets the session's picture flag.
+            let shown = crate::player::seen_frame();
             crate::player::suspend_bufferfeed(&mut app.player.session, &mut app.adapters.player);
+            // The server hears the pause now rather than showing the TV playing on until its idle
+            // sweep; a playback that never showed a picture has nothing to pause.
+            if shown {
+                crate::route::report_parked(&mut app.player.session, crate::catalog::TimelineState::Paused,
+                    saved_ns, crate::player::duration_ns());
+            }
             // Also retire the resolve generation: its worker may finish after backgrounding,
             // including before the accepted start's Player page has ever mounted.
             crate::route::cancel_play(&mut app.player.session);
@@ -879,6 +891,8 @@ unsafe fn ingest_sdl_event_with_window(app: &mut App, fr: &mut Frame,
             restore_window(app.win);
             nj_machine::idle::invalidate();
             app.library_poll.foregrounded(fr.now);
+            // Playing after an app switch, Paused after the television was switched off.
+            app.player.lifecycle.settle_park_clock();
             let activation = drive_foreground(
                 &mut app.player.lifecycle,
                 &mut app.player.session,
@@ -1124,14 +1138,12 @@ unsafe fn ingest_sdl_event_with_window(app: &mut App, fr: &mut Frame,
             // and the simulator cannot produce one — so `tools/keytable.py` is blind to
             // this by construction. Settling it needs a `key` line off the television.
         } else if matches!(key, Key::Ok) {
-            key_ok(&mut app.player.session,
-                &mut app.adapters.player,
+            key_ok(&mut app.adapters.player,
                 app.last_input,
                 &mut app.ptr,
                 &mut app.ok_armed,
                 &mut app.input.press,
                 &mut app.pages,
-                &mut app.bridge,
             );
         } else if matches!(key, Key::Pause) {
             key_pause(&mut app.adapters.player, app.last_input, &mut app.pages);
@@ -1304,27 +1316,9 @@ unsafe fn ingest_sdl_event_with_window(app: &mut App, fr: &mut Frame,
         // which is exactly the shape phase 12 exists to end: a live path and a dead one on one
         // piece of state. Phase 12, PX-PLAYER. This chain's head was that block's
         // `matches!(app.route, Route::Player)`, so what follows is now the head itself.)
-        if chip_clicked(&app.route(), &app.ev) {
-            // The shared bar's profile chip, on whichever of the three screens is up. `key_ok`
-            // carries no matching `TopFocus::Chip` arm any more — Home, Library and Search are
-            // all owned screens now, so the chip's focus/OK path is the shared engine's, not this
-            // ladder's — and this arm itself is close to unreachable in practice: the
-            // `owns_input()` early return above already claims every click for a mounted owned
-            // page, and Home/Library/Search (the only pages `chip_clicked` recognises) are
-            // always mounted once their frame runs. What is left for this to catch is the
-            // one-frame window before a page's body mounts.
-            chip_activate(&mut app.pages);
-        // `Route::Search` is deliberately absent here (phase 7 Search cutover, mirroring
-        // `Route::Profiles`'s own removal): Search is unconditionally an owned screen, so
-        // its clicks — including the shared strip's pills — were already taken by
-        // `owns_input()`'s click arm above and never reach this chain.
-        //
-        // (`Route::ItemMenu`'s arm stood here, ABOVE the Home arm below, which is what kept a
-        // click off the panel from falling through onto the shelf and launching whatever card it
-        // hit — the failure `modal_of` was written for. Phase 10 made the menu a surface, so the
-        // container answers that by construction: `owns_input()` consults it first, and the
-        // panel's rows are stops in the shared hit map.)
-        }
+        // (The profile chip's click arm stood here, for the one-frame window before a bar page's
+        // body mounted. The rail's avatar is a stop in the shared hit map like every other rail
+        // control, so `owns_input()` above claims its click with the rest.)
         // `Route::Profiles` and `Route::Login` are deliberately absent here (phase 6):
         // both are owned screens now, so a click on either was already taken by
         // `owns_input()`'s click arm above and never reaches this chain.
@@ -1546,12 +1540,13 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
             }
         }
         // post-playback home refresh (armed by every exit_player): refetch the hubs so
-        // Continue Watching shows the new resume point / next episode; the small delay lets
-        // the final timeline PUT land server-side first. The request is worker-only; the
-        // landing logs the resulting item count when it actually commits.
+        // Continue Watching shows the new resume point / next episode, once the stop's reports
+        // (and the mark-played after them) have landed server-side. The request is worker-only;
+        // the landing logs the resulting item count when it actually commits.
         if app.refresh_hubs_at != 0
             && fr.now.wrapping_sub(app.refresh_hubs_at) < 0x8000_0000
             && !matches!(app.route(), AppArg::Player)
+            && crate::route::stop_reports_landed()
         {
             app.refresh_hubs_at = 0;
             super::bridge::execute_endpoint_outcomes(
@@ -1840,6 +1835,7 @@ pub(crate) unsafe fn land_results(app: &mut App, fr: &mut Frame) {
                         fr.ctrl,
                         fr.now,
                         &mut app.refresh_hubs_at,
+                        &mut app.repause_at,
                         &mut app.pages,
                         &mut app.bridge,
                     ),
@@ -2095,38 +2091,22 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
             crate::dev::scenarios::hero_osc_tick(app, fr.now);
             crate::dev::scenarios::home_fold_osc_tick(app, fr.now);
             crate::dev::scenarios::home_osc_tick(app, fr.now);
-            // only when home is actually drawn — stepping its 16×24 cell springs during
-            // Player/Detail frames was pure waste on the A53 (the ui::press dip/commit is driven
-            // route-agnostically right after `dt` above)
-            let (_, moving) = nj_machine::idle::scoped_motion(|| {
-                app.bridge.update_home_chrome(&mut app.pages, &mut app.glass, fr.dt);
-            });
-            fr.underlay_moving |= moving;
         } else if !super::bridge::host_frozen(&app.pages)
             && matches!(app.route(), AppArg::Library)
         {
             crate::dev::scenarios::lib_osc_tick(app, fr.now);
             crate::dev::scenarios::lib_switch_tick(app, fr.now);
-            // scoped like Home's above, because this page can be the one UNDER the account
-            // popover now and its glass backdrop is refreshed off the underlay's motion
-            let (_, moving) = nj_machine::idle::scoped_motion(|| {
-                app.bridge.update_home_chrome(&mut app.pages, &mut app.glass, fr.dt);
-            });
-            fr.underlay_moving |= moving;
-        } else if !super::bridge::host_frozen(&app.pages)
-            && matches!(app.route(), AppArg::Search)
+        }
+        // The rail is one control on every page that wears it (`ScreenArg::chrome() ==
+        // Chrome::TabBar`, `screens/registry.rs`), and no screen's tick steps its springs — they
+        // live in `Bridge`'s own `rail`. Stepped once here, for whichever rail page is up and not
+        // frozen under a panel, or for the Settings surface the rail stands beside; scoped because
+        // that page can be the one UNDER the account menu.
+        let rail_on_surface = crate::ui::dispatch::rail_entry(&app.pages.nav).is_some_and(|id| app.pages.nav.is_surface(id));
+        if rail_on_surface || (!super::bridge::host_frozen(&app.pages)
+            && crate::ui::screen::ScreenArg::chrome(&app.route()) == nj_machine::machine::Chrome::TabBar)
         {
-            // Search wears the same shared bar as Home/Library (`ScreenArg::chrome() ==
-            // Chrome::TabBar`, `screens/registry.rs`), and
-            // `SearchScreen::tick` only steps the screen's OWN rows/springs — it never touches
-            // the strip's capsule/scroll/chip springs, which live in `Bridge`'s own
-            // `strip: StripRender` field. Without this arm those springs freeze at whatever the
-            // previously-drawn page left them at, and `ChromeSnapshot::members`'s published
-            // strip rects (read by pointer hit-testing and focus) go stale. This mirrors the
-            // Home/Library arms above rather than adding a fourth call site.
-            let (_, moving) = nj_machine::idle::scoped_motion(|| {
-                app.bridge.update_home_chrome(&mut app.pages, &mut app.glass, fr.dt);
-            });
+            let (_, moving) = nj_machine::idle::scoped_motion(|| app.bridge.update_chrome(&app.pages, fr.dt));
             fr.underlay_moving |= moving;
         }
         // dev: /tmp/nativejelly-searchosc — `crate::dev::scenarios::search_osc_tick`.
@@ -2327,6 +2307,12 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
         app.bridge.collection_pump();
         if let Some(target) = app.bridge.take_detail_refresh() {
             refresh_content(&mut app.pages, &mut app.bridge, target);
+        }
+        // …and the page a playback was started from, once the stop's reports are in.
+        if crate::route::stop_reports_landed() {
+            if let Some(target) = app.post_play_detail.take() {
+                refresh_content(&mut app.pages, &mut app.bridge, target);
+            }
         }
         // …and the cross-source resolve it kicked off. Route-unconditional for the same reason,
         // and separate because it lands one round trip per source LATER than the page does —
@@ -2653,6 +2639,7 @@ pub(crate) unsafe fn report(app: &mut App, fr: &mut Frame) {
                 AppArg::Content(crate::screens::registry::ContentArg::Collection(_)) =>
                     crate::focusprobe::Screen::Collection,
                 AppArg::Search => crate::focusprobe::Screen::Search,
+                AppArg::Favorites => crate::focusprobe::Screen::Favorites,
                 // The same words the heartbeat's `overlay=` uses, and — since phase 9 — from the
                 // same place: the SURFACE that is up. There is no second table; see
                 // `heartbeat_word_tests::focusprobe_player_overlay_delegates_to_the_shared_overlay_word_function`.
@@ -2683,13 +2670,11 @@ pub(crate) unsafe fn report(app: &mut App, fr: &mut Frame) {
                 crate::focusprobe::Hud {
                     focus: HudNav::HOME.focus,
                     btn: HudNav::HOME.btn,
-                    tab: HudNav::HOME.tab,
                     visible: false,
                 },
                 |player| crate::focusprobe::Hud {
                     focus: player.hud.nav.focus,
                     btn: player.hud.nav.btn,
-                    tab: player.hud.nav.tab,
                     visible: player.hud.visible(&app.player.session, app.last_input, paused()),
                 },
             )
@@ -2926,28 +2911,18 @@ pub(crate) fn teardown_for(native_exit: crate::player::engine::NativeExit) -> Te
     }
 }
 
-/// Teardown after the loop: abandon the pending report, stop the feed, wait for the stop
-/// scrobble, close the capture stream and the poster workers. The caller releases `App` and its
-/// GL context before quitting SDL, unless a worker remains in firmware ([`Teardown::ExitNow`]).
-pub(crate) unsafe fn shutdown(
-    ps: &mut crate::route::PlaybackSession,
-    pa: &mut crate::player::adapter::PlayerAdapter,
-) -> Teardown {
-    crate::player::report::abandon_pending(ps);
-    if is_started() {
-        crate::player::stop_bufferfeed(ps, pa);
-    }
-    // The stop scrobble is posted off-thread now, and this process is about to die with any
-    // worker still running — so THIS is the one place its result has to be waited for, or the
-    // resume point the user just earned is silently dropped. Same cost the old inline call
-    // paid, except now it is paid once at exit instead of on every BACK out of a movie.
-    crate::route::drain_scrobble();
+/// Teardown after the loop: abandon the pending report, stop the feed (or a parked playback's
+/// session), wait for the stop scrobble, close the capture stream and the poster workers. The
+/// caller releases `App` and its GL context before quitting SDL, unless a worker remains in
+/// firmware ([`Teardown::ExitNow`]).
+pub(crate) unsafe fn shutdown(app: &mut App) -> Teardown {
+    end_playback_for_exit(app);
     // The stop's `Unload` runs off-frame; the process must not exit inside it, nor with the object
     // it is releasing left undestroyed. The wait is bounded, and a worker still inside firmware (an
     // overdue `Unload`, or a timed-out Load's media thread) means the display must not be torn down
     // under it, and nothing may run the firmware's destructors either: the caller
     // (`app::run_and_shutdown`) ends the process at once on `Teardown::ExitNow`.
-    let native_exit = crate::player::engine::exit_native(pa);
+    let native_exit = crate::player::engine::exit_native(&mut app.adapters.player);
     crate::capture::shutdown();
     crate::app::adapters::poster::shutdown();
     let teardown = teardown_for(native_exit);
@@ -2958,6 +2933,26 @@ pub(crate) unsafe fn shutdown(
         }
     }
     teardown
+}
+
+/// [`shutdown`]'s playback half: abandon the pending report, report a parked playback stopped,
+/// stop the feed and wait for the stop scrobble.
+fn end_playback_for_exit(app: &mut App) {
+    let (ps, pa) = (&mut app.player.session, &mut app.adapters.player);
+    crate::player::report::abandon_pending(ps);
+    // A playback parked by an app switch has no Engine for the stop below to report from: its
+    // `Stopped` goes from where the park left it (`ForegroundLifecycle::parked_ns`).
+    if let Some(pos_ns) = app.player.lifecycle.parked_ns() {
+        crate::route::report_parked(ps, crate::catalog::TimelineState::Stopped, pos_ns, crate::player::duration_ns());
+    }
+    if is_started() {
+        crate::player::stop_bufferfeed(ps, pa);
+    }
+    // The stop scrobble is posted off-thread now, and this process is about to die with any
+    // worker still running — so THIS is the one place its result has to be waited for, or the
+    // resume point the user just earned is silently dropped. Same cost the old inline call
+    // paid, except now it is paid once at exit instead of on every BACK out of a movie.
+    crate::route::drain_scrobble();
 }
 
 /// Re-inject one recorded input (`app::recorder`'s encodings) for the frame being replayed: SDL
@@ -3188,10 +3183,16 @@ mod lifecycle_regression_tests {
 
     use std::io::{BufRead, BufReader, Read, Write};
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
         mpsc, Arc, Mutex,
     };
     use std::time::Duration;
+
+    /// The resume point the fixture's items carry (`UserData.PlaybackPositionTicks`) once it has
+    /// answered a stop report (`STOP_ANSWERED`), as a server commits it from that report; 0
+    /// before. Reset by `Rig`'s drop.
+    static SERVED_POSITION_TICKS: AtomicI64 = AtomicI64::new(0);
+    static STOP_ANSWERED: AtomicBool = AtomicBool::new(false);
 
     fn poll_until(reason: &str, mut ready: impl FnMut() -> bool) {
         for _ in 0..5000 {
@@ -3225,7 +3226,8 @@ mod lifecycle_regression_tests {
             ),
             None => r#""Type":"Movie""#.to_string(),
         };
-        format!(r#"{{"Id":"{guid}","Name":"{title}",{kind},"RunTimeTicks":600000000,"MediaSources":[{source}]}}"#)
+        let position = if STOP_ANSWERED.load(Ordering::Acquire) { SERVED_POSITION_TICKS.load(Ordering::Relaxed) } else { 0 };
+        format!(r#"{{"Id":"{guid}","Name":"{title}",{kind},"RunTimeTicks":600000000,"MediaSources":[{source}],"UserData":{{"PlaybackPositionTicks":{position}}}}}"#)
     }
 
     /// The fixture's answer to one request line, or `None` for its empty reply (404 for a GET,
@@ -3305,6 +3307,7 @@ mod lifecycle_regression_tests {
             menu_play_await: Default::default(),
             prev: Default::default(),
             refresh_hubs_at: Default::default(),
+            post_play_detail: None,
             library_poll: Default::default(),
             plaintext_upgrade: Default::default(),
             ev: [0; 128],
@@ -3639,17 +3642,21 @@ mod lifecycle_regression_tests {
         super::super::bridge::show_page(&mut app.pages, AppArg::Player);
         frame(&mut app, 0);
         let mut fr = Frame::begin(&app.player.session, app.bridge.metadata_view());
-        for (token, held) in [("pd:900,870", true), ("pm:1200,870", true),
-            ("pm:1400,870", true), ("pu:1400,870", false)] {
+        // On the seek row, wherever the OSD puts it (Litefin's row sits below the controls).
+        let row = crate::appkit::player_hud::scrub_hit_rect();
+        let y = (row.y + row.h / 2.0).round();
+        for (token, held) in [(format!("pd:900,{y}"), true), (format!("pm:1200,{y}"), true),
+            (format!("pm:1400,{y}"), true), (format!("pu:1400,{y}"), false)] {
+            let token = token.as_str();
             assert!(unsafe { ingress_token(&mut app, &mut fr, token) },
                 "the FIFO must express each edge of a held pointer: {token}");
             unsafe { drain_sdl(&mut app, &mut fr); }
             assert_eq!(app.ptr.button_down, held, "{token}");
         }
         assert_eq!(app.inputs.len(), 4, "no hidden motions, clicks or releases");
-        assert!(matches!(app.inputs[0].kind, InputKind::Click { x: 900.0, y: 870.0, .. }));
-        assert!(matches!(app.inputs[1].kind, InputKind::Drag { x: 1200.0, y: 870.0, .. }));
-        assert!(matches!(app.inputs[2].kind, InputKind::Drag { x: 1400.0, y: 870.0, .. }));
+        assert!(matches!(app.inputs[0].kind, InputKind::Click { x: 900.0, y: cy, .. } if cy == y));
+        assert!(matches!(app.inputs[1].kind, InputKind::Drag { x: 1200.0, y: cy, .. } if cy == y));
+        assert!(matches!(app.inputs[2].kind, InputKind::Drag { x: 1400.0, y: cy, .. } if cy == y));
         assert!(matches!(app.inputs[3].kind, InputKind::Key { key: Key::Ok, edge: Edge::Up, .. }));
 
         // Deliver the same collected edges through the dispatcher and the real player, one
@@ -3875,8 +3882,21 @@ mod lifecycle_regression_tests {
                             length = n.trim().parse().unwrap();
                         }
                     }
-                    reader.read_exact(&mut vec![0; length]).unwrap();
-                    log.lock().unwrap().push(request.clone());
+                    let mut body = vec![0; length];
+                    reader.read_exact(&mut body).unwrap();
+                    // The request line, then its body: a report's `IsPaused` is in the body.
+                    log.lock().unwrap().push(format!("{request}{}", String::from_utf8_lossy(&body)));
+                    if request.starts_with("POST /Sessions/Playing/Stopped") {
+                        // Answered off this loop a moment later, and committed only then: a re-read
+                        // that does not wait for the stop's answer still reads the old position.
+                        let answered = nj_base::task::spawn_small("lifecycle-fixture-stop", move || {
+                            std::thread::sleep(Duration::from_millis(200));
+                            STOP_ANSWERED.store(true, Ordering::Release);
+                            let _ = write!(socket, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        });
+                        assert!(answered, "lifecycle fixture: the stop answer thread was refused");
+                        continue;
+                    }
                     if first {
                         first = false;
                         arrived.send(()).unwrap();
@@ -4014,6 +4034,8 @@ mod lifecycle_regression_tests {
             crate::player::SHARED.reset_session();
             crate::route::reset_player_control_for_test(&self.app.player.session);
             crate::catalog::reset_servers_for_test();
+            SERVED_POSITION_TICKS.store(0, Ordering::Relaxed);
+            STOP_ANSWERED.store(false, Ordering::Release);
         }
     }
 
@@ -4297,6 +4319,230 @@ mod lifecycle_regression_tests {
         assert!(crate::route::has_url(&rig.app.player.session));
     }
 
+    /// **Owner's rule: a film open when the app went to the background plays on return**, even
+    /// when the viewer paused it just before. On the C1 the OK press that precedes an app switch
+    /// paused the film about a second earlier in three of five switches, and each foreground
+    /// restored the paused frame (`seek: paused frame restored`).
+    #[test]
+    fn a_film_paused_just_before_an_app_switch_plays_on_return() {
+        let _serial = nj_base::testlock::serial();
+        let Some(mut rig) = Rig::new() else {
+            eprintln!(
+                "SKIPPED a_film_paused_just_before_an_app_switch_plays_on_return: \
+                 lifecycle fixture worker thread could not be spawned"
+            );
+            return;
+        };
+        rig.request();
+        rig.resolve();
+        rig.accept_start();
+        frame(&mut rig.app, 16);
+        assert!(super::super::bridge::player(&rig.app.pages).is_some());
+        // The viewer's Pause, as the transport commits it.
+        set_paused(true);
+        assert!(viewer_paused());
+
+        let mut fr = Frame::begin(&rig.app.player.session, rig.app.bridge.metadata_view());
+        fr.now = 32;
+        event(&mut rig.app, &mut fr, 0x104);
+        assert!(
+            matches!(
+                rig.app.player.lifecycle.state,
+                ForegroundState::Suspended { clock: ForegroundClock::Playing, .. }
+            ),
+            "the park saved {:?}",
+            rig.app.player.lifecycle.state,
+        );
+
+        rig.app.window_activity.event(0x106);
+        super::super::bridge::foreground(&mut rig.app.pages);
+        rig.app.repause_at = -1;
+        assert_eq!(
+            drive_foreground(
+                &mut rig.app.player.lifecycle,
+                &mut rig.app.player.session,
+                ForegroundInput::DidForeground,
+                &mut PlayerForegroundActuator {
+                    pa: &mut rig.app.adapters.player,
+                    repause_at: &mut rig.app.repause_at,
+                },
+            ),
+            ForegroundActivation::Launched
+        );
+        assert!(
+            matches!(
+                rig.app.player.lifecycle.state,
+                ForegroundState::LoadPending { clock: ForegroundClock::Playing, .. }
+            ),
+            "the restore loads toward {:?}",
+            rig.app.player.lifecycle.state,
+        );
+        assert_eq!(rig.app.repause_at, -1, "no paused-frame restore is armed");
+        let attempt = rig.app.player.lifecycle.pending_load_attempt().unwrap();
+        assert!(crate::route::settle_route_start(
+            &mut rig.app.player.session,
+            attempt,
+            crate::route::RouteStartResult::Started,
+        ));
+        // The foreground poll `playback_tick` runs after the pump, driven alone: the host cannot
+        // decode, so its Load is refused on the media thread, and a pump that saw that refusal
+        // first tore the route down (`Stale`), so the restore never reached its Play. Ticking here
+        // raced that thread, and under the full suite's load the test lost now and then.
+        let _ = poll_foreground_load(
+            &mut rig.app.player.lifecycle,
+            &mut rig.app.player.session,
+            &mut PlayerForegroundActuator { pa: &mut rig.app.adapters.player, repause_at: &mut rig.app.repause_at },
+        );
+        assert_eq!(rig.app.player.lifecycle.state, ForegroundState::Idle);
+        assert!(!paused(), "the film did not play on after the restore");
+    }
+
+    /// How a restore came back on the DID-foreground frame itself.
+    #[derive(Debug, PartialEq)]
+    struct Restore {
+        clock: ForegroundClock,
+        paused: bool,
+        repause_armed: bool,
+    }
+
+    /// Park a PLAYING film (`0x104`), let `during_park` report the set's power states (it gets the
+    /// park's own stamp), and bring the app back through the loop's own DID-foreground arm
+    /// (`0x106`). `None` when the fixture could not spawn.
+    fn restore_after_park(during_park: impl FnOnce(u64)) -> Option<Restore> {
+        nj_platform::devcaps::power::reset_for_test();
+        let mut rig = Rig::new()?;
+        rig.request();
+        rig.resolve();
+        rig.accept_start();
+        frame(&mut rig.app, 16);
+        set_paused(false);
+        let mut fr = Frame::begin(&rig.app.player.session, rig.app.bridge.metadata_view());
+        fr.now = 32;
+        event(&mut rig.app, &mut fr, 0x104);
+        during_park(rig.app.player.lifecycle.parked_at_ms);
+        rig.app.repause_at = -1;
+        rig.app.ev[..4].copy_from_slice(&0x106u32.to_ne_bytes());
+        unsafe { ingest_sdl_event_with_window(&mut rig.app, &mut fr, |_| {}); }
+        let ForegroundState::LoadPending { clock, .. } = rig.app.player.lifecycle.state else {
+            panic!("the foreground did not load the parked film: {:?}", rig.app.player.lifecycle.state);
+        };
+        let restore = Restore { clock, paused: paused(), repause_armed: rig.app.repause_at != -1 };
+        nj_platform::devcaps::power::reset_for_test();
+        Some(restore)
+    }
+
+    const PLAYS_ON: Restore = Restore { clock: ForegroundClock::Playing, paused: false, repause_armed: false };
+
+    /// **An app switch plays on return** (the owner's rule), whether the set reported nothing
+    /// during the park, only that it is on, or nothing at all (a watcher that never answered).
+    #[test]
+    fn an_app_switch_without_standby_plays_on_return() {
+        let _serial = nj_base::testlock::serial();
+        use nj_platform::devcaps::power::inject_for_test as power;
+        for (case, during) in [
+            ("on throughout", Box::new(|at: u64| power("Active", at + 1)) as Box<dyn FnOnce(u64)>),
+            ("no watcher answer", Box::new(|_| {})),
+        ] {
+            let Some(restore) = restore_after_park(during) else {
+                eprintln!("SKIPPED an_app_switch_without_standby_plays_on_return: no fixture");
+                return;
+            };
+            assert_eq!(restore, PLAYS_ON, "{case}");
+        }
+    }
+
+    /// **The television switched off during the park brings the film back PAUSED** (the owner's
+    /// rule), on the very frame the app comes back: the Load is the paused-frame restore.
+    #[test]
+    fn a_standby_during_the_park_brings_the_film_back_paused() {
+        let _serial = nj_base::testlock::serial();
+        use nj_platform::devcaps::power::inject_for_test as power;
+        for state in ["Active Standby", "Suspend", "Power Off"] {
+            let Some(restore) = restore_after_park(|at| {
+                power(state, at + 40);
+                power("Active", at + 60_000);
+            }) else {
+                eprintln!("SKIPPED a_standby_during_the_park_brings_the_film_back_paused: no fixture");
+                return;
+            };
+            assert_eq!(restore, Restore { clock: ForegroundClock::Paused, paused: true, repause_armed: true }, "{state}");
+        }
+    }
+
+    /// A standby the set reported a minute BEFORE the park is an old one: the film plays on.
+    #[test]
+    fn a_standby_before_the_park_does_not_count() {
+        let _serial = nj_base::testlock::serial();
+        use nj_platform::devcaps::power::inject_for_test as power;
+        let Some(restore) = restore_after_park(|at| {
+            power("Active Standby", at - 60_000);
+            power("Active", at - 50_000);
+        }) else {
+            eprintln!("SKIPPED a_standby_before_the_park_does_not_count: no fixture");
+            return;
+        };
+        assert_eq!(restore, PLAYS_ON);
+    }
+
+    /// The screen saver and the C1's screen-off key are not the set switched off: the film plays on.
+    #[test]
+    fn a_screen_saver_or_screen_off_during_the_park_plays_on_return() {
+        let _serial = nj_base::testlock::serial();
+        use nj_platform::devcaps::power::inject_for_test as power;
+        let Some(restore) = restore_after_park(|at| {
+            power("Screen Saver", at + 40);
+            power("Screen Off", at + 80);
+            power("Active", at + 60_000);
+        }) else {
+            eprintln!("SKIPPED a_screen_saver_or_screen_off_during_the_park_plays_on_return: no fixture");
+            return;
+        };
+        assert_eq!(restore, PLAYS_ON);
+    }
+
+    /// **An app switch tells the server the film is paused, and closing the app from there stops
+    /// it** (audit): the park sent nothing, so the server showed the TV playing on with its position
+    /// advancing until its idle sweep ended the session five minutes later at the last heartbeat.
+    #[test]
+    fn an_app_switch_reports_the_film_paused_and_a_close_from_there_stops_it() {
+        let _serial = nj_base::testlock::serial();
+        let Some(mut rig) = Rig::serving(false) else {
+            eprintln!("SKIPPED an_app_switch_reports_the_film_paused_and_a_close_from_there_stops_it: \
+                lifecycle fixture worker thread could not be spawned");
+            return;
+        };
+        rig.release.send(()).unwrap(); // nothing here needs a request held in flight
+        rig.request();
+        poll_until("fixture plan did not land", || {
+            crate::route::pump_play(&mut rig.app.player.session, rig.app.bridge.metadata_mut()).is_some()
+        });
+        rig.accept_start();
+        frame(&mut rig.app, 16);
+        // A picture is on the panel 42 s into the film.
+        crate::player::SHARED.seen_frame.store(true, Ordering::Relaxed);
+        crate::player::SHARED.duration_ns.store(60_000_000_000, Ordering::Relaxed);
+        crate::player::SHARED.playpos_ns.store(42_000_000_000, Ordering::Relaxed);
+        let mut fr = Frame::begin(&rig.app.player.session, rig.app.bridge.metadata_view());
+        fr.now = 32;
+        event(&mut rig.app, &mut fr, 0x104);
+        crate::route::drain_scrobble();
+        let reports = |rig: &Rig| rig.requests.lock().unwrap().iter()
+            .filter(|r| r.starts_with("POST /Sessions/Playing"))
+            .cloned().collect::<Vec<_>>();
+        let parked = reports(&rig);
+        let last = parked.last().expect("the park sent no report");
+        assert!(last.contains(r#""IsPaused":true"#) && last.contains(r#""PositionTicks":420000000"#), "{last}");
+
+        // The app closes before the foreground restore: `shutdown`'s playback half, which finds the
+        // park on the lifecycle itself.
+        assert!(rig.app.player.lifecycle.parked_ns().is_some(), "the playback is parked");
+        end_playback_for_exit(&mut rig.app);
+        let closed = reports(&rig);
+        let stop = closed.last().unwrap();
+        assert!(stop.starts_with("POST /Sessions/Playing/Stopped ") && stop.contains(r#""PositionTicks":420000000"#),
+            "{closed:?}");
+    }
+
     /// One loop iteration's navigation-bearing phases, in `run`'s order: the playback tick (EOS),
     /// the container's frame, the post-player restore, the drained requests and `update` (where a
     /// resolved plan lands).
@@ -4316,6 +4562,7 @@ mod lifecycle_regression_tests {
             restore_played_entry(app);
         }
         content_requests(app, &fr);
+        super::super::bridge::chrome_requests(&mut app.pages, &mut app.bridge);
         loop_requests(app);
         unsafe { update(app, &mut fr); }
     }
@@ -4403,6 +4650,64 @@ mod lifecycle_regression_tests {
             rig.app.route().id(),
         );
         assert_eq!(rig.app.pages.nav.top_page().map(|e| e.id), Some(origin));
+    }
+
+    /// **BACK from a film re-reads the detail page it was started from** (audit: the page kept the
+    /// item fetched before Play, so Resume replayed from the old point and a quick second stop
+    /// wrote that old point back over the server's). The re-read waits for the stop report, so it
+    /// reads the resume point the server committed from it.
+    #[test]
+    fn back_from_the_player_rereads_the_detail_page_with_the_new_resume_point() {
+        let _serial = nj_base::testlock::serial();
+        let Some(mut rig) = Rig::serving(false) else {
+            eprintln!("SKIPPED back_from_the_player_rereads_the_detail_page_with_the_new_resume_point: \
+                lifecycle fixture worker thread could not be spawned");
+            return;
+        };
+        let mut t = product_transition(&mut rig.app);
+        // Nothing here needs a request held in flight: the page loads before Play, as it does on
+        // the television.
+        rig.release.send(()).unwrap();
+        settle(&mut rig.app, &mut t);
+        super::super::bridge::open_detail(&mut rig.app.pages, &mut rig.app.bridge, rig.sid, "1", None, None);
+        let resume_ms = |app: &App| app.bridge.metadata_view().current().map(|d| d.resume_ms);
+        // A test runs the page's fetches itself (`run_held_detail_fetches_for_test`).
+        let fetch = |app: &mut App| app.bridge.metadata_mut().adapter_ref().run_held_detail_fetches_for_test();
+        poll_until("the detail page did not load", || {
+            fetch(&mut rig.app);
+            step(&mut rig.app, &mut t, vec![]);
+            resume_ms(&rig.app) == Some(0)
+        });
+        rig.request();
+        poll_until("fixture plan did not land", || {
+            crate::route::pump_play(&mut rig.app.player.session, rig.app.bridge.metadata_mut()).is_some()
+        });
+        rig.accept_start();
+        settle(&mut rig.app, &mut t);
+        assert!(super::super::bridge::player(&rig.app.pages).is_some(), "the player is on top");
+        // BACK's stop must send a report for the re-read to wait on. The host Engine cannot decode
+        // (its Load is refused), so the one it can send is a failed playback's: a picture was on
+        // the panel 33 s into a one-minute film, and the next pump releases the failed pipeline
+        // under the error readout, keeping that position for the stop to report.
+        crate::player::SHARED.seen_frame.store(true, Ordering::Relaxed);
+        crate::player::SHARED.duration_ns.store(60_000_000_000, Ordering::Relaxed);
+        crate::player::SHARED.playpos_ns.store(33_000_000_000, Ordering::Relaxed);
+        step(&mut rig.app, &mut t, vec![]);
+        assert!(!rig.app.adapters.player.is_live() && crate::route::engine_failure(&rig.app.player.session).is_some(),
+            "premise: the failed pipeline was released under the error readout");
+        // The resume point the server commits from the stop report: the fixture serves it only once
+        // that report has arrived, so a re-read that did not wait for it reads 0.
+        SERVED_POSITION_TICKS.store(330_000_000, Ordering::Relaxed);
+        let back = back_key(t + 16);
+        step(&mut rig.app, &mut t, vec![back]);
+        poll_until("the detail page kept the item it fetched before Play", || {
+            fetch(&mut rig.app);
+            step(&mut rig.app, &mut t, vec![]);
+            resume_ms(&rig.app) == Some(33_000)
+        });
+        let stop = rig.requests.lock().unwrap().iter().find(|r| r.starts_with("POST /Sessions/Playing/Stopped")).cloned();
+        assert!(stop.as_deref().is_some_and(|s| s.contains(r#""PositionTicks":330000000"#)), "BACK reported the stop: {stop:?}");
+        assert!(rig.app.route().same_instance(&detail_arg(rig.sid)));
     }
 
     /// The same session drained to its end with nothing queued after it: `finish_playback` leaves

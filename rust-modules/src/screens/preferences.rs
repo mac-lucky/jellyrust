@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver};
 use crate::jf::preferences::{AudioPreferences, PreferenceError, PreferenceRequest, PreferenceSnapshot, PreferenceUpdate, SubtitleMode};
-use crate::route::{DirectPlayMode, NextEpisodeMode, Quality, SkipInterval, InstantDpadSeeking, EpisodeNavigation, SubtitlePosition, SubtitleSize};
+use crate::route::{DirectPlayMode, NextEpisodeMode, Quality, SkipInterval, InstantDpadSeeking, EpisodeNavigation, SubtitlePosition, SubtitleSize, VoicePreference};
 use crate::ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
 use crate::ui::frame::Budget;
 use nj_machine::machine::{Canon, Cx, Delivery, Edge, Effects, EntryId, FocusKey, Fx, GroupId,
@@ -29,7 +29,7 @@ use crate::ui::screen::{DrawFrame, Enter, FocusSource, FocusTarget, HitSource, R
 use crate::ui::table::Row;
 use crate::ui::table_screen::{Header, TableScreen};
 use crate::ui::route_screen::RouteLayout;
-use crate::ui::{theme, Rect};
+use crate::ui::Rect;
 use super::family::{form_activate, form_focus, form_right_target, InnerHost, PickerKind, SettingsPage};
 use super::registry::{word, AccountPreferenceReply, AppFx, PreferenceCmd, BAND};
 
@@ -50,8 +50,11 @@ impl PickerKind {
         Self::SkipInterval => nj_platform::i18n::msg::settings_playback_skip_interval(),
         Self::AudioLanguage => nj_platform::i18n::msg::settings_audio_language(), Self::SubtitleMode => nj_platform::i18n::msg::settings_audio_subtitles(),
         Self::SubtitleLanguage => nj_platform::i18n::msg::settings_audio_subtitle_language(), Self::DefaultAudioTrack => nj_platform::i18n::msg::settings_audio_default_track(),
+        Self::RememberAudio => nj_platform::i18n::msg::settings_audio_remember_audio(),
+        Self::RememberSubtitles => nj_platform::i18n::msg::settings_audio_remember_subtitles(),
+        Self::Voice => nj_platform::i18n::msg::settings_audio_voice(),
     }}
-    /// What this field's picker says about it under its title. The four account fields share the
+    /// What this field's picker says about it under its title. The six account fields share the
     /// account note (it is about where those values are saved); each local one has its own.
     fn copy(self) -> &'static str { match self {
         Self::Quality => nj_platform::i18n::msg::settings_playback_quality_copy(),
@@ -62,15 +65,21 @@ impl PickerKind {
         Self::InstantDpadSeeking => nj_platform::i18n::msg::settings_playback_instant_dpad_seeking_copy(),
         Self::EpisodeNavigation => nj_platform::i18n::msg::settings_playback_episode_navigation_copy(),
         Self::SkipInterval => nj_platform::i18n::msg::settings_playback_skip_interval_copy(),
-        Self::AudioLanguage | Self::SubtitleMode | Self::SubtitleLanguage | Self::DefaultAudioTrack => nj_platform::i18n::msg::settings_audio_account_note(),
+        Self::Voice => nj_platform::i18n::msg::settings_audio_voice_copy(),
+        Self::AudioLanguage | Self::SubtitleMode | Self::SubtitleLanguage | Self::DefaultAudioTrack
+            | Self::RememberAudio | Self::RememberSubtitles => nj_platform::i18n::msg::settings_audio_account_note(),
     }}
     /// The field-list page this field belongs to.
     fn kind(self) -> Kind {
         match self {
             Self::Quality | Self::DirectPlay | Self::SubtitleSize | Self::SubtitlePosition | Self::NextEpisode | Self::SkipInterval | Self::InstantDpadSeeking | Self::EpisodeNavigation => Kind::Playback,
-            Self::AudioLanguage | Self::SubtitleMode | Self::SubtitleLanguage | Self::DefaultAudioTrack => Kind::AudioSubtitles,
+            Self::AudioLanguage | Self::SubtitleMode | Self::SubtitleLanguage | Self::DefaultAudioTrack
+                | Self::RememberAudio | Self::RememberSubtitles | Self::Voice => Kind::AudioSubtitles,
         }
     }
+    /// Saved in the Jellyfin user's configuration (its picker loads and writes the account), rather
+    /// than on this television.
+    fn account(self) -> bool { self.kind() == Kind::AudioSubtitles && self != Self::Voice }
 }
 impl Kind {
     fn title(self) -> &'static str {
@@ -83,7 +92,7 @@ impl Kind {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Value { Quality(Quality), DirectPlay(DirectPlayMode), SubtitleSize(SubtitleSize), SubtitlePosition(SubtitlePosition), NextEpisode(NextEpisodeMode), SkipInterval(SkipInterval), EpisodeNavigation(EpisodeNavigation), InstantDpadSeeking(InstantDpadSeeking), Language(String), Mode(SubtitleMode), DefaultTrack(bool) }
+enum Value { Quality(Quality), DirectPlay(DirectPlayMode), SubtitleSize(SubtitleSize), SubtitlePosition(SubtitlePosition), NextEpisode(NextEpisodeMode), SkipInterval(SkipInterval), EpisodeNavigation(EpisodeNavigation), InstantDpadSeeking(InstantDpadSeeking), Language(String), Mode(SubtitleMode), DefaultTrack(bool), Remember(bool), Voice(VoicePreference) }
 
 /// The hashed half of a transaction: what the page shows while a load or save is in flight.
 struct Io { busy: bool, status: String }
@@ -213,6 +222,7 @@ impl Txn {
             Value::InstantDpadSeeking(value) => PreferenceCmd::InstantDpadSeeking { value, reply },
             Value::EpisodeNavigation(value) => PreferenceCmd::EpisodeNavigation { value, reply },
             Value::SkipInterval(interval) => PreferenceCmd::SkipInterval { interval, reply },
+            Value::Voice(value) => PreferenceCmd::VoicePreference { value, reply },
             _ => return,
         };
         self.pending = Some(Pending::Local(rx)); io.busy = true; self.saving = true;
@@ -283,9 +293,9 @@ impl FormId for RowId {
             Self::Field(PickerKind::DirectPlay | PickerKind::SubtitleMode) => 1,
             Self::Field(PickerKind::SubtitleSize | PickerKind::SubtitleLanguage) => 2,
             Self::Field(PickerKind::SubtitlePosition | PickerKind::DefaultAudioTrack) => 3,
-            Self::Field(PickerKind::NextEpisode) => 4,
-            Self::Field(PickerKind::SkipInterval) => 5,
-            Self::Field(PickerKind::InstantDpadSeeking) => 7,
+            Self::Field(PickerKind::NextEpisode | PickerKind::RememberAudio) => 4,
+            Self::Field(PickerKind::SkipInterval | PickerKind::RememberSubtitles) => 5,
+            Self::Field(PickerKind::InstantDpadSeeking | PickerKind::Voice) => 7,
             Self::Field(PickerKind::EpisodeNavigation) => 8,
             Self::Retry => 6,
         })
@@ -325,6 +335,7 @@ pub(crate) struct PreferencesPage {
     skip_interval: SkipInterval,
     episode_navigation: EpisodeNavigation,
     instant_dpad_seeking: InstantDpadSeeking,
+    voice: VoicePreference,
 }
 impl PreferencesPage {
     pub(crate) fn new(entry: EntryId, kind: Kind) -> Self {
@@ -333,12 +344,13 @@ impl PreferencesPage {
                 quality: crate::route::quality(), direct_play: crate::route::direct_play_mode(), values: Vec::new() },
             copy: String::new(), txn: Txn::new(false),
             look: (crate::route::subtitle_size(), crate::route::subtitle_position()),
-            next_episode: crate::route::next_episode_mode(), skip_interval: crate::route::skip_interval(), instant_dpad_seeking: crate::route::instant_dpad_seeking(), episode_navigation: crate::route::episode_navigation() };
+            next_episode: crate::route::next_episode_mode(), skip_interval: crate::route::skip_interval(), instant_dpad_seeking: crate::route::instant_dpad_seeking(), episode_navigation: crate::route::episode_navigation(),
+            voice: crate::route::voice_preference() };
         s.rebuild(None);
         s
     }
     fn view(&self) -> TableScreen<'_> {
-        TableScreen::new(Header::new(RouteLayout::screen(), Some(nj_platform::i18n::msg::settings_title()),
+        TableScreen::new(Header::new(RouteLayout::panel(), Some(nj_platform::i18n::msg::settings_title()),
             self.state.kind.title(), &self.copy), &self.form.table, GroupId(0), self.entry).keyed(&self.form)
     }
     fn focus(&self, fx: &mut Effects<'_, InnerHost>) {
@@ -361,6 +373,7 @@ impl PreferencesPage {
         self.next_episode = crate::route::next_episode_mode();
         self.instant_dpad_seeking = crate::route::instant_dpad_seeking();
         self.episode_navigation = crate::route::episode_navigation();
+        self.voice = crate::route::voice_preference();
         self.skip_interval = crate::route::skip_interval();
         self.copy = copy_text(Subject::Page(self.state.kind), &self.state.io.status, self.state.direct_play).into_owned();
         let inputs = FieldListInputs {
@@ -369,7 +382,7 @@ impl PreferencesPage {
         };
         self.state.values = fields_of(&inputs).iter()
             .map(|&f| field_readout(f, inputs.quality, inputs.direct_play, inputs.prefs)).collect();
-        self.form.table.compact = false; self.form.table.header_ink = theme::TEXT_READING; self.form.table.list_focused = true;
+        super::family::style_page_table(&mut self.form.table); self.form.table.list_focused = true;
         self.form.set(field_form(&inputs), keep.as_ref());
         self.state.selected = self.form.key_at(self.form.table.sel.max(0) as usize).map_or(0, |k| k.0);
     }
@@ -391,12 +404,14 @@ impl PreferencesPage {
     }
 }
 
-/// Which fields `kind`'s list shows: Audio & Subtitles has none until a snapshot has loaded.
+/// Which fields `kind`'s list shows: Audio & Subtitles lists its account fields once a snapshot
+/// has loaded, after the TV-local Dubbing and voice-over row, which it always lists. Leading the
+/// list keeps the cursor a fresh page seats on that row at the top when the account rows land.
 fn fields_of(inputs: &FieldListInputs<'_>) -> &'static [PickerKind] {
     match inputs.kind {
         Kind::Playback => &[PickerKind::Quality, PickerKind::DirectPlay, PickerKind::SubtitleSize, PickerKind::SubtitlePosition, PickerKind::NextEpisode, PickerKind::SkipInterval, PickerKind::InstantDpadSeeking, PickerKind::EpisodeNavigation],
-        Kind::AudioSubtitles if inputs.prefs.is_some() => &[PickerKind::AudioLanguage, PickerKind::SubtitleMode, PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack],
-        _ => &[],
+        Kind::AudioSubtitles if inputs.prefs.is_some() => &[PickerKind::Voice, PickerKind::AudioLanguage, PickerKind::SubtitleMode, PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack, PickerKind::RememberAudio, PickerKind::RememberSubtitles],
+        Kind::AudioSubtitles => &[PickerKind::Voice],
     }
 }
 /// `PickerKind`'s current [`Value`] from the two locally-saved settings plus the account preferences, if
@@ -416,6 +431,9 @@ fn resolve_value(field: PickerKind, quality: Quality, direct_play: DirectPlayMod
         PickerKind::SubtitleMode => Value::Mode(prefs.map_or(SubtitleMode::Default, |p| p.subtitle_mode)),
         // The server's own default for a user who never set it.
         PickerKind::DefaultAudioTrack => Value::DefaultTrack(prefs.is_none_or(|p| p.play_default_audio_track)),
+        PickerKind::RememberAudio => Value::Remember(prefs.is_none_or(|p| p.remember_audio_selections)),
+        PickerKind::RememberSubtitles => Value::Remember(prefs.is_none_or(|p| p.remember_subtitle_selections)),
+        PickerKind::Voice => Value::Voice(crate::route::voice_preference()),
     }
 }
 /// `PickerKind`'s picker options.
@@ -443,6 +461,11 @@ fn field_options(field: PickerKind, quality: Quality, direct_play: DirectPlayMod
             .map(|mode| (subtitle_mode_label(mode).into(), Value::Mode(mode))).collect(),
         PickerKind::DefaultAudioTrack => [true, false].into_iter()
             .map(|on| (default_track_label(on).into(), Value::DefaultTrack(on))).collect(),
+        PickerKind::RememberAudio | PickerKind::RememberSubtitles => [true, false].into_iter()
+            .map(|on| ((if on { nj_platform::i18n::msg::settings_playback_instant_dpad_seeking_on() }
+                else { nj_platform::i18n::msg::settings_playback_instant_dpad_seeking_off() }).into(), Value::Remember(on))).collect(),
+        PickerKind::Voice => VoicePreference::LADDER.into_iter()
+            .map(|v| (voice_label(v).into(), Value::Voice(v))).collect(),
         // The server's languages (`jf::preferences`), keyed by the code it stores.
         PickerKind::AudioLanguage | PickerKind::SubtitleLanguage => {
             let mut result = vec![(nj_platform::i18n::msg::settings_audio_no_preference().into(), Value::Language(String::new()))];
@@ -500,6 +523,10 @@ fn field_form(inputs: &FieldListInputs<'_>) -> Form<RowId, Action, SettingsPage>
         if field == PickerKind::Quality && inputs.direct_play == DirectPlayMode::Forced {
             row = row.detail(nj_platform::i18n::msg::settings_playback_overridden());
         }
+        // The page's header says its values live on the server; this one does not.
+        if field == PickerKind::Voice {
+            row = row.detail(nj_platform::i18n::msg::settings_audio_voice_detail());
+        }
         section = section.item(RowId::Field(field), RowKind::Nav(SettingsPage::Picker(field)), Action::Open, row);
     }
     section = section.item_if(inputs.kind == Kind::AudioSubtitles && !inputs.busy && inputs.show_retry,
@@ -516,6 +543,15 @@ fn next_episode_label(mode: NextEpisodeMode) -> &'static str {
         NextEpisodeMode::Countdown => nj_platform::i18n::msg::settings_playback_next_episode_countdown(),
         NextEpisodeMode::AfterCredits => nj_platform::i18n::msg::settings_playback_next_episode_after_credits(),
         NextEpisodeMode::Off => nj_platform::i18n::msg::settings_playback_next_episode_off(),
+    }
+}
+/// A Dubbing and voice-over option, as the picker lists it.
+fn voice_label(value: VoicePreference) -> &'static str {
+    match value {
+        VoicePreference::Any => nj_platform::i18n::msg::settings_audio_no_preference(),
+        VoicePreference::DubbingFirst => nj_platform::i18n::msg::settings_audio_voice_dubbing_first(),
+        VoicePreference::DubbingNoLektor => nj_platform::i18n::msg::settings_audio_voice_dubbing_no_lektor(),
+        VoicePreference::NoAiLektor => nj_platform::i18n::msg::settings_audio_voice_no_ai_lektor(),
     }
 }
 fn skip_interval_label(interval: SkipInterval) -> String {
@@ -581,6 +617,7 @@ impl Machine<InnerHost> for PreferencesPage {
                     || self.next_episode != crate::route::next_episode_mode()
                     || self.instant_dpad_seeking != crate::route::instant_dpad_seeking()
                     || self.episode_navigation != crate::route::episode_navigation()
+                    || self.voice != crate::route::voice_preference()
                     || self.skip_interval != crate::route::skip_interval() {
                     self.rebuild_keeping();
                     // An empty loading table had no engine seat. Give its first landing (or
@@ -591,7 +628,7 @@ impl Machine<InnerHost> for PreferencesPage {
                     }
                     fx.invalidate(nj_machine::present::Provenance::Landing(MachineId::Session));
                 }
-                self.form.table.update(t.dt(), RouteLayout::screen().sectioned_table().h);
+                self.form.table.update(t.dt(), RouteLayout::panel().sectioned_table().h);
                 Handled::Yes
             }
             ScreenEvent::FocusMoved { to, .. } => {

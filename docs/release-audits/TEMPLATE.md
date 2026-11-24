@@ -51,7 +51,7 @@ The evidence behind [the vX.Y.Z release note](https://github.com/sostk/native-je
 
 | | |
 |---|---|
-| flavour | `com.sostk.nativejelly` (stable) — the id users install; `FLAVOR: stable` is pinned in the release workflow's build job |
+| flavour | `com.macluckylab.jellyrust` (stable) — the id users install; `FLAVOR: stable` is pinned in the release workflow's build job |
 | cargo features | `RELEASE=1`, which drops `devtools` and `devtriggers` |
 | built by | GitHub Actions, from the tag, at a path identical on every runner |
 | toolchain | webOS NDK <version if it moved>, Rust nightly pinned by date in the `RUST_NIGHTLY` repository variable |

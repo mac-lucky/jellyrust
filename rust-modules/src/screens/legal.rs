@@ -14,17 +14,17 @@ use crate::ui::route_screen::RouteLayout;
 use crate::ui::screen::{DrawFrame, FocusSource, HitSource, Part, RenderStrategy, Screen, ScreenEvent};
 use crate::ui::table::Row;
 use crate::ui::table_screen::{DocumentFocus, DocumentScreen, Header, TableScreen};
-use crate::ui::{theme, Rect};
+use crate::ui::Rect;
 
 use super::family::{form_activate, form_focus, form_right_target, InnerHost, SettingsPage};
 use super::registry::word;
 
 
 
-/// **The one contact the application prints**: the project's public issue tracker, with no email
+/// **The one contact the application prints**: the project's issue tracker, with no email
 /// address. `every_document_prints_only_the_one_contact` scans the documents for stray `@`s and
 /// for any other `/issues` link; `screens::consent` imports it.
-pub(crate) const CONTACT_LINK: &str = "github.com/sostk/native-jelly/issues";
+pub(crate) const CONTACT_LINK: &str = "github.com/mac-lucky/jellyrust/issues";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Page {
@@ -91,13 +91,6 @@ static PRIVACY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| [
     nj_platform::i18n::msg::settings_legal_privacy_local(),
     nj_platform::i18n::msg::settings_legal_privacy_local_body(),
     nj_platform::i18n::msg::settings_legal_privacy_plaintext_body(),
-    nj_platform::i18n::msg::settings_legal_privacy_crashes(),
-    nj_platform::i18n::msg::settings_legal_privacy_crashes_body(),
-    nj_platform::i18n::msg::settings_legal_privacy_signin_body(),
-    nj_platform::i18n::msg::settings_legal_privacy_analytics(),
-    nj_platform::i18n::msg::settings_legal_privacy_analytics_body(),
-    nj_platform::i18n::msg::settings_legal_privacy_excluded(),
-    nj_platform::i18n::msg::settings_legal_privacy_excluded_body(),
     nj_platform::i18n::msg::settings_legal_privacy_retention(),
     nj_platform::i18n::msg::settings_legal_privacy_retention_body(),
     nj_platform::i18n::msg::settings_legal_privacy_choices(),
@@ -181,8 +174,7 @@ impl LogicalState for IndexState {
 impl LegalIndex {
     pub(crate) fn new(entry: EntryId) -> Self {
         let mut form = FormTable::new(super::registry::BAND);
-        form.table.compact = false;
-        form.table.header_ink = theme::TEXT_READING;
+        super::family::style_page_table(&mut form.table);
         form.set(legal_form(), None);
         form.table.list_focused = true;
         let sel = form.key_at(form.table.sel.max(0) as usize).unwrap_or(RowKey(0));
@@ -196,7 +188,7 @@ impl LegalIndex {
     fn view(&self) -> TableScreen<'_> {
         TableScreen::new(
             Header::new(
-                RouteLayout::screen(),
+                RouteLayout::panel(),
                 Some(nj_platform::i18n::msg::settings_title()),
                 nj_platform::i18n::msg::settings_legal_title(),
                 nj_platform::i18n::msg::settings_legal_copy(),
@@ -214,7 +206,7 @@ impl Machine<InnerHost> for LegalIndex {
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, InnerHost>, fx: &mut Effects<'_, InnerHost>) -> Handled {
         match ev {
             ScreenEvent::Tick(t) => {
-                self.form.table.update(t.dt(), RouteLayout::screen().sectioned_table().h);
+                self.form.table.update(t.dt(), RouteLayout::panel().sectioned_table().h);
                 Handled::Yes
             }
             ScreenEvent::FocusMoved { to, .. } => {
@@ -376,7 +368,7 @@ impl DocumentPage {
     }
 
     fn document_frame(&self) -> Rect {
-        RouteLayout::screen().document(true)
+        RouteLayout::panel().document(true)
     }
 
     fn guide(&self) -> Option<crate::ui::qr::QrLink<'_>> {
@@ -459,13 +451,13 @@ impl Screen<InnerHost> for DocumentPage {
         if let Some(guide) = self.guide() {
             let layout = guide.draw(f.painter, document_frame, f.measure);
             if let Some(qr) = &self.qr { qr.draw(f.painter, layout.code); }
-            Header::new(RouteLayout::screen(), Some(self.crumb), self.title, self.subtitle)
+            Header::new(RouteLayout::panel(), Some(self.crumb), self.title, self.subtitle)
                 .paint(f.painter, f.measure);
             return;
         }
         let Self { reader, crumb, title, subtitle, body, entry, .. } = self;
         let mut v = DocumentScreen::new(
-            Header::new(RouteLayout::screen(), Some(crumb), title, subtitle),
+            Header::new(RouteLayout::panel(), Some(crumb), title, subtitle),
             reader,
             body.as_ref(),
             GroupId(0),
@@ -486,9 +478,13 @@ impl Screen<InnerHost> for DocumentPage {
 }
 
 /// A visual line break, not a different address. The path keeps its leading slash and all
-/// GitHub route segments so typing the two lines reaches the QR's exact destination.
+/// route segments so typing the lines reaches the QR's exact destination. Three lines,
+/// because each half of a two-line split is wider than the QR it sits under.
 fn contribution_address() -> String {
-    nj_platform::i18n::CONTRIBUTE_URL.trim_start_matches("https://").replace("/blob/", "\n/blob/")
+    nj_platform::i18n::CONTRIBUTE_URL
+        .trim_start_matches("https://")
+        .replacen("/blob/", "\n/blob/", 1)
+        .replacen("/docs/", "\n/docs/", 1)
 }
 
 /// The `(focus key, destination)` of every `Nav` row the index lists — the structural navigation
@@ -564,28 +560,22 @@ mod tests {
 
     /// **The policy must describe the build it ships in.** These assertions pin CLAIMS, not
     /// wording: each names a fact about this application that the document was silently wrong or
-    /// silent about, and each was RED when it was written.
+    /// silent about.
     ///
     /// * Nothing in the persisted session carries a playhead: `session.rs` has no such field, and
     ///   position is read from and reported to the server. **Do not cite `coldstart.rs` as the
-    ///   evidence** — what it retired is `lastplace.json`, the last-PAGE/route bookmark (which
-    ///   Detail or Library screen a cold boot reopened), which is a different artefact that was
-    ///   conflated with a playhead when this test was written.
+    ///   evidence** — what it retired is `lastplace.json`, the last-PAGE/route bookmark, which is a
+    ///   different artefact.
     /// * `session.rs` persists `recent_searches` — the exact search terms, per Home profile — plus
-    ///   per-server tokens and server addresses. None were listed.
-    /// * There are TWO identifiers and they never travel together: `install_id` goes to PostHog
-    ///   only (`telemetry/sender.rs`) and `errors_id` to Sentry only, as `user.id`
-    ///   (`telemetry/sentry.rs::attach_user`). The policy used to promise that a crash report
-    ///   "carries no installation identifier" and "cannot be linked to any other report"; both
-    ///   became false the day the crash-report id was added, and the assertion below is what
-    ///   would have caught a policy that still said so.
+    ///   per-server tokens and server addresses.
+    /// * This fork compiles no reporting endpoint in (`telemetry/sender.rs`, `docs/litefin-fork.md`):
+    ///   the Jellyfin server is the only network peer, so the policy names no reporting service,
+    ///   no reporting identifier and no optional report.
     /// * The sign-in is stored OUTSIDE the app directory on purpose (`paths.rs`), so it survives a
     ///   reinstall. "Uninstall removes everything" would have been false.
     /// * A Jellyfin sign-in keeps an access token and never the password (`jf::store::Stored`).
     /// * Signing out of Jellyfin (`app/jf_login.rs::sign_out`) erases that sign-in and nothing
-    ///   else: it does not run the session erase that `auth::forget_account` performs, so the
-    ///   reporting answers and both identifiers survive it. The policy used to promise
-    ///   "signing out removes them with it"; make sign-out erase them before restoring that claim.
+    ///   else; the policy says what it leaves behind.
     ///
     /// Reword the document freely; when you do, move the assertion with it deliberately rather
     /// than deleting it.
@@ -598,32 +588,18 @@ mod tests {
         );
         for claim in [
             "recent searches",
-            "Analytics ID",
-            "Crash report ID",
+            "sends nothing anywhere except to your Jellyfin server",
             "RETENTION",
             "WHERE DATA IS PROCESSED",
             "UNINSTALLING",
         ] {
             assert!(p.contains(claim), "the policy never mentions {claim:?}");
         }
-        for stale in [
-            "carries no installation identifier",
-            "cannot be linked",
-            "cannot be found or deleted",
-            // consent and both identifiers END with the sign-in since 2026-09-04
-            "NOT removed by signing out",
-        ] {
-            assert!(
-                !p.contains(stale),
-                "the policy still claims crash reports are anonymous: {stale:?}"
-            );
+        for stale in ["Sentry", "PostHog", "Analytics ID", "Crash report ID", "optional report", "optional-reporting"] {
+            assert!(!p.contains(stale), "the policy still describes reporting this build cannot do: {stale:?}");
         }
-        // The two identifier names the Settings rows use are the names the policy uses.
-        assert!(p.contains("Settings shows it as your Crash report ID"));
-        assert!(p.contains("Settings shows that identifier as your Analytics ID"));
         // …and the policy says what a Jellyfin sign-out leaves behind.
         assert!(p.contains("Signing out does not currently remove anything else"));
-        assert!(!p.contains("signing out removes them with it"));
         assert!(p.contains("access token"), "the policy never mentions the stored access token");
         assert!(p.contains("It never stores your password"));
     }
@@ -672,20 +648,23 @@ mod tests {
     #[test]
     fn server_boundary_is_explicit() {
         assert!(PRIVACY.contains("go directly to the Jellyfin server whose address you enter"));
-        assert!(PRIVACY.contains("Native Jelly’s developer does not receive any of it"));
+        assert!(PRIVACY.contains("JellyRust’s developer does not receive any of it"));
         assert!(!PRIVACY.contains("plex.tv"), "a Jellyfin sign-in never reaches Plex services");
         assert!(TRADEMARKS.contains("Jellyfin project"));
         assert!(TRADEMARKS.contains("based on PlxNative by Gleb Linnik"));
         assert!(!TRADEMARKS.contains("used under licence"));
     }
 
-    /// The upstream author keeps the credit the GPL requires; the project identity is Native Jelly's.
+    /// The upstream author keeps the credit the GPL requires; the project identity is JellyRust's.
     #[test]
     fn about_credits_the_fork_and_its_upstream() {
-        assert!(ABOUT.contains("Developed by sostk"));
+        assert!(ABOUT.contains("JellyRust by macluckylab"));
+        assert!(ABOUT.contains("Modified by macluckylab in 2026 from Native Jelly by sostk"));
         assert!(ABOUT.contains("Based on PlxNative by Gleb Linnik"));
-        assert!(ABOUT.contains("github.com/sostk/native-jelly"));
+        assert!(ABOUT.contains("github.com/mac-lucky/jellyrust"));
+        assert!(ABOUT.contains("Litefin by MoazSalem"));
         assert!(!ABOUT.contains("github.com/GLinnik21"));
+        assert!(!ABOUT.contains('@'), "credits carry names only, no email addresses");
     }
 
     /// **New for phase 5b.** Ported from `ui::legal`'s `legal_has_six_current_documents`,
@@ -1168,7 +1147,7 @@ mod tests {
     #[test]
     fn every_legal_row_fits_its_column_in_every_language() {
         use nj_platform::i18n::{language_on_this_thread_for_test, SHIPPED};
-        let frame_w = crate::ui::route_screen::RouteLayout::screen().sectioned_table().w;
+        let frame_w = crate::ui::route_screen::RouteLayout::panel().sectioned_table().w;
         let mut out = Vec::new();
         for language in SHIPPED {
             let _guard = language_on_this_thread_for_test(language);

@@ -233,6 +233,7 @@ pub fn stream(s: &MediaStream, item_guid: &str, source_id: &str) -> Stream {
         stream_type: st,
         index: s.index,
         key,
+        external: s.is_external,
         codec: codec(s.codec.as_deref().unwrap_or("")),
         language: if name.is_empty() { lang.to_string() } else { name.to_string() },
         language_code: if lang.is_empty() { String::new() } else { lang.to_ascii_lowercase() },
@@ -332,6 +333,11 @@ pub fn primary_codecs(source: &MediaSourceInfo) -> (String, String) {
 }
 
 /// One `MediaSourceInfo` → one `Media` version with its one `Part`.
+///
+/// The server's pick for the asking user (`DefaultAudioStreamIndex`/`DefaultSubtitleStreamIndex`:
+/// the film's remembered choice under `RememberAudioSelections`/`RememberSubtitleSelections`, or
+/// else its own ranking of the user's preferences) is the `selected` stream of each kind, and a
+/// subtitle default of -1 (remembered Off) is [`MediaPart::subtitles_off`].
 pub fn media(item_guid: &str, source: &MediaSourceInfo) -> Media {
     let (video, _) = primary_streams(source);
     let (video_codec, audio_codec) = primary_codecs(source);
@@ -355,7 +361,17 @@ pub fn media(item_guid: &str, source: &MediaSourceInfo) -> Media {
             size: source.size.unwrap_or(0),
             container,
             stream: source.media_streams.iter().filter(|s| stream_type(&s.kind) != 0)
-                .map(|s| stream(s, item_guid, &source.id)).collect(),
+                .map(|s| {
+                    let mut out = stream(s, item_guid, &source.id);
+                    let default = match out.stream_type {
+                        2 => source.default_audio_stream_index,
+                        3 => source.default_subtitle_stream_index,
+                        _ => None,
+                    };
+                    out.selected = (default == Some(s.index)) as i64;
+                    out
+                }).collect(),
+            subtitles_off: source.default_subtitle_stream_index == Some(-1),
             ..Default::default()
         }],
     }
@@ -457,7 +473,7 @@ pub fn item(it: &BaseItemDto, section_id: i64) -> Metadata {
             end_time_offset: it.chapters.get(i + 1).map(|n| ticks::to_ms(n.start_position_ticks))
                 .unwrap_or(duration).max(ticks::to_ms(c.start_position_ticks)),
             tag: c.name.clone().filter(|_| n > 0).unwrap_or_default(),
-            thumb: String::new(),
+            thumb: images::chapter(it, i, c.image_tag.as_deref()),
         }).collect()
     };
     let (extra_type_num, subtype) = match it.extra_type.as_deref() {
@@ -480,6 +496,10 @@ pub fn item(it: &BaseItemDto, section_id: i64) -> Metadata {
         summary: it.overview.clone().unwrap_or_default(),
         tagline: it.taglines.first().cloned().unwrap_or_default(),
         studio: it.studios.first().map(|s| s.name.clone()).unwrap_or_default(),
+        studios: it.studios.iter().map(|s| s.name.clone()).filter(|n| !n.is_empty()).collect(),
+        original_title: it.original_title.clone().unwrap_or_default(),
+        added_at: it.date_created.as_deref().map(iso_to_unix).unwrap_or(0),
+        favorite: ud.is_favorite,
         originally_available_at: it.premiere_date.as_deref().and_then(|d| d.get(..10)).unwrap_or("").to_string(),
         duration,
         view_offset: ticks::to_ms(ud.playback_position_ticks),
@@ -509,13 +529,26 @@ pub fn item(it: &BaseItemDto, section_id: i64) -> Metadata {
         ratings: ratings(it),
         rating: it.critic_rating.map(|c| c / 10.0).unwrap_or(0.0),
         audience_rating: it.community_rating.unwrap_or(0.0),
+        collection_sort: match it.display_order.as_deref() {
+            Some("PremiereDate") => Some(0),
+            Some("SortName") => Some(1),
+            Some("Default") => Some(2),
+            _ => None,
+        },
         ..Default::default()
     }
 }
 
-/// `MediaSegmentDto[]` → `Marker[]`. Intro → `intro`, Outro → `credits` (final when it reaches
-/// the last 2 % of the item); Recap/Preview/Commercial/Unknown have no Plex marker and are dropped.
+/// `MediaSegmentDto[]` → `Marker[]`. Intro → `intro`, Outro → `credits`; Recap/Preview/Commercial/
+/// Unknown have no Plex marker and are dropped. Credits are final when they reach the last 2 % of
+/// the item, carried on through any Preview segments that follow them: a next-episode preview after
+/// the credits (intro-skipper's anime shape) is still the end, so Up Next shows and Skip finishes.
 pub fn markers(segs: &[MediaSegmentDto], duration_ms: i64) -> Vec<Marker> {
+    let span = |s: &MediaSegmentDto| (ticks::to_ms(s.start_ticks), ticks::to_ms(s.end_ticks));
+    let mut previews: Vec<_> = segs.iter().filter(|s| s.kind == "Preview").map(span).collect();
+    previews.sort_unstable();
+    let slack = duration_ms * 2 / 100;
+    let reach = |end: i64| previews.iter().fold(end, |end, &(s, e)| if s <= end + slack { end.max(e) } else { end });
     segs.iter()
         .filter_map(|s| {
             let kind = match s.kind.as_str() {
@@ -523,12 +556,12 @@ pub fn markers(segs: &[MediaSegmentDto], duration_ms: i64) -> Vec<Marker> {
                 "Outro" => "credits",
                 _ => return None,
             };
-            let (start, end) = (ticks::to_ms(s.start_ticks), ticks::to_ms(s.end_ticks));
+            let (start, end) = span(s);
             (end > start).then(|| Marker {
                 kind: kind.into(),
                 start_time_offset: start,
                 end_time_offset: end,
-                is_final: (kind == "credits" && duration_ms > 0 && end >= duration_ms * 98 / 100) as i64,
+                is_final: (kind == "credits" && duration_ms > 0 && reach(end) >= duration_ms * 98 / 100) as i64,
             })
         })
         .collect()
@@ -675,22 +708,57 @@ mod tests {
         assert!(s[4].key.ends_with("/Subtitles/4/0/Stream.srt"), "{}", s[4].key);
     }
 
+    /// The server's pick for the asking user (`DefaultAudioStreamIndex` /
+    /// `DefaultSubtitleStreamIndex`: a remembered choice, else its ranking of the user's
+    /// preferences) is the `selected` stream, and only that one of its kind.
+    #[test]
+    fn the_servers_default_streams_are_the_selected_ones() {
+        let mut it = movie();
+        it.media_sources[0].default_audio_stream_index = Some(2);
+        it.media_sources[0].default_subtitle_stream_index = Some(4);
+        let m = item(&it, 0);
+        let picked: Vec<(i64, i64)> = m.media[0].part[0].stream.iter().map(|s| (s.index, s.selected)).collect();
+        assert_eq!(picked, vec![(0, 0), (1, 0), (2, 1), (3, 0), (4, 1)], "the German track and the external English subtitle");
+        it.media_sources[0].default_subtitle_stream_index = None;
+        let m = item(&it, 0);
+        assert!(m.media[0].part[0].stream.iter().filter(|s| s.stream_type == 3).all(|s| s.selected == 0), "no default, nothing selected");
+        assert!(!m.media[0].part[0].subtitles_off, "no default is not a remembered Off");
+        it.media_sources[0].default_subtitle_stream_index = Some(-1);
+        let m = item(&it, 0);
+        assert!(m.media[0].part[0].subtitles_off, "-1 is the remembered Off");
+        assert!(m.media[0].part[0].stream.iter().filter(|s| s.stream_type == 3).all(|s| s.selected == 0));
+    }
+
     #[test]
     fn artwork_paths_translate_to_anonymous_item_images() {
         let m = item(&movie(), 0);
         let p = jf_image_path(&m.thumb, 300, 450, false).unwrap();
-        assert_eq!(p, "/Items/36edf81507b5c8eda566778b2a316c29/Images/Primary?maxWidth=300&maxHeight=450&quality=90&tag=aaaa");
+        assert_eq!(p, "/Items/36edf81507b5c8eda566778b2a316c29/Images/Primary?fillWidth=300&fillHeight=450&quality=90&tag=aaaa");
         let logo = jf_image_path(&format!("/library/metadata/{}/clearLogo", m.rating_key), 600, 240, true).unwrap();
         assert!(logo.contains("/Images/Logo?") && logo.ends_with("&format=Png"), "{logo}");
         assert!(!p.contains("ApiKey"));
         assert!(jf_image_path("https://metadata-static.plex.tv/x.jpg", 1, 1, false).is_none());
     }
 
+    /// A chapter the server extracted a picture for draws it, fetched as Litefin's Chapters list
+    /// does (`/Items/{id}/Images/Chapter/{index}?tag=`, the index counted from 0); one without a
+    /// picture keeps the placeholder card.
+    #[test]
+    fn a_chapter_with_an_image_tag_draws_the_servers_picture() {
+        let film: BaseItemDto = serde_json::from_str(r#"{"Id":"36edf81507b5c8eda566778b2a316c29","Type":"Movie",
+            "Name":"F","RunTimeTicks":6000000000,"Chapters":[{"StartPositionTicks":0,"Name":"One"},
+            {"StartPositionTicks":3000000000,"Name":"Two","ImageTag":"ch2"}]}"#).unwrap();
+        let m = item(&film, 0);
+        assert!(m.chapter[0].thumb.is_empty(), "no tag, no picture: {}", m.chapter[0].thumb);
+        let p = jf_image_path(&m.chapter[1].thumb, 480, 270, false).expect("an artwork path");
+        assert_eq!(p, "/Items/36edf81507b5c8eda566778b2a316c29/Images/Chapter/1?fillWidth=480&fillHeight=270&quality=90&tag=ch2");
+    }
+
     #[test]
     fn a_persisted_artwork_path_resolves_without_this_process_having_minted_it() {
         let never_minted = "/library/metadata/1/art/eeeeeeeeeeeee00000000000000000ff-bt";
         let p = jf_image_path(never_minted, 10, 10, false).unwrap();
-        assert_eq!(p, "/Items/eeeeeeeeeeeee00000000000000000ff/Images/Backdrop?maxWidth=10&maxHeight=10&quality=90&tag=bt");
+        assert_eq!(p, "/Items/eeeeeeeeeeeee00000000000000000ff/Images/Backdrop?fillWidth=10&fillHeight=10&quality=90&tag=bt");
         assert_eq!(split_art_tag("plain"), (None, "plain"));
     }
 
@@ -722,6 +790,26 @@ mod tests {
         assert_eq!((m[1].kind.as_str(), m[1].is_final), ("credits", 1));
     }
 
+    /// intro-skipper's anime shape: the credits, then a next-episode Preview to the end. The
+    /// preview is still the end of the episode, so the credits are final (Up Next, Skip finishes).
+    #[test]
+    fn credits_followed_only_by_a_preview_are_final() {
+        const DUR_MS: i64 = 1_440_000;
+        let segs = |rest: &str| -> Vec<MediaSegmentDto> {
+            serde_json::from_str(&format!(
+                r#"[{{"Type":"Outro","StartTicks":12900000000,"EndTicks":13500000000}}{rest}]"#
+            ))
+            .unwrap()
+        };
+        let finality = |rest: &str| markers(&segs(rest), DUR_MS).iter().map(|m| m.is_final).collect::<Vec<_>>();
+        assert_eq!(finality(r#",{"Type":"Preview","StartTicks":13500000000,"EndTicks":14400000000}"#), [1]);
+        assert_eq!(finality(r#",{"Type":"Preview","StartTicks":13510000000,"EndTicks":14400000000}"#), [1],
+            "a second's gap between the credits and the preview");
+        assert_eq!(finality(""), [0], "a scene after the credits");
+        assert_eq!(finality(r#",{"Type":"Preview","StartTicks":13500000000,"EndTicks":13800000000}"#), [0],
+            "a scene after the preview");
+    }
+
     #[test]
     fn a_series_counts_episodes_for_the_watched_badge() {
         let s: BaseItemDto = serde_json::from_str(r#"{"Id":"ddddddddddddd000000000000000000e","Type":"Series","Name":"S",
@@ -730,6 +818,24 @@ mod tests {
         assert_eq!(m.kind, "show");
         assert!(m.key.ends_with("/children"));
         assert_eq!((m.child_count, m.leaf_count, m.viewed_leaf_count), (2, 20, 15));
+    }
+
+    /// The detail page's facts beyond Plex's shape: every studio, the original title, when the
+    /// item was added and the viewer's favourite mark.
+    #[test]
+    fn an_item_carries_its_studios_original_title_added_date_and_favourite() {
+        let f: BaseItemDto = serde_json::from_str(r#"{"Id":"36edf81507b5c8eda566778b2a316c29","Type":"Movie","Name":"Amélie",
+            "OriginalTitle":"Le Fabuleux Destin d'Amélie Poulain","DateCreated":"2025-11-20T08:30:00.0000000Z",
+            "Studios":[{"Name":"Claudie Ossard"},{"Name":"UGC"}],"UserData":{"IsFavorite":true}}"#).unwrap();
+        let m = item(&f, 0);
+        assert_eq!(m.studios, ["Claudie Ossard", "UGC"]);
+        assert_eq!(m.studio, "Claudie Ossard");
+        assert_eq!(m.original_title, "Le Fabuleux Destin d'Amélie Poulain");
+        assert_eq!(m.added_at, iso_to_unix("2025-11-20T08:30:00Z"));
+        assert!(m.favorite);
+        let plain: BaseItemDto = serde_json::from_str(r#"{"Id":"36edf81507b5c8eda566778b2a316c29","Type":"Movie","Name":"F"}"#).unwrap();
+        let m = item(&plain, 0);
+        assert!(m.studios.is_empty() && m.original_title.is_empty() && m.added_at == 0 && !m.favorite);
     }
 
     #[test]
@@ -791,6 +897,19 @@ mod tests {
         assert_eq!(item(&it("MusicVideo", None), 0).kind, "movie");
         assert_eq!(item(&it("Video", Some("Featurette")), 0).kind, "clip");
         assert_eq!(item(&it("Trailer", None), 0).kind, "clip");
+    }
+
+    /// A box set's `DisplayOrder` is the order the collection page names over its grid (release,
+    /// title, or its owner's own); a box set without one states none.
+    #[test]
+    fn a_box_set_states_its_member_order() {
+        for (order, sort) in [("PremiereDate", Some(0)), ("SortName", Some(1)), ("Default", Some(2)), ("Other", None)] {
+            let it: BaseItemDto = serde_json::from_str(&format!(
+                r#"{{"Id":"eeeeeeeeeeeee000000000000000000f","Name":"Trilogy","Type":"BoxSet","DisplayOrder":"{order}"}}"#)).unwrap();
+            assert_eq!(item(&it, 0).collection_sort, sort, "{order}");
+        }
+        let none = BaseItemDto { id: "e".repeat(32), kind: "BoxSet".into(), ..Default::default() };
+        assert_eq!(item(&none, 0).collection_sort, None);
     }
 
     #[test]

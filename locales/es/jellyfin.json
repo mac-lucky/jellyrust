@@ -49,7 +49,7 @@
   "jellyfin.login.consent_home": "{server} respondió por http sin cifrar, algo normal en un servidor de casa. Sin cifrado, cualquier otro dispositivo de esta red podría ver tu contraseña y lo que ves.",
   "jellyfin.login.consent_internet": "{server} está en internet y respondió por http sin cifrar. Sin cifrado, tu contraseña y lo que ves cruzan internet y otros podrían verlos por el camino. Usa su dirección https:// si la tiene.",
   "jellyfin.login.consent_only_server": "Solo para este servidor y en esta dirección.",
-  "jellyfin.login.consent_checks": "Native Jelly comprueba que es el mismo servidor cada vez antes de enviar nada.",
+  "jellyfin.login.consent_checks": "JellyRust comprueba que es el mismo servidor cada vez antes de enviar nada.",
   "jellyfin.login.consent_settings": "Desactívalo cuando quieras en Ajustes › Conexiones sin cifrar.",
   "jellyfin.login.consent_allow": "Conectar sin cifrado",
   "jellyfin.login.not_encrypted": "Sin cifrar",

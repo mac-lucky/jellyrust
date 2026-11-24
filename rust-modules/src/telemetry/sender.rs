@@ -13,6 +13,9 @@
 //! a CI runner and anyone building from source get an app that provably cannot report, without
 //! having to trust a runtime flag.
 //!
+//! **litefin: this fork reads none of them.** The four credential consts below are `None` in every
+//! build, so [`configured`] is false by construction.
+//!
 //! Both values are **write-only ingest credentials and publishable by design** — every client that
 //! sends anything must carry one. The Sentry *auth token*, which can read and delete the project's
 //! data, is a different thing entirely and is never compiled in: it lives on the dev Mac and is used
@@ -60,14 +63,12 @@ const fn non_empty(v: Option<&'static str>) -> Option<&'static str> {
 
 // ---- the credential PAIRS, and the environment they decide ------------------------------------
 
-/// The production pair. Supplied only by the release workflow, out of GitHub repository variables —
-/// deliberately never read from the working copy, so a developer's machine cannot hold them.
-const SENTRY_DSN_PROD: Option<&str> = non_empty(option_env!("NJ_SENTRY_DSN"));
-const POSTHOG_KEY_PROD: Option<&str> = non_empty(option_env!("NJ_POSTHOG_KEY"));
-
-/// The development pair, from `pkg/telemetry.local.json` via `make telemetry-local`.
-const SENTRY_DSN_DEV: Option<&str> = non_empty(option_env!("NJ_SENTRY_DSN_DEV"));
-const POSTHOG_KEY_DEV: Option<&str> = non_empty(option_env!("NJ_POSTHOG_KEY_DEV"));
+// litefin: telemetry is off in this fork (docs/litefin-fork.md). None of the four `NJ_*` variables
+// is read, so neither the environment nor `pkg/telemetry.local.json` can put an endpoint in a build.
+const SENTRY_DSN_PROD: Option<&str> = non_empty(None);
+const POSTHOG_KEY_PROD: Option<&str> = non_empty(None);
+const SENTRY_DSN_DEV: Option<&str> = non_empty(None);
+const POSTHOG_KEY_DEV: Option<&str> = non_empty(None);
 
 const HAS_PROD: bool = SENTRY_DSN_PROD.is_some() || POSTHOG_KEY_PROD.is_some();
 const HAS_DEV: bool = SENTRY_DSN_DEV.is_some() || POSTHOG_KEY_DEV.is_some();
@@ -126,7 +127,8 @@ const POSTHOG_KEY: Option<&str> = if HAS_PROD {
 /// PostHog's EU ingest host. A constant rather than configuration: the region is a claim
 /// `PRIVACY.md` and the LG Data Safety declaration both make, so it should not be movable by an
 /// environment variable nobody reads.
-const POSTHOG_HOST: &str = "https://eu.i.posthog.com";
+// litefin: no ingest host either, so not even an unoptimised build carries the address.
+const POSTHOG_HOST: &str = "";
 
 /// Deadlines for a background flush. Deliberately shorter than [`net::API`](nj_net::net::API), which
 /// is tuned for a call somebody is waiting on: a worker holding a thread for 25 s to report a crash
@@ -589,6 +591,16 @@ mod tests {
         }
     }
 
+    /// litefin: no build of this fork can report, whatever `NJ_*` values the build environment
+    /// held (run it with them exported: `NJ_SENTRY_DSN=... make test-fast T=litefin`).
+    #[test]
+    fn litefin_no_build_carries_an_endpoint() {
+        assert!(!configured() && !has_sentry() && !has_posthog() && sentry_dsn().is_none());
+        assert!(route(&rec(Category::Errors, Dest::Sentry)).is_none());
+        assert!(route(&rec(Category::Usage, Dest::PostHog)).is_none());
+        assert_eq!(send_one(&rec(Category::OneOff, Dest::Sentry)).0, Verdict::Hopeless);
+    }
+
     /// **A blank variable is not a configuration.** The Makefile exports both unconditionally,
     /// reading them from a JSON file a checkout may not have — so the unconfigured case arrives
     /// here as `Some("")`, and without this it would report as configured and spool every record
@@ -683,7 +695,7 @@ mod tests {
     /// environment variable nobody reads.
     #[test]
     fn the_posthog_region_is_not_configurable() {
-        assert!(POSTHOG_HOST.starts_with("https://eu."));
+        assert!(POSTHOG_HOST.is_empty(), "litefin: no PostHog ingest host in any build");
     }
 
     /// A background flush must not hold a worker as long as a call somebody is waiting on.

@@ -1,67 +1,46 @@
-//! The Detail page's About footer.
+//! The Detail page's rich-metadata table and the overview's Show more pill (Litefin's
+//! `.details-rich-meta`, `docs/litefin-look.md` 5).
 //!
-//! Only the synopsis card and Languages column are controls. Information and Accessibility remain
-//! readable content, not dead focus stops.
+//! Two stops. The Show more pill under the hero's overview ([`CARD_ELEM`]) opens the About panel
+//! with the whole record; the table directly below the split ([`LANGUAGES_ELEM`]) holds Genres,
+//! Directors and Writers as chips plus the Audio and Subtitles languages, and opens the Track
+//! information panel, so it is a stop only while the item has its own file to inspect. The
+//! focused table takes Litefin's accent outline and accent-dark fill.
 
 use std::ffi::CString;
 
 use crate::metadata::Detail;
-use nj_machine::machine::{GroupId, Measure};
-use crate::ui::text_lift::{draw_focused, TextLift, CENTRE};
-use crate::ui::text_view::TextView;
+use crate::ui::widgets::LfPlate;
 use crate::ui::{theme, Painter, Rect};
+use nj_machine::machine::{GroupId, Measure};
 
 pub(crate) const ABOUT_ELEM_RANGE_START: u32 = 1664;
 pub(crate) const ABOUT_ELEM_RANGE_END: u32 = 1728;
 pub(crate) const ABOUT_GROUP: GroupId = GroupId(5);
+/// The Show more pill.
 pub(crate) const CARD_ELEM: u32 = ABOUT_ELEM_RANGE_START;
+/// The rich-metadata table.
 pub(crate) const LANGUAGES_ELEM: u32 = ABOUT_ELEM_RANGE_START + 1;
 
-const CARD_W: f32 = 640.0;
-const CARD_Y: f32 = 50.0;
-const CARD_PAD: f32 = 30.0;
-/// The `ui::text_lift` corner radius of the About card and the Languages column (the mockup's 14).
-const LIFT_RADIUS: f32 = 14.0;
-const COL_Y: f32 = 430.0;
-const LANG_X: f32 = 760.0;
-/// The Languages column's text measure — the width the audio list wraps to, and what the focus
-/// plate is [`CARD_PAD`] wider than on each side.
-const LANG_W: f32 = 500.0;
-/// Air between the block's last line and the MORE mark, matching the About card's own.
-const LANG_MORE_LEAD: f32 = 30.0;
-/// Air between the synopsis' last line and the MORE pinned on it — the same air the Person bio
-/// and the Collection summary keep before theirs.
-const MORE_GAP: f32 = theme::space::LG;
-/// The About card's synopsis measure.
-const SYNOPSIS_W: f32 = CARD_W - 2.0 * CARD_PAD;
+/// The table's box: margin 10 above, padding 20 at the sides, its rows 6 above and below the
+/// chips with a 1px divider between, the label column 120 wide, the chips 4 apart (5).
+const MARGIN_TOP: f32 = 10.0;
+const PAD_X: f32 = 20.0;
+const ROW_PAD: f32 = 6.0;
+const LABEL_W: f32 = 120.0;
+const CHIP_GAP: f32 = 4.0;
+const LABEL_SZ: i32 = theme::size::lf::S19;
+/// The focused table's outline (5: "its outline turns accent").
+const FOCUS_RING_W: f32 = 2.0;
+/// The air under the table before the rows (5: margin 50 below).
+pub(crate) const GAP_BELOW: f32 = 50.0;
 
-/// The About card's synopsis: ONE builder for the height `card_rect` reserves and the block
-/// `draw` paints, so the two cannot disagree about the wrap.
-fn synopsis<'a>(summary: &'a str, measure: &'a dyn Measure) -> TextView<'a> {
-    TextView::new(summary, theme::size::CAPTION, theme::TEXT_HEADING)
-        .with_measure(measure)
-        .leading(30.0)
-        .max_lines(5)
-        .fade_for_more(MORE_GAP)
-        .mark_always()
+fn row_h() -> f32 {
+    LfPlate::Chip { focused: false }.h() + 2.0 * ROW_PAD
 }
 
-/// The Languages column's audio list: ONE builder for the height `languages_rect` reserves and
-/// the block `draw_languages` paints. Its MORE is NOT pinned on the last line — it sits on its own
-/// row [`LANG_MORE_LEAD`] below the block — so the fade here only marks a TRUNCATED list and the
-/// view deliberately does not declare `mark_always`: a complete last line has nothing to run under.
-fn audio_view<'a>(list: &'a str, measure: &'a dyn Measure) -> TextView<'a> {
-    TextView::new(list, theme::size::LABEL, theme::TEXT_HEADING)
-        .with_measure(measure)
-        .leading(32.0)
-        .max_lines(6)
-        .fade_for_more(MORE_GAP)
-}
-
-/// Where the Languages plate's MORE is drawn (`Painter::text`'s `y`) for the plate `plate`.
-fn languages_more_y(plate: Rect) -> f32 {
-    plate.y + plate.h - CARD_PAD - theme::size::CAPTION as f32
-}
+const TABLE_X: f32 = crate::ui::detail_layout::SPLIT_X;
+const TABLE_W: f32 = crate::ui::detail_layout::INFO_R - TABLE_X;
 
 pub(crate) fn locate(key: u32, tracks_available: bool) -> Option<usize> {
     match key {
@@ -71,542 +50,193 @@ pub(crate) fn locate(key: u32, tracks_available: bool) -> Option<usize> {
     }
 }
 
+/// One row of the table: its app-owned label and the server's chips.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MetaRow {
+    pub(crate) label: &'static str,
+    pub(crate) chips: Vec<String>,
+}
+
+/// The rows `d` fills: genres, directors, writers and studios as Litefin's `genres-studios-writers`
+/// style reads them (the household's default; its Tags row belongs to the `all` style only), then
+/// the audio and subtitle languages, each language once. A row with nothing in it is not drawn.
+pub(crate) fn rows_of(d: &Detail) -> Vec<MetaRow> {
+    use nj_platform::i18n::msg;
+    fn langs(streams: &[crate::metadata::Stream]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for s in streams {
+            let name = if s.lang.is_empty() { msg::browse_detail_unknown() } else { s.lang.as_str() };
+            if !out.iter().any(|l| l == name) {
+                out.push(name.to_string());
+            }
+        }
+        out
+    }
+    let writers = d.crew.iter().filter(|c| c.role.contains("Writer")).map(|c| c.tag.clone()).collect();
+    [
+        MetaRow { label: msg::details_genres(), chips: d.genres.clone() },
+        MetaRow { label: msg::details_directors(), chips: d.directors.clone() },
+        MetaRow { label: msg::details_writers(), chips: writers },
+        MetaRow { label: msg::details_studios(), chips: d.studios.clone() },
+        MetaRow { label: msg::details_audio(), chips: langs(&d.audio) },
+        MetaRow { label: msg::details_subtitles(), chips: langs(&d.subs) },
+    ]
+    .into_iter()
+    .filter(|r| !r.chips.is_empty())
+    .collect()
+}
+
+/// The table's settled height in the flow, its top margin included; 0 without a row.
+pub(crate) fn block_h(d: &Detail) -> f32 {
+    let n = rows_of(d).len();
+    if n == 0 { 0.0 } else { MARGIN_TOP + n as f32 * row_h() }
+}
+
+/// The table's rows, rebuilt once per item and on a same-identity landing ([`Rows::invalidate`]).
 pub(crate) struct Rows {
     dirty: bool,
     identity: Option<(crate::catalog::ServerId, String)>,
-    info: Vec<(&'static str, String)>,
-    orig_audio: Option<String>,
-    audio_list: String,
-    access: Vec<(&'static str, &'static str)>,
+    rows: Vec<MetaRow>,
 }
 
 impl Rows {
     pub(crate) fn new() -> Self {
-        Self {
-            dirty: true,
-            identity: None,
-            info: Vec::new(),
-            orig_audio: None,
-            audio_list: String::new(),
-            access: Vec::new(),
-        }
+        Self { dirty: true, identity: None, rows: Vec::new() }
     }
 
     pub(crate) fn update(&mut self, d: &Detail) {
-        if !self.dirty
-            && self
-                .identity
-                .as_ref()
-                .is_some_and(|(sid, rk)| *sid == d.sid && rk == &d.rk)
-        {
+        if !self.dirty && self.identity.as_ref().is_some_and(|(sid, rk)| *sid == d.sid && rk == &d.rk) {
             return;
         }
         self.dirty = false;
         self.identity = Some((d.sid, d.rk.clone()));
-        self.info.clear();
-        let released = crate::ui::fmt::pretty_date(&d.aired, d.year);
-        if !released.is_empty() {
-            self.info.push((nj_platform::i18n::msg::browse_detail_released(), released));
-        }
-        let dur = if d.dur_ms > 0 {
-            d.dur_ms
-        } else {
-            d.episodes.first().map(|e| e.dur_ms).unwrap_or(0)
-        };
-        if dur > 0 {
-            self.info.push((nj_platform::i18n::msg::browse_detail_runtime(), crate::ui::fmt::dur_long(dur)));
-        }
-        self.info.push((
-            nj_platform::i18n::msg::browse_detail_rated(),
-            if d.rating.is_empty() {
-                nj_platform::i18n::msg::browse_detail_unrated().into()
-            } else {
-                d.rating.clone()
-            },
-        ));
-        if !d.countries.is_empty() {
-            self.info
-                .push((nj_platform::i18n::msg::browse_detail_origins(), d.countries.join(", ")));
-        }
-        self.orig_audio = d.audio.first().map(|a| {
-            if a.lang.is_empty() {
-                nj_platform::i18n::msg::browse_detail_unknown().into()
-            } else {
-                a.lang.clone()
-            }
-        });
-        self.audio_list = d
-            .audio
-            .iter()
-            .take(8)
-            .map(|a| {
-                let lang = if a.lang.is_empty() {
-                    nj_platform::i18n::msg::browse_detail_unknown()
-                } else {
-                    &a.lang
-                };
-                format!("{} ({})", lang, a.codec.to_uppercase())
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.access.clear();
-        if !d.subs.is_empty() {
-            self.access.push((
-                nj_platform::i18n::msg::widgets_badge_cc(),
-                nj_platform::i18n::msg::browse_detail_closed_captions(),
-            ));
-        }
-        if d.subs.iter().any(|s| s.sdh) {
-            self.access.push((nj_platform::i18n::msg::widgets_badge_sdh(), nj_platform::i18n::msg::browse_detail_sdh()));
-        }
-        if d.audio.iter().any(|a| a.ad) {
-            self.access.push((
-                nj_platform::i18n::msg::widgets_badge_ad(),
-                nj_platform::i18n::msg::browse_detail_audio_description(),
-            ));
-        }
+        self.rows = rows_of(d);
     }
 
     pub(crate) fn invalidate(&mut self) {
         self.dirty = true;
     }
 
-    pub(crate) fn card_rect(&self, d: &Detail, top: f32, measure: &dyn Measure) -> Rect {
-        let h = synopsis(&d.summary, measure).measure_h(SYNOPSIS_W).max(30.0);
-        Rect::new(
-            crate::ui::consts::MARGIN_X,
-            top + CARD_Y,
-            CARD_W,
-            CARD_PAD + 100.0 + h + CARD_PAD,
-        )
+    /// The table's frame below a section top `top` (its margin is above it).
+    pub(crate) fn languages_rect(&self, top: f32) -> Rect {
+        Rect::new(TABLE_X, top + MARGIN_TOP, TABLE_W, self.rows.len() as f32 * row_h())
     }
 
-    pub(crate) fn languages_rect(&self, top: f32, measure: &dyn Measure) -> Rect {
-        let mut h = 68.0;
-        if let Some(orig) = &self.orig_audio {
-            h += pair_h(orig, measure);
-        }
-        if !self.audio_list.is_empty() {
-            h += 34.0 + audio_view(&self.audio_list, measure).measure_h(LANG_W);
-        }
-        // The plate wears the ABOUT CARD's padding — `CARD_PAD` on all four sides — because the
-        // owner named that card as the reference for what these insets should look like
-        // (2026-09-18). Its height therefore has to carry the MORE mark too: MORE is INK, the
-        // block's measured `h` ends at the last audio line, and pinning the mark to the plate's
-        // own bottom edge is what used to leave it all but touching it while the heading sat under
-        // 48px of air.
-        Rect::new(
-            LANG_X - CARD_PAD,
-            top + COL_Y - CARD_PAD,
-            LANG_W + 2.0 * CARD_PAD,
-            CARD_PAD + h + LANG_MORE_LEAD + theme::size::CAPTION as f32 + CARD_PAD,
-        )
-    }
-
-    /// `tracks` is the PAGE's answer to "is there a file for the track sheet to describe"
-    /// (`DetailScreen::tracks_available`), passed in rather than asked of the sheet: it decides
-    /// whether the Languages column carries a MORE affordance, and it has to be the same bit
-    /// `about::locate` gates the element on or the column reads as pressable and is not.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn draw(
-        &self,
-        p: Painter,
-        d: &Detail,
-        top: f32,
-        tracks: bool,
-        card_lift: &TextLift,
-        lang_lift: &TextLift,
-        measure: &dyn nj_machine::machine::Measure,
-    ) {
-        let x = crate::ui::consts::MARGIN_X;
-        p.text(
-            nj_platform::i18n::msg::browse_detail_about_c().as_ptr(),
-            x,
-            top,
-            theme::size::HEADLINE,
-            theme::TEXT_PRIMARY,
-            0,
-            1,
-        );
-        let card = self.card_rect(d, top, measure);
-        // The card's content grows with its plate inside `draw_focused`'s closure only; the
-        // columns drawn after it use the caller's own `p` and cannot inherit the lift.
-        draw_focused(p, card, LIFT_RADIUS, card_lift, CENTRE, |p| {
-            let ix = card.x + CARD_PAD;
-            text_at(
-                p,
-                ix,
-                card.y + CARD_PAD,
-                theme::size::HEADLINE,
-                theme::TEXT_PRIMARY,
-                1,
-                &nj_gfx::text::elide_by(&d.title, card.w - 2.0 * CARD_PAD, false, |t| {
-                    measure.width_str(t, theme::size::HEADLINE, true)
-                }),
-            );
-            if !d.genres.is_empty() {
-                text_at(
-                    p,
-                    ix,
-                    card.y + CARD_PAD + 44.0,
-                    theme::size::CAPTION,
-                    theme::TEXT_TERTIARY,
-                    0,
-                    &nj_gfx::text::elide_by(&d.genres.join(", "), card.w - 2.0 * CARD_PAD, false, |t| {
-                        measure.width_str(t, theme::size::CAPTION, false)
-                    }),
-                );
-            }
-            synopsis(&d.summary, measure)
-                .draw(p, Rect::new(ix, card.y + CARD_PAD + 100.0, SYNOPSIS_W, 0.0));
-            p.text(
-                crate::ui::text_view::more_mark().as_ptr(),
-                card.x + card.w - CARD_PAD,
-                card.y + card.h - CARD_PAD - theme::size::CAPTION as f32,
-                theme::size::CAPTION,
-                theme::TEXT_TERTIARY,
-                2,
-                1,
-            );
-        });
-
-        self.draw_information(p, x, top + COL_Y, measure);
-        self.draw_languages(p, top + COL_Y, tracks, lang_lift, measure);
-        self.draw_accessibility(p, 1360.0, top + COL_Y, measure);
-    }
-
-    fn draw_information(&self, p: Painter, x: f32, y: f32, measure: &dyn Measure) {
-        text_at(
-            p,
-            x,
-            y,
-            theme::size::HEADLINE,
-            theme::TEXT_PRIMARY,
-            1,
-            nj_platform::i18n::msg::browse_detail_information(),
-        );
-        let mut yy = y + 68.0;
-        for (label, value) in &self.info {
-            yy += draw_pair(p, x, yy, label, value, measure);
-        }
-    }
-
-    fn draw_languages(
-        &self,
-        p: Painter,
-        y: f32,
-        tracks: bool,
-        lift: &TextLift,
-        measure: &dyn Measure,
-    ) {
-        let plate = self.languages_rect(y - COL_Y, measure);
-        draw_focused(p, plate, LIFT_RADIUS, lift, CENTRE, |p| {
-            text_at(
-                p,
-                LANG_X,
-                y,
-                theme::size::HEADLINE,
-                theme::TEXT_PRIMARY,
-                1,
-                nj_platform::i18n::msg::browse_detail_languages(),
-            );
-            let mut yy = y + 68.0;
-            if let Some(orig) = &self.orig_audio {
-                yy += draw_pair(p, LANG_X, yy, nj_platform::i18n::msg::browse_detail_original_audio(), orig, measure);
-            }
-            if !self.audio_list.is_empty() {
-                text_at(
-                    p,
-                    LANG_X,
-                    yy,
-                    theme::size::CAPTION,
-                    theme::TEXT_TERTIARY,
-                    0,
-                    nj_platform::i18n::msg::browse_detail_audio(),
-                );
-                audio_view(&self.audio_list, measure)
-                    .draw(p, Rect::new(LANG_X, yy + 34.0, LANG_W, 0.0));
-            }
-            if tracks {
-                p.text(
-                    crate::ui::text_view::more_mark().as_ptr(),
-                    plate.x + plate.w - CARD_PAD,
-                    languages_more_y(plate),
-                    theme::size::CAPTION,
-                    theme::TEXT_TERTIARY,
-                    2,
-                    1,
-                );
-            }
-        });
-    }
-
-    fn draw_accessibility(
-        &self,
-        p: Painter,
-        x: f32,
-        y: f32,
-        measure: &dyn nj_machine::machine::Measure,
-    ) {
-        text_at(
-            p,
-            x,
-            y,
-            theme::size::HEADLINE,
-            theme::TEXT_PRIMARY,
-            1,
-            nj_platform::i18n::msg::browse_detail_accessibility(),
-        );
-        if self.access.is_empty() {
-            text_at(
-                p,
-                x,
-                y + 68.0,
-                theme::size::CAPTION,
-                theme::TEXT_TERTIARY,
-                0,
-                "\u{2014}",
-            );
+    /// Draw the table at section top `top`; `focus` is its focus progress (0 idle, 1 focused).
+    pub(crate) fn draw(&self, p: Painter, top: f32, focus: f32, measure: &dyn Measure) {
+        if self.rows.is_empty() {
             return;
         }
-        let mut yy = y + 64.0;
-        for (label, desc) in &self.access {
-            crate::ui::widgets::badge(
-                p,
-                x,
-                yy + crate::ui::widgets::BADGE_H * 0.5,
-                label,
-                None,
-                crate::ui::widgets::BadgeStyle::Filled,
-                measure,
-            );
-            let h = TextView::new(desc, theme::size::CAPTION, theme::TEXT_HEADING)
-                .with_measure(measure)
-                .leading(30.0)
-                .max_lines(4)
-                .draw(p, Rect::new(x, yy + 52.0, 500.0, 0.0));
-            yy += 52.0 + h + 26.0;
+        let frame = self.languages_rect(top);
+        if focus > 0.01 {
+            let rad = theme::radius::BASE;
+            p.rrect(frame, rad, rad, theme::with_a(theme::BRAND_PANEL, theme::BRAND_PANEL[3] * focus));
+            p.rring(frame, rad, FOCUS_RING_W, theme::with_a(theme::FOCUS_RING, focus));
+        }
+        let rh = row_h();
+        let right = frame.x + frame.w - PAD_X;
+        for (i, row) in self.rows.iter().enumerate() {
+            let y = frame.y + i as f32 * rh;
+            if i > 0 {
+                let rule = theme::details_lf::DIVIDER;
+                p.rect(Rect::new(frame.x + PAD_X, y, frame.w - 2.0 * PAD_X, 1.0), 0.0, rule, rule, 0.0);
+            }
+            let cy = y + rh * 0.5;
+            if let Ok(c) = CString::new(row.label) {
+                let ty = nj_gfx::text::text_vcenter_y(LABEL_SZ, 0, cy);
+                p.text(c.as_ptr(), frame.x + PAD_X, ty, LABEL_SZ, theme::TEXT_SECONDARY, 0, 0);
+            }
+            let mut x = frame.x + PAD_X + LABEL_W;
+            for chip in &row.chips {
+                let plate = LfPlate::Chip { focused: false };
+                if x + plate.w(chip, measure) > right {
+                    break;
+                }
+                x += plate.draw(p, x, cy, chip, measure) + CHIP_GAP;
+            }
         }
     }
-}
-
-fn pair_h(value: &str, measure: &dyn Measure) -> f32 {
-    34.0 + TextView::new(value, theme::size::LABEL, theme::TEXT_HEADING)
-        .bold()
-        .with_measure(measure)
-        .leading(30.0)
-        .max_lines(2)
-        .measure_h(520.0)
-        .max(30.0)
-        + 22.0
-}
-
-fn draw_pair(p: Painter, x: f32, y: f32, label: &str, value: &str, measure: &dyn Measure) -> f32 {
-    text_at(
-        p,
-        x,
-        y,
-        theme::size::CAPTION,
-        theme::TEXT_TERTIARY,
-        0,
-        label,
-    );
-    let h = TextView::new(value, theme::size::LABEL, theme::TEXT_HEADING)
-        .bold()
-        .with_measure(measure)
-        .leading(30.0)
-        .max_lines(2)
-        .draw(p, Rect::new(x, y + 34.0, 520.0, 0.0));
-    34.0 + h.max(30.0) + 22.0
-}
-
-fn text_at(p: Painter, x: f32, y: f32, size: i32, color: [f32; 4], bold: i32, text: &str) -> f32 {
-    CString::new(text)
-        .ok()
-        .map(|s| p.text(s.as_ptr(), x, y, size, color, 0, bold))
-        .unwrap_or(0.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Issue 15: the About card's MORE is pinned on the synopsis' last line whether or not the
-    /// text was truncated, so a synopsis that fits in exactly its five lines with a long last
-    /// line runs under MORE unless that line fades too.
-    #[test]
-    fn an_untruncated_last_line_reaching_under_more_fades() {
-        let measure = crate::ui::fixture::FixtureMeasure;
-        let fits = |n: usize| {
-            let text = "word ".repeat(n);
-            (!synopsis(&text, &measure).truncates(SYNOPSIS_W)).then_some(text)
-        };
-        let longest = (1..2000).map_while(fits).last().expect("some synopsis fits");
-        let view = synopsis(&longest, &measure);
-        let mark = measure.width(crate::ui::text_view::more_mark(), theme::size::CAPTION, true);
-        assert!(!view.truncates(SYNOPSIS_W));
-        assert!(view.last_line_w(SYNOPSIS_W) > SYNOPSIS_W - (mark + MORE_GAP),
-            "precondition: the last line ends inside MORE's rect and its air");
-        assert!(view.last_line_fades(SYNOPSIS_W), "text running under MORE must fade");
-        let short = synopsis("A short synopsis.", &measure);
-        assert!(!short.last_line_fades(SYNOPSIS_W), "a line clear of MORE stays plain");
-    }
-
-    /// The Languages column's MORE is not the About card's shape: it sits on its own row below the
-    /// audio list, so even a complete list whose last line runs the full measure never reaches
-    /// under it — and that line must NOT fade.
-    #[test]
-    fn the_languages_more_sits_below_the_audio_list_so_a_complete_last_line_stays_plain() {
-        let measure = crate::ui::fixture::FixtureMeasure;
-        let fits = |n: usize| {
-            let text = "English (AAC), ".repeat(n);
-            (!audio_view(&text, &measure).truncates(LANG_W)).then_some(text)
-        };
-        let longest = (1..200).map_while(fits).last().expect("some list fits");
-        let mut rows = Rows::new();
-        rows.audio_list = longest.clone();
-        let plate = rows.languages_rect(0.0, &measure);
-        let view = audio_view(&longest, &measure);
-        let list_top = COL_Y + 68.0 + 34.0;
-        let list_h = view.measure_h(LANG_W);
-        let last_line_bottom = view.last_line_cap_y(list_top, list_h) + view.line_h();
-        assert!(languages_more_y(plate) >= last_line_bottom,
-            "MORE ({}) is below the last audio line ({last_line_bottom})", languages_more_y(plate));
-        assert!(!view.last_line_fades(LANG_W), "a complete list never fades");
+    fn movie() -> Detail {
+        Detail {
+            rk: "m".into(),
+            genres: vec!["Drama".into(), "Sci-Fi".into()],
+            directors: vec!["Ian Hubert".into()],
+            crew: vec![crate::metadata::Cast {
+                tag: "Ian Hubert".into(),
+                role: "Writer".into(),
+                thumb: String::new(),
+                id: 0,
+                tag_key: String::new(),
+            }],
+            audio: vec![
+                crate::metadata::Stream { lang: "English".into(), ..Default::default() },
+                crate::metadata::Stream { lang: "English".into(), ..Default::default() },
+            ],
+            studios: vec!["Blender Studio".into()],
+            ..Default::default()
+        }
     }
 
     #[test]
-    fn only_the_card_and_available_languages_are_focusable() {
+    fn only_the_pill_and_an_inspectable_table_are_focusable() {
         assert_eq!(locate(CARD_ELEM, false), Some(0));
         assert_eq!(locate(LANGUAGES_ELEM, false), None);
         assert_eq!(locate(LANGUAGES_ELEM, true), Some(1));
         assert_eq!(locate(ABOUT_ELEM_RANGE_START + 2, true), None);
     }
 
+    /// The table lists what the item has, in order, each language once, and drops empty rows.
     #[test]
-    fn about_focus_only_ever_lands_on_the_card_and_a_clickable_languages_column() {
-        let without_tracks: Vec<_> = (ABOUT_ELEM_RANGE_START..ABOUT_ELEM_RANGE_END)
-            .filter_map(|key| locate(key, false).map(|_| key))
-            .collect();
-        let with_tracks: Vec<_> = (ABOUT_ELEM_RANGE_START..ABOUT_ELEM_RANGE_END)
-            .filter_map(|key| locate(key, true).map(|_| key))
-            .collect();
-        assert_eq!(without_tracks, vec![CARD_ELEM]);
-        assert_eq!(with_tracks, vec![CARD_ELEM, LANGUAGES_ELEM]);
+    fn the_table_rows_are_the_items_own_and_empty_rows_take_no_room() {
+        use nj_platform::i18n::msg;
+        let rows = rows_of(&movie());
+        let labels: Vec<_> = rows.iter().map(|r| r.label).collect();
+        assert_eq!(labels, [msg::details_genres(), msg::details_directors(), msg::details_writers(), msg::details_studios(), msg::details_audio()]);
+        assert_eq!(rows[3].chips, ["Blender Studio"]);
+        assert_eq!(rows[4].chips, ["English"]);
+        assert_eq!(block_h(&movie()), MARGIN_TOP + 5.0 * row_h());
+        assert_eq!(block_h(&Detail::default()), 0.0);
     }
 
+    /// A same-identity landing that changes what the item says reaches the table once invalidated.
     #[test]
-    fn a_same_identity_metadata_landing_invalidates_cached_about_rows() {
+    fn a_same_identity_landing_rebuilds_the_rows_once_invalidated() {
         let mut rows = Rows::new();
-        let first = Detail {
-            sid: crate::catalog::ServerId::UNSET,
-            rk: "movie".into(),
-            rating: "PG".into(),
-            dur_ms: 60_000,
-            ..Default::default()
-        };
-        rows.update(&first);
-        assert!(rows
-            .info
-            .iter()
-            .any(|(label, value)| *label == "Rated" && value == "PG"));
-
-        let second = Detail {
-            rating: "R".into(),
-            dur_ms: 120_000,
-            ..first
-        };
-        rows.update(&second);
-        assert!(
-            rows.info
-                .iter()
-                .any(|(label, value)| *label == "Rated" && value == "PG"),
-            "without a landing invalidation, repeated reads remain O(1)"
-        );
+        let mut d = movie();
+        rows.update(&d);
+        d.genres = vec!["Action".into()];
+        rows.update(&d);
+        assert_eq!(rows.rows[0].chips, ["Drama", "Sci-Fi"], "same identity, not invalidated");
         rows.invalidate();
-        rows.update(&second);
-        assert!(rows
-            .info
-            .iter()
-            .any(|(label, value)| *label == "Rated" && value == "R"));
-        assert!(rows
-            .info
-            .iter()
-            .any(|(label, value)| *label == "Run Time" && value == "2 min"));
-    }
-
-    fn movie_with_audio() -> Detail {
-        Detail {
-            sid: crate::catalog::ServerId::UNSET,
-            rk: "movie".into(),
-            rating: "PG".into(),
-            summary: "word ".repeat(40),
-            audio: vec![crate::metadata::Stream {
-                lang: "en".into(),
-                codec: "ac3".into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }
-    }
-
-    fn focused(elem_card: bool) -> (TextLift, TextLift) {
-        let (mut card, mut lang) = (TextLift::new(), TextLift::new());
-        for _ in 0..240 {
-            card.step(elem_card, 1.0 / 60.0);
-            lang.step(!elem_card, 1.0 / 60.0);
-        }
-        (card, lang)
-    }
-
-    fn census(rows: &Rows, d: &Detail, card: &TextLift, lang: &TextLift) -> Vec<(u64, Rect)> {
-        let measure = crate::ui::fixture::FixtureMeasure;
-        crate::ui::draw_census::capture(|| rows.draw(Painter::recording(), d, 0.0, true, card, lang, &measure))
-    }
-
-    /// A focused About card grows its own content and nothing else: the Information column, drawn
-    /// after it, stays exactly where it does at rest.
-    #[test]
-    fn a_focused_about_card_does_not_scale_its_siblings() {
-        let _g = nj_base::testlock::serial();
-        let mut rows = Rows::new();
-        let d = movie_with_audio();
         rows.update(&d);
-        let at_rest = census(&rows, &d, &TextLift::new(), &TextLift::new());
-        let (card, lang) = focused(true);
-        assert!(card.scale() > 1.0, "precondition: the card is lifted");
-        let lifted = census(&rows, &d, &card, &lang);
-
-        let info_y = COL_Y; // `draw_information`'s heading
-        let at = |c: &[(u64, Rect)]| {
-            c.iter()
-                .find(|(tag, r)| *tag == 100 && r.x == crate::ui::consts::MARGIN_X && r.y == info_y)
-                .map(|(_, r)| *r)
-        };
-        assert!(at(&at_rest).is_some(), "precondition: the Information heading is in the census");
-        assert_eq!(at(&lifted), at(&at_rest), "a sibling must not inherit the card's scale");
-        // And the card's own content did move, so the test above is not vacuous.
-        assert_ne!(lifted, at_rest);
+        assert_eq!(rows.rows[0].chips, ["Action"]);
     }
 
-    /// Focus moving off a lifted block leaves nothing behind once it settles: the draw is exactly
-    /// the never-focused draw, for either block.
+    /// Every row label is app text and fits its 120px column in every shipped language, at the
+    /// device's own advances.
     #[test]
-    fn leaving_a_lifted_block_leaves_no_plate_or_shadow_once_settled() {
-        let _g = nj_base::testlock::serial();
-        let mut rows = Rows::new();
-        let d = movie_with_audio();
-        rows.update(&d);
-        let at_rest = census(&rows, &d, &TextLift::new(), &TextLift::new());
-
-        for on_card in [true, false] {
-            let (mut card, mut lang) = focused(on_card);
-            assert_ne!(census(&rows, &d, &card, &lang), at_rest, "precondition: focus draws something");
-            for _ in 0..240 {
-                card.step(false, 1.0 / 60.0);
-                lang.step(false, 1.0 / 60.0);
+    fn every_row_label_fits_its_column_in_every_language() {
+        use nj_platform::i18n::msg;
+        let measure = nj_base::fontcov::advances::ShippedMeasure;
+        for lang in nj_platform::i18n::SHIPPED {
+            let _locale = nj_platform::i18n::language_on_this_thread_for_test(lang);
+            for label in [
+                msg::details_genres(),
+                msg::details_directors(),
+                msg::details_writers(),
+                msg::details_studios(),
+                msg::details_audio(),
+                msg::details_subtitles(),
+            ] {
+                let w = measure.width_str(label, LABEL_SZ, false);
+                assert!(w <= LABEL_W, "{lang:?}: '{label}' is {w}px in a {LABEL_W}px column");
             }
-            assert_eq!(census(&rows, &d, &card, &lang), at_rest);
         }
     }
 }

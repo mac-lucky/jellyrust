@@ -268,6 +268,7 @@ fn composed_owner_first_run_answers_survive_full_frames() {
 
 #[test]
 fn composed_owner_settings_done_survives_then_disappears_with_reverted_draft() {
+    let _reporting = super::super::consent::offer_reporting_for_test(); // litefin: the upstream rows
     let _g = nj_base::testlock::serial();
     let (mut d, mut rig, id) = consent_opened(SettingsPage::Privacy);
     seat(&mut d, id, 0);
@@ -553,8 +554,10 @@ fn playback_picker_seats_the_saved_option_and_restores_its_parent_row() {
 }
 
 
-/// A receipt is a real async table landing: the mount had no focusable rows. The first OK after
-/// success (or a failed load's Retry row) must work without a direction key seating the engine.
+/// A receipt is a real async table landing under the page's one TV-local row (Dubbing and
+/// voice-over, key 7), which the mount lists and seats while the account load is in flight. The
+/// account rows (or a failed load's Retry, key 6) land under it, the seat stays on that top row,
+/// and the first OK works without a direction key seating the engine.
 #[test]
 fn account_preference_landing_seats_the_first_rows_and_retry_landing() {
     use crate::jf::preferences::{AudioPreferences, PreferenceError, PreferenceRequest};
@@ -566,7 +569,7 @@ fn account_preference_landing_seats_the_first_rows_and_retry_landing() {
     for fail_first in [false, true] {
         let (mut d, mut rig, id) = consent_opened(SettingsPage::AudioSubtitles);
         frame(&mut d, &mut rig, 32, vec![]);
-        assert_eq!(d.focus(), None, "loading has no rows to focus");
+        assert_eq!(d.focus(), Some(FocusKey { entry: id, elem: 7 }), "loading lists and seats the local row");
         let Some(PreferenceCmd::Load { reply }) = rig.preference_commands.pop() else {
             panic!("the screen must ask its host for the initial load");
         };
@@ -574,10 +577,11 @@ fn account_preference_landing_seats_the_first_rows_and_retry_landing() {
             Err(PreferenceError::Unavailable)
         } else { Ok(snapshot.clone()) } }).unwrap();
         frame(&mut d, &mut rig, 48, vec![]);
-        let first = if fail_first { 6 } else { 0 };
-        assert_eq!(d.focus(), Some(FocusKey { entry: id, elem: first }),
-            "the first loaded rows, including an error's Retry (key 6), must be seated");
+        assert_eq!(d.focus(), Some(FocusKey { entry: id, elem: 7 }),
+            "the rows that land, an error's Retry included, land under the seated top row");
         if fail_first {
+            frame(&mut d, &mut rig, 56, vec![key(Key::Down, tick(56))]);
+            assert_eq!(d.focus(), Some(FocusKey { entry: id, elem: 6 }), "Retry is the next row");
             frame(&mut d, &mut rig, 64, vec![key(Key::Ok, tick(64))]);
             let Some(PreferenceCmd::Load { reply }) = rig.preference_commands.pop() else {
                 panic!("OK must immediately activate Retry");
@@ -585,8 +589,9 @@ fn account_preference_landing_seats_the_first_rows_and_retry_landing() {
             frame(&mut d, &mut rig, 80, vec![]);
             reply.send(AccountPreferenceReply { request: Some(request.clone()), outcome: Ok(snapshot.clone()) }).unwrap();
             frame(&mut d, &mut rig, 96, vec![]);
-            assert_eq!(d.focus(), Some(FocusKey { entry: id, elem: 0 }));
+            assert_eq!(d.focus(), Some(FocusKey { entry: id, elem: 7 }), "a vanished Retry reopens on the top row");
         }
+        frame(&mut d, &mut rig, 104, vec![key(Key::Down, tick(104))]);
         frame(&mut d, &mut rig, 112, vec![key(Key::Ok, tick(112))]);
         assert!(path(&d, id).contains("picker DirectPlay") == false && path(&d, id).contains("picker AudioLanguage"),
             "the first OK after loading must push the language picker: {}", path(&d, id));
@@ -737,8 +742,9 @@ fn audio_subtitles_pushed_from_the_root_seats_its_first_row_when_rows_land() {
     reply.send(AccountPreferenceReply { request: Some(request), outcome: Ok(snapshot) }).unwrap();
     frame(&mut d, &mut rig, ms + 32, vec![]);
     frame(&mut d, &mut rig, ms + 48, vec![]);
-    assert_eq!(d.focus(), Some(FocusKey { entry: id, elem: 0 }),
-        "the first landed rows seat the top row, not the root's stale row {audio_row}");
+    // The top row is the TV-local Dubbing and voice-over row (key 7), listed from the mount on.
+    assert_eq!(d.focus(), Some(FocusKey { entry: id, elem: 7 }),
+        "the page seats its top row, not the root's stale row {audio_row}");
 }
 
 // ---- a rebuild that moves or drops rows, through the REAL dispatcher and focus engine ----------

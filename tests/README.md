@@ -134,8 +134,8 @@ it makes a mis-set item a named setup error instead of a mystery failure.
 
 ## Which install it drives (`--flavor`)
 
-Three builds can sit on one television: **`com.sostk.nativejelly`**, the app users install,
-**`com.sostk.nativejelly.debug`**, the developer build beside it, and **`com.sostk.nativejelly.nightly`**,
+Three builds can sit on one television: **`com.macluckylab.jellyrust`**, the app users install,
+**`com.macluckylab.jellyrust.debug`**, the developer build beside it, and **`com.macluckylab.jellyrust.nightly`**,
 the nightly build — each with its own launcher tile, its own sign-in, its own runtime files. They
 are separate apps to SAM, and a run has to drive exactly one of them end to end.
 
@@ -164,8 +164,8 @@ the other app's log, which is *plausible wrong data*, not a clean failure.
 The app's **first** log line names the install that wrote it, before anything can fail:
 
 ```
-install: id=com.sostk.nativejelly.debug flavour=debug runtime=/tmp/com.sostk.nativejelly.debug features=dev APPID_env=<value|unset>
-appdir: /media/developer/apps/usr/palm/applications/com.sostk.nativejelly.debug (from current_exe)
+install: id=com.macluckylab.jellyrust.debug flavour=debug runtime=/tmp/com.macluckylab.jellyrust.debug features=dev APPID_env=<value|unset>
+appdir: /media/developer/apps/usr/palm/applications/com.macluckylab.jellyrust.debug (from current_exe)
 ```
 
 `run.py` grades it as the log arrives and **aborts the whole run**, once and by name, if `id=` is
@@ -195,7 +195,7 @@ dev build on the stable id without `ALLOW_DEV_ON_STABLE=1`, so that install *is*
 alone — including its running app. **`pidof nativejelly` is no longer a liveness test**: it returns
 two pids, in an order busybox does not promise. Use `fuser <appdir>/nativejelly`, or resolve
 `readlink /proc/<pid>/exe` per pid. And any match on the app id must be **anchored on a delimiter**:
-`com.sostk.nativejelly` is a prefix of `com.sostk.nativejelly.debug`.
+`com.macluckylab.jellyrust` is a prefix of `com.macluckylab.jellyrust.debug`.
 
 ## Security
 

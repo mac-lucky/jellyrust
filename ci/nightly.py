@@ -197,8 +197,8 @@ def render_notes(*, label: str, sha: str, prev_tag: "str | None", ipk: str, sha2
 
     return "\n\n".join([
         f"Automatic build of `main` at [`{short_sha}`]({commit_link}). It installs beside "
-        "Native Jelly as a separate app, \"Native Jelly Nightly\", with its own launcher tile and "
-        "its own sign-in — your regular Native Jelly install is untouched.",
+        "JellyRust as a separate app, \"JellyRust Nightly\", with its own launcher tile and "
+        "its own sign-in — your regular JellyRust install is untouched.",
 
         "**This build has not been tested on a television.** It passed the same automated checks "
         "a release does — the ARM cross-build, the packaging gates, and the firmware loader "
@@ -384,7 +384,7 @@ def _selftest() -> int:
         sha256="deadbeef" * 8, repo="sostk/native-jelly",
         changes=["- session: one in-memory cache owned by the session module (#136)"],
     )
-    check("Native Jelly Nightly" in body, "notes name the nightly tile")
+    check("JellyRust Nightly" in body, "notes name the nightly tile")
     check("PlxNative" not in body and "Plex" not in body,
           "notes name this app, not the PlxNative app it was forked from")
     check("**This build has not been tested on a television.**" in body,

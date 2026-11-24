@@ -65,6 +65,12 @@ pub(super) fn execute(command: PreferenceCmd) {
                 nj_machine::idle::invalidate();
             });
         }
+        PreferenceCmd::VoicePreference { value, reply } => {
+            let _ = nj_base::storage_worker::submit_retained(move || {
+                let _ = reply.send(crate::route::set_voice_preference(value));
+                nj_machine::idle::invalidate();
+            });
+        }
         PreferenceCmd::SkipInterval { interval, reply } => {
             let _ = nj_base::storage_worker::submit_retained(move || {
                 let _ = reply.send(crate::route::set_skip_interval(interval));

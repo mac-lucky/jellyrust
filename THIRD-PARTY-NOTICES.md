@@ -1,8 +1,9 @@
 # Third-party notices
 
-This file accompanies the **Native Jelly** application package (`com.sostk.nativejelly`), an unofficial
-native Jellyfin client for LG webOS 4.x televisions. Native Jelly is a fork of PlxNative
-(Copyright (c) 2026 Gleb Linnik) and is distributed under GPL-3.0-or-later (see `LICENSE`; the
+This file accompanies the **JellyRust** application package (`com.macluckylab.jellyrust`), an unofficial
+native Jellyfin client for LG webOS 4.x televisions. JellyRust is Native Jelly (Copyright (c) 2026
+sostk) as modified by macluckylab in 2026; Native Jelly is a fork of PlxNative
+(Copyright (c) 2026 Gleb Linnik). It is distributed under GPL-3.0-or-later (see `LICENSE`; the
 brand reservation and the non-affiliation statements are in `TRADEMARKS.md`, alongside it in both
 the repository and this package).
 
@@ -171,31 +172,56 @@ The path data `M5 13l4 4L19 7` on a 24×24 grid is identical to Heroicons v1
 `optimized/outline/check.svg` (confirmed against upstream). *Modified*: stroke width 2 → 3,
 stroke colour set to white.
 
+**Remix Icon** — the left rail's and the Libraries list's marks: `home`, `favorites` (heart),
+`search`, `random` (dice), `libraries`, `settings`, `library-movies`, `library-tv` and `account`,
+and the detail page's `heart` (Remix `heart-3`), each as `-line.svg` (outline) and `-fill.svg`
+(filled) in `assets/icons/`; and the Library's controls row, `shuffle.svg` (`shuffle-line`),
+`sort.svg` (`filter-3-line`), `filter.svg` (`filter-line`) and `view-mode.svg` (`layout-grid-line`)
+Copyright (c) Remix Design (https://github.com/Remix-Design/RemixIcon). Licence: **Apache License
+2.0** (`licenses/Apache-2.0.txt`). The path data is the one Litefin's sidebar draws
+(`src/utils/Icons.js`, which carries the Remix glyphs unchanged).
+*Modified*: each path wrapped in its own SVG with an explicit white fill.
+The upstream repository contains no `NOTICE` file, so no NOTICE content is propagated.
+
 The remaining icons in the application are original work by the PlxNative author. See section 4
 for a trademark note that applies to some of them.
 
 ### 2.3 Fonts
 
-**Inter** — `appfont.ttf`, `appfont-bold.ttf`
-(`appfont-bold.ttf` also answers to the family name "PlxSubs", added as a name record.)
+**Poppins** - `appfont.ttf`, `appfont-bold.ttf`
+Copyright 2020 The Poppins Project Authors (https://github.com/itfoundry/Poppins), per the
+fonts' own name table and the licence file shipped with this package. Version 4.004, the
+Regular (400) and SemiBold (600) static TrueType files of `github.com/google/fonts` `ofl/poppins`.
+Licence: **SIL Open Font License 1.1** - the full text ships in this package as `OFL.txt`.
+*Modified*: the Devanagari codepoints are removed, tabular figures are added as copies of the
+digits centred on one common advance, and U+2669-U+266C (music notes) are drawn in. The recipe
+is `tools/cut-poppins.py`, which pins both inputs by sha256. The copyright statement declares
+**no Reserved Font Name**, so OFL section 3 imposes no rename and the family name "Poppins" is
+retained.
+
+**Inter** - `appfont-inter.ttf`, `appfont-inter-bold.ttf`
+(`appfont-inter-bold.ttf` also answers to the family name "PlxSubs", added as a name record.)
 Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter), per the fonts' own
 name table; the licence file shipped with this package states "Copyright 2020". Version
 4.001 (git-66647c0bb).
-Licence: **SIL Open Font License 1.1** — the full text ships in this package as `OFL.txt`.
+Licence: **SIL Open Font License 1.1** - the full text ships in this package as `OFL.txt`.
 *Modified*: these are static instances cut from the Inter variable font at weight 400 / 700 and
-optical size 18, with tabular figures frozen and a legacy `kern` table synthesised. Inter's
-copyright statement declares **no Reserved Font Name**, so OFL §3 imposes no rename and the
-family name "Inter" is retained. The fonts also carry the upstream trademark statement
-"Inter UI and Inter is a trademark of rsms."
+optical size 18, with tabular figures frozen and a legacy `kern` table synthesised
+(`tools/cut-inter.py`). Inter's copyright statement declares **no Reserved Font Name**, so OFL
+section 3 imposes no rename and the family name "Inter" is retained. The fonts also carry the
+upstream trademark statement "Inter UI and Inter is a trademark of rsms."
+*Why it ships:* it is the subtitle renderer's Latin family, and the second link of the UI font
+chain, drawing the Cyrillic, Greek and Latin Extended letters Poppins does not carry.
 
 **Noto Sans CJK KR** — `appfont-cjk.ttf`
 Copyright © 2014-2021 Adobe (https://www.adobe.com/), per the font's own name table. Version
 2.004, from `github.com/notofonts/noto-cjk` release `Sans2.004`, asset
 `Sans/Variable/TTF/NotoSansCJKkr-VF.ttf`.
 Licence: **SIL Open Font License 1.1** — the same text that ships in this package as `OFL.txt`.
-The licence body distributed with Noto CJK and the one distributed with Inter are identical; only
-their copyright headers differ, and both copyright statements are reproduced here and inside each
-font's own name table (IDs 0, 7, 13 and 14).
+The licence body distributed with Noto CJK and the one distributed with Poppins differ only in
+their copyright headers and in one URL line (`https://` against `http://scripts.sil.org/OFL`),
+and both copyright statements are reproduced here and inside each font's own name table (IDs 0,
+7, 13 and 14).
 *Modified*: this is a static instance cut from the variable font at weight 400, with the `GSUB`,
 `GPOS`, `GDEF`, `BASE`, `DSIG`, `vhea` and `vmtx` tables removed — all of them unreadable by
 SDL2_ttf 2.0.x, which performs no shaping and no vertical layout. **No codepoint was removed**:
@@ -205,10 +231,10 @@ derives from Adobe's Source Han Sans), which this package does not use, so OFL �
 rename and the family name "Noto Sans CJK KR" is retained. The font also carries the upstream
 trademark statement "Source is a trademark of Adobe in the United States and/or other countries."
 
-*Why it ships:* it is the second link of the application's font fallback chain. Inter covers no
-Hangul, Kana or Han, so without this face every Korean, Japanese and Chinese title in a Plex
-library renders as empty boxes. See `rust-modules/gfx/src/text.rs` for the chain and
-`rust-modules/src/fontcov.rs` for the coverage each face is required to have.
+*Why it ships:* it is the third link of the application's font fallback chain. Neither Poppins nor
+Inter covers Hangul, Kana or Han, so without this face every Korean, Japanese and Chinese title in
+a library renders as empty boxes. See `rust-modules/gfx/src/text.rs` for the chain and
+`rust-modules/base/src/fontcov.rs` for the coverage each face is required to have.
 
 **Noto Sans <script> Bold** — `fonts/subs/NotoSans<Script>-Bold.ttf` (source: `pkg/fonts/subs/`),
 22 faces: Thai, Lao, Khmer, Myanmar, Devanagari, Bengali, Gurmukhi, Gujarati, Tamil, Telugu,
@@ -223,9 +249,9 @@ and for Tibetan the archived file of `github.com/googlefonts/noto-fonts` at comm
 `ffebf8c1ee449e544955a7e813c54f9b73848eac`; every input is pinned by size and sha256 in
 `tools/cut-noto-subs.py`.
 Licence: **SIL Open Font License 1.1** — the same text that ships in this package as `OFL.txt`.
-The licence body distributed with these fonts and the one distributed with Inter are identical
-apart from one URL line; both copyright statements are reproduced here and inside each font's
-own name table. None of the copyright statements declares a **Reserved Font Name**
+The licence body distributed with these fonts and the one distributed with Poppins are the same
+SIL OFL 1.1 text, at most one URL line apart; both copyright statements are reproduced here and
+inside each font's own name table. None of the copyright statements declares a **Reserved Font Name**
 (`tools/cut-noto-subs.py` refuses a font that does), so OFL §3 imposes no rename and each family
 name ("Noto Sans Thai", ...) is retained.
 *Modified*: each is subset to the codepoints of its script (everything Inter Bold or the
@@ -519,11 +545,10 @@ runtime notices listed below:
 | `licenses/FreeType.txt` | FreeType's elected FTL and contributed module notices (§1.2) |
 | `licenses/HarfBuzz-Old-MIT.txt` | HarfBuzz and its copyright holders (§1.2) |
 
-`OFL.txt` (SIL Open Font License 1.1, for **Inter, Noto Sans CJK KR and the Noto Sans script faces** — §2.3) already ships at
+`OFL.txt` (SIL Open Font License 1.1, for **Poppins, Inter, Noto Sans CJK KR and the Noto Sans script faces** - §2.3) already ships at
 the root of this package. Keep it there; do not add a second copy under `licenses/`, and do not
-add a second copy for the other fonts: the upstream licence bodies are identical (the Noto Sans
-script faces' differs by one URL line), and
-what differs between them (the copyright statement and the Reserved Font Name) is reproduced in
+add a second copy for the other fonts: the upstream licence bodies are the same text (at most
+one URL line apart), and what differs between them (the copyright statement and the Reserved Font Name) is reproduced in
 §2.3 and carried inside each font's own name table.
 
 No BSD-3-Clause text is required because Apache-2.0 is elected for `moxcms` and `pxfm`. The full GPLv3 text is supplied at the package root as `LICENSE`; `LICENSING.md` states

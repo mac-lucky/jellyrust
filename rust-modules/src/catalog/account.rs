@@ -61,6 +61,20 @@ fn loopback_http(v: &str) -> bool {
         .map(|rest| rest.strip_suffix('/').unwrap_or(rest));
     port.is_some_and(|p| !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()))
 }
+
+/// litefin: plex.tv is a third party this Jellyfin fork never contacts. Only a loopback origin (the
+/// `/tmp/nativejelly-plextv` stand-in, the test fixtures) is dialled; anything else fails as a
+/// transport error before libcurl runs, which every caller already reads as "plex.tv did not answer".
+#[allow(clippy::too_many_arguments)]
+fn request_evidence(url: &str, headers: &[String], verb: &str, body: Option<&[u8]>,
+    t: nj_net::net::Timeouts, follow_redirects: bool, max_body: Option<usize>, resolve: Option<&str>,
+) -> Result<nj_net::net::Resp, nj_net::net::RequestFailure> {
+    let origin = url.match_indices('/').nth(2).map_or(url, |(end, _)| &url[..end]);
+    if !loopback_http(origin) {
+        return Err(nj_net::net::RequestError::Transport.into());
+    }
+    nj_net::net::request_evidence(url, headers, verb, body, t, follow_redirects, max_body, resolve)
+}
 const AUDIO_PREFERENCES_SUCCESS_TTL: Duration = Duration::from_secs(5 * 60);
 const AUDIO_PREFERENCES_FAILURE_TTL: Duration = Duration::from_secs(45);
 const AUDIO_PREFERENCES_FAILURE_TTL_MAX: Duration = Duration::from_secs(10 * 60);
@@ -276,14 +290,14 @@ impl AccountClient {
 
     fn get_evidence_with<T: DeserializeOwned>(&self, url: &str, timeouts: nj_net::net::Timeouts)
         -> Result<T, CallEvidence> {
-        let response = nj_net::net::request_evidence(url, &self.headers(), "GET", None,
+        let response = request_evidence(url, &self.headers(), "GET", None,
             timeouts, false, None, None);
         note_response_contact(url, &response);
         decode_evidence("GET", url, response)
     }
 
     fn get_raw(&self, url: &str) -> Result<nj_net::net::Resp, nj_net::net::RequestFailure> {
-        let resp = nj_net::net::request_evidence(url, &self.headers(), "GET", None,
+        let resp = request_evidence(url, &self.headers(), "GET", None,
             nj_net::net::API, false, None, None);
         note_response_contact(url, &resp);
         resp
@@ -313,7 +327,7 @@ impl AccountClient {
         timeouts: nj_net::net::Timeouts) -> AudioPreferencesOutcome
     {
         let url = format!("{}/api/v2/user", plex_tv());
-        let response = nj_net::net::request_evidence(&url, &self.headers(), "GET", None,
+        let response = request_evidence(&url, &self.headers(), "GET", None,
             timeouts, false, None, None);
         note_response_contact(&url, &response);
         match response {
@@ -328,7 +342,7 @@ impl AccountClient {
 
     /// Complete responses or safe incomplete-response evidence. No body ceiling is enabled here.
     fn post_raw(&self, url: &str) -> Result<nj_net::net::Resp, nj_net::net::RequestFailure> {
-        let resp = nj_net::net::request_evidence(url, &self.headers(), "POST", Some(b""),
+        let resp = request_evidence(url, &self.headers(), "POST", Some(b""),
             nj_net::net::API, false, None, None);
         note_response_contact(url, &resp);
         resp
@@ -351,7 +365,7 @@ impl AccountClient {
 
     pub(crate) fn create_pin_with(&self, timeouts: nj_net::net::Timeouts) -> Result<Pin, CallEvidence> {
         let url = format!("{}/api/v2/pins?strong=false", plex_tv());
-        let response = nj_net::net::request_evidence(&url, &self.headers(), "POST", Some(b""),
+        let response = request_evidence(&url, &self.headers(), "POST", Some(b""),
             timeouts, false, None, None);
         note_response_contact(&url, &response);
         decode_evidence("POST", &url, response)
@@ -366,7 +380,7 @@ impl AccountClient {
     pub fn poll_pin(&self, id: i64) -> PinPoll {
         let url = format!("{}/api/v2/pins/{id}", plex_tv());
         // Polling did not update the reachability memo; preserve that policy.
-        let response = nj_net::net::request_evidence(&url, &self.headers(), "GET", None,
+        let response = request_evidence(&url, &self.headers(), "GET", None,
             nj_net::net::API, false, None, None);
         poll_response(&url, response)
             .expect("uncapped account request cannot report a local body limit")
@@ -541,6 +555,20 @@ mod evidence_tests {
     use nj_net::net::{RequestError, RequestFailure, Resp};
 
     const SWITCH: &str = "https://plex.tv/api/v2/home/users/synthetic/switch";
+
+    /// litefin: no account call leaves the television; the refusal comes before libcurl runs.
+    #[test]
+    fn litefin_never_dials_plex_tv() {
+        let refused = |url: &str| matches!(request_evidence(url, &[], "GET", None, nj_net::net::API,
+            false, None, None), Err(RequestFailure { cause: RequestError::Transport, curl_rc: None, .. }));
+        for url in [SWITCH, "https://plex.tv/api/v2/pins?strong=false", "http://plex.tv/x",
+            "http://127.0.0.1.plex.tv:1/x", "http://localhost.plex.tv:1/x", "http://127.0.0.1:1x/"] {
+            assert!(refused(url), "{url}");
+        }
+        let discover = AccountClient::new("synthetic-client", None);
+        assert!(discover.person_profile("g").is_some_and(|p| p.summary.is_empty()));
+        assert_eq!(discover.person_credits("g").map(|c| c.len()), Some(0));
+    }
 
     /// #132: a managed profile's 401 on `/api/v2/home/users` is a verdict about the identity, and
     /// must stay one through the evidence — an incomplete transfer included — while a timeout or

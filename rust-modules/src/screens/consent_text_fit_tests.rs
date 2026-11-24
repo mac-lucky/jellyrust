@@ -11,7 +11,7 @@ use crate::ui::route_screen::RouteLayout;
 /// Every privacy row, built by the real `ConsentPage::settings`, through `TableView::fit_report`.
 #[test]
 fn every_privacy_row_fits_its_column_in_every_language() {
-    let frame_w = RouteLayout::screen().sectioned_table().w;
+    let frame_w = RouteLayout::panel().sectioned_table().w;
     let m = FixtureMeasure;
     let mut out = Vec::new();
     for language in SHIPPED {

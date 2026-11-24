@@ -9,13 +9,13 @@
 //! The password never reaches the logical state, the probe or the log: the canon carries field
 //! lengths only.
 //!
-//! **Layout** (approved redesign, 2026-10-09): two columns, each vertically centred on the screen.
-//! The left one is the narrative — a step eyebrow, a title that names the step, its explanation
-//! (on Quick Connect, three numbered instructions) and, on the first two steps, a two-row
-//! *Server → Sign in* tracker. The right one is ONE panel on the shared panel ground
-//! (`widgets::panel_ground`) holding the step's form; every control in it is full width except
-//! the server card's *Change server* pill and Quick Connect's centred pair. Focus walks the panel
-//! top to bottom ([`JfLoginScreen::order`]); Quick Connect's pair is a row.
+//! **Layout**: Litefin's *modern* sign-in (`docs/litefin-look.md` 8). A brand pane on the left
+//! (`widgets::draw_login_brand`: the app's mark, its name and a tagline at its foot) and, right of
+//! it, the step's form on the flat black page, vertically centred: the step's title (51px bold) and
+//! explanation, its inputs and buttons (72px at radius 14; Quick Connect is the accent button), and
+//! on Quick Connect a centred column with the code in the accent and a status line that pulses while
+//! the server waits for approval. Focus walks the form top to bottom ([`JfLoginScreen::order`]);
+//! Quick Connect's pair is a row.
 //!
 //! **Without encryption** (approved design "Unencrypted connection consent"): a server that
 //! answers only over plain http, in a build that never sends a credential there on its own, is
@@ -39,7 +39,6 @@ use crate::jf::auth::{AuthError, QuickConnect, SignedIn};
 use crate::catalog::Origin;
 use crate::ui::frame::Budget;
 use crate::ui::label::{HAlign, Label, VAlign};
-use crate::ui::route_screen::{RouteGround, RouteLayout};
 use crate::ui::screen::{
     Activate, At, AxisMask, Dir, DrawFrame, EdgeRule, ElemKind, Enter, FocusSource, FocusTarget,
     Focusable, GroupKind, GroupSpec, HitSource, Hover, Placed, RenderStrategy, Screen, ScreenEvent,
@@ -47,7 +46,8 @@ use crate::ui::screen::{
 };
 use crate::ui::text_buffer::TextBuffer;
 use crate::ui::text_view::TextView;
-use crate::ui::widgets::{Button, CtlPop, Spinner, CONTROL_GAP};
+use crate::ui::widgets::{login_pane, CtlPop, Spinner, CONTROL_GAP, LOGIN_AVATAR, LOGIN_CTL_H, LOGIN_INPUT_H,
+    LOGIN_PERSON_GAP, LOGIN_PERSON_H, LOGIN_PERSON_W};
 use crate::ui::{theme, Env, Painter, Rect, View};
 use nj_machine::machine::{
     Canon, Cx, Delivery, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind,
@@ -81,9 +81,15 @@ const PERSON: u32 = 100;
 /// The most people the list shows (the server's own sign-in screen pages a longer list); anyone
 /// else is *Other user*.
 const MAX_PEOPLE: usize = 11;
+/// Tiles a row of the server's list holds: Litefin's 215-wide tiles, 20 either side, across the
+/// pane's width.
 const PEOPLE_COLS: usize = 4;
-const PERSON_DISC: f32 = 120.0;
-const PERSON_H: f32 = PERSON_DISC + 16.0 + 36.0 + 30.0;
+const PEOPLE_PITCH: f32 = LOGIN_PERSON_W + LOGIN_PERSON_GAP;
+/// A list longer than two rows of four draws its tiles at this fraction, six to a row, so it stays
+/// two rows: every person the list shows and *Other user* fit.
+const PEOPLE_COMPACT: f32 = 0.62;
+const PEOPLE_COLS_COMPACT: usize = 6;
+const _: () = assert!(MAX_PEOPLE + 1 <= 2 * PEOPLE_COLS_COMPACT);
 /// `GroupId(0)` is the container's default fresh-mount target, so the first frame seats with no
 /// correction of its own.
 const GROUP: GroupId = GroupId(0);
@@ -93,15 +99,21 @@ const GROUP: GroupId = GroupId(0);
 const POLL_MS: u32 = 2_500;
 /// The *Recent* row: the server this television signed in to last, one press from reconnecting.
 const RECENT: u32 = 9;
-const LABEL_H: f32 = 32.0;
-const FIELD_H: f32 = 84.0;
-const FIELD_R: f32 = 20.0;
-const FIELD_PAD: f32 = 28.0;
-/// The panel the form stands in: its corner and its inner padding.
-const PANEL_R: f32 = 28.0;
-const PANEL_PAD: f32 = 48.0;
-/// A full-width primary control (Connect, Sign in, Quick Connect).
-const WIDE_H: f32 = 76.0;
+/// The form's measure, and Quick Connect's centred column (8: max 700).
+const FORM_W: f32 = 720.0;
+const QC_W: f32 = 700.0;
+/// The step's title (8 Right pane: 51.2/700, 8 below) and its explanation under it.
+const TITLE_SZ: i32 = theme::size::lf::S51;
+const TITLE_GAP: f32 = 8.0;
+const COPY_SZ: i32 = theme::size::lf::S22;
+const COPY_GAP: f32 = theme::space::LG;
+/// Quick Connect's instructions (8: 20.8 -> `S21`, tertiary, 48 below).
+const QC_COPY_SZ: i32 = theme::size::lf::S21;
+const QC_COPY_GAP: f32 = 48.0;
+/// A field's label (8: 19.2/600 -> `S19` bold) and its line.
+const LABEL_SZ: i32 = theme::size::lf::S19;
+const LABEL_H: f32 = 28.0;
+const HINT_H: f32 = 30.0;
 /// The server card on the sign-in step: a disc, the name and the address, and *Change server*.
 const CARD_H: f32 = 72.0;
 const CARD_DISC: f32 = 56.0;
@@ -111,24 +123,21 @@ const RECENT_H: f32 = 96.0;
 const RECENT_DISC: f32 = 52.0;
 /// The status band (spinner line, or the error box): reserved whether or not it is drawn, so a
 /// landing answer never moves a control the viewer is standing on.
-const STATUS_H: f32 = 128.0;
-/// Quick Connect's code: one cell per character.
-const CODE_CELL_W: f32 = 96.0;
-const CODE_CELL_H: f32 = 128.0;
-const CODE_GAP: f32 = 14.0;
-const CODE_R: f32 = 18.0;
-/// The QC step's pair of buttons.
-const PAIR_H: f32 = 68.0;
-/// The narrative's step tracker.
-const STEP_DISC: f32 = 44.0;
-const STEP_ROW_H: f32 = 76.0;
-const EYEBROW_H: f32 = 30.0;
-const FIELD_SZ: i32 = theme::size::HEADLINE;
-const BUTTON_SZ: i32 = theme::size::BODY;
+const STATUS_H: f32 = 116.0;
+const STATUS_SZ: i32 = theme::size::lf::S22;
+/// Quick Connect's code: 96/700 in the accent with 0.18em between its characters (8); the TV has
+/// no size from 80 up, so the HERO rung, and the tracking is laid out a character at a time.
+const CODE_SZ: i32 = theme::size::lf::S72;
+const CODE_H: f32 = 104.0;
+const CODE_TRACKING: f32 = 0.18;
+/// Quick Connect's status line (8: 17.6 -> `S18`, tertiary) pulses between these alphas over
+/// [`PULSE_MS`] while the server waits for approval.
+const QC_STATUS_SZ: i32 = theme::size::lf::S18;
+const PULSE_MS: f32 = 2_500.0;
+const PULSE_LOW: f32 = 0.5;
+const FIELD_SZ: i32 = crate::ui::widgets::LOGIN_CTL_SZ;
 const CARET_W: f32 = 3.0;
 const POP_MS: u32 = 450;
-/// A focused person in the server's list grows by the shared control pop.
-const CTRL_POP: f32 = crate::ui::widgets::CTRL_FOCUS_SCALE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stage {
@@ -186,21 +195,23 @@ struct Recent {
     address: String,
 }
 
-/// Every rect the panel draws, in screen space.
+/// Every rect the form draws, in screen space.
 struct Form {
-    panel: Rect,
+    title: Rect,
+    copy: Rect,
     card: Option<Rect>,
     labels: Vec<(u32, Rect)>,
     fields: Vec<(u32, Rect)>,
     hint: Option<Rect>,
     code: Option<Rect>,
-    code_caption: Option<Rect>,
     status: Rect,
     /// *Connect without encryption?*'s three lines.
     bullets: Vec<Rect>,
     or_rule: Option<Rect>,
     recent_caption: Option<Rect>,
     buttons: Vec<(u32, Rect)>,
+    /// The server's list's column pitch, which bounds a tile's name (`widgets::login_name_span`).
+    pitch: f32,
 }
 
 pub(crate) struct JfLoginScreen {
@@ -223,7 +234,6 @@ pub(crate) struct JfLoginScreen {
     spin: nj_machine::motion::Phase,
     spin_ms: f32,
     pop: CtlPop<3>,
-    ground: RouteGround,
     recent: Option<Recent>,
     /// *Add a user* on the server already signed in to, rather than a first sign-in.
     adding: bool,
@@ -300,7 +310,6 @@ impl JfLoginScreen {
             spin: nj_machine::motion::Phase::default(),
             spin_ms: 0.0,
             pop: CtlPop::new(),
-            ground: RouteGround::new(),
             recent,
             adding: false,
             people: None,
@@ -389,18 +398,18 @@ impl JfLoginScreen {
             return (dir == Dir::Up).then(|| *grid.last().expect("Other user is always there"));
         }
         let i = grid.iter().position(|&e| e == elem)?;
-        let n = grid.len();
+        let (n, cols) = (grid.len(), self.cols());
         match dir {
-            Dir::Left if i % PEOPLE_COLS > 0 => Some(grid[i - 1]),
-            Dir::Right if i % PEOPLE_COLS < PEOPLE_COLS - 1 && i + 1 < n => Some(grid[i + 1]),
-            Dir::Up => i.checked_sub(PEOPLE_COLS).map(|j| grid[j]),
-            Dir::Down if (i / PEOPLE_COLS + 1) * PEOPLE_COLS < n => Some(grid[(i + PEOPLE_COLS).min(n - 1)]),
+            Dir::Left if i % cols > 0 => Some(grid[i - 1]),
+            Dir::Right if i % cols < cols - 1 && i + 1 < n => Some(grid[i + 1]),
+            Dir::Up => i.checked_sub(cols).map(|j| grid[j]),
+            Dir::Down if (i / cols + 1) * cols < n => Some(grid[(i + cols).min(n - 1)]),
             Dir::Down => Some(QUICK),
             _ => None,
         }
     }
 
-    /// The server's list is a grid: its people and *Other user*, [`PEOPLE_COLS`] to a row, with
+    /// The server's list is a grid: its people and *Other user*, [`Self::cols`] to a row, with
     /// Quick Connect under it.
     fn grid(&self) -> Vec<u32> {
         let mut v: Vec<u32> = (0..self.shown().len() as u32).map(|i| PERSON + i).collect();
@@ -672,9 +681,7 @@ impl JfLoginScreen {
         if self.rx.is_none() && self.next_poll_ms.is_some_and(|due| t.ms.wrapping_sub(due) < u32::MAX / 2) {
             self.poll(fx);
         }
-        if self.spinning() {
-            self.spin_ms = self.spin.advance(t, &mut fx.present());
-        }
+        self.advance_motion(t, &mut fx.present());
         if t.ms.wrapping_sub(self.pop_until_ms) > u32::MAX / 2 {
             fx.present().note(PresentEvent::Motion);
         }
@@ -845,43 +852,109 @@ impl JfLoginScreen {
 
     /// The panel's rects for this step. Built top-down from 0, then the whole panel is centred
     /// vertically on the screen and every rect moved with it.
+    /// The column the form stands in: centred in the right pane, at most [`FORM_W`] wide; Quick
+    /// Connect's is [`QC_W`], and the server's list takes the whole pane.
+    fn column(&self) -> Rect {
+        let pane = login_pane();
+        let w = match self.stage {
+            Stage::Pick => pane.w,
+            Stage::QuickConnect => pane.w.min(QC_W),
+            _ => pane.w.min(FORM_W),
+        };
+        Rect::new(pane.x + (pane.w - w) * 0.5, pane.y, w, pane.h)
+    }
+
+    /// The step's title: the question it asks.
+    fn title_text(&self) -> String {
+        match (self.stage, &self.picked) {
+            (Stage::Consent, _) => msg::settings_plaintext_question().to_owned(),
+            (Stage::Pick, _) => msg::jellyfin_login_title_pick_user().to_owned(),
+            (Stage::Credentials, Some(person)) => msg::jellyfin_login_title_sign_in_as(&person.name),
+            (Stage::Server, _) => msg::jellyfin_login_title_server().to_owned(),
+            (Stage::Credentials, None) if !self.server_name.trim().is_empty() => {
+                msg::jellyfin_login_title_sign_in(&self.server_name)
+            }
+            (Stage::Credentials, None) => msg::jellyfin_login_title().to_owned(),
+            (Stage::QuickConnect, _) => msg::jellyfin_login_title_quick_connect().to_owned(),
+        }
+    }
+
+    /// What the step explains under its title; on Quick Connect, its three instructions.
+    fn copy_text(&self) -> String {
+        match (self.stage, &self.picked) {
+            (Stage::Consent, _) if self.consent.as_ref().is_some_and(|c| c.internet) => {
+                msg::jellyfin_login_consent_internet(&self.server_name)
+            }
+            (Stage::Consent, _) => msg::jellyfin_login_consent_home(&self.server_name),
+            (Stage::Pick, _) => msg::jellyfin_login_pick_user_intro(&self.server_name),
+            (Stage::Credentials, Some(person)) => msg::jellyfin_login_sign_in_as_intro(&person.name),
+            (Stage::Server, _) => msg::jellyfin_login_server_intro().to_owned(),
+            (Stage::QuickConnect, _) => [
+                msg::jellyfin_login_qc_step_open(),
+                msg::jellyfin_login_qc_step_profile(),
+                msg::jellyfin_login_qc_step_code(),
+            ]
+            .join("\n"),
+            _ => msg::jellyfin_login_credentials_intro().to_owned(),
+        }
+    }
+
+    fn title_view<'t>(&self, title: &'t str) -> TextView<'t> {
+        let align = if self.stage == Stage::QuickConnect { HAlign::Center } else { HAlign::Left };
+        TextView::new(title, TITLE_SZ, theme::TEXT_PRIMARY).bold().leading(TITLE_SZ as f32 * 1.15).h(align)
+    }
+
+    fn copy_view<'t>(&self, copy: &'t str) -> TextView<'t> {
+        if self.stage == Stage::QuickConnect {
+            // Litefin's tertiary ink is legal here: this is the bare page
+            TextView::new(copy, QC_COPY_SZ, theme::TEXT_FAINT).leading(QC_COPY_SZ as f32 * 1.5).h(HAlign::Center)
+        } else {
+            TextView::new(copy, COPY_SZ, theme::TEXT_SECONDARY).leading(COPY_SZ as f32 * 1.45)
+        }
+    }
+
     fn form(&self, measure: &dyn Measure) -> Form {
-        let layout = RouteLayout::screen();
-        let px = layout.content.x;
-        let pw = layout.content.w;
-        let x = px + PANEL_PAD;
-        let w = pw - 2.0 * PANEL_PAD;
-        let mut y = PANEL_PAD;
+        let col = self.column();
+        let (x, w) = (col.x, col.w);
+        let (title, copy) = (self.title_text(), self.copy_text());
+        let title_h = self.title_view(&title).with_measure(measure).measure_h(w);
+        let copy_h = self.copy_view(&copy).with_measure(measure).measure_h(w);
         let mut form = Form {
-            panel: Rect::new(px, 0.0, pw, 0.0),
+            title: Rect::new(x, 0.0, w, title_h),
+            copy: Rect::new(x, title_h + TITLE_GAP, w, copy_h),
             card: None,
             labels: Vec::new(),
             fields: Vec::new(),
             hint: None,
             code: None,
-            code_caption: None,
             status: Rect::new(x, 0.0, w, STATUS_H),
             bullets: Vec::new(),
             or_rule: None,
             recent_caption: None,
             buttons: Vec::new(),
+            pitch: PEOPLE_PITCH,
         };
+        let mut y = title_h + TITLE_GAP + copy_h
+            + if self.stage == Stage::QuickConnect { QC_COPY_GAP } else { COPY_GAP };
         let field = |form: &mut Form, y: &mut f32, field: u32| {
             form.labels.push((field, Rect::new(x, *y, w, LABEL_H)));
             *y += LABEL_H + theme::space::XS;
-            form.fields.push((field, Rect::new(x, *y, w, FIELD_H)));
-            *y += FIELD_H;
+            form.fields.push((field, Rect::new(x, *y, w, LOGIN_INPUT_H)));
+            *y += LOGIN_INPUT_H;
+        };
+        let button = |form: &mut Form, y: &mut f32, b: u32| {
+            form.buttons.push((b, Rect::new(x, *y, w, LOGIN_CTL_H)));
+            *y += LOGIN_CTL_H;
         };
         match self.stage {
             Stage::Server => {
                 field(&mut form, &mut y, SERVER);
                 y += theme::space::XS;
-                form.hint = Some(Rect::new(x, y, w, LABEL_H));
-                y += LABEL_H + theme::space::XS;
+                form.hint = Some(Rect::new(x, y, w, HINT_H));
+                y += HINT_H;
                 form.status.y = y;
                 y += STATUS_H;
-                form.buttons.push((CONNECT, Rect::new(x, y, w, WIDE_H)));
-                y += WIDE_H;
+                button(&mut form, &mut y, CONNECT);
                 if self.recent.is_some() {
                     y += theme::space::LG;
                     form.or_rule = Some(Rect::new(x, y, w, 1.0));
@@ -896,7 +969,7 @@ impl JfLoginScreen {
                 let card = Rect::new(x, y, w, CARD_H);
                 form.card = Some(card);
                 if self.offers_change() {
-                    let cw = Button::pill_w_measured(&self.label_of(CHANGE), BUTTON_SZ, false, false, measure);
+                    let cw = measure.width(&self.label_of(CHANGE), FIELD_SZ, true) + 2.0 * theme::space::MD;
                     form.buttons.push((CHANGE, Rect::new(x + w - cw, card.cy() - CHANGE_H * 0.5, cw, CHANGE_H)));
                 }
                 y += CARD_H + theme::space::MD;
@@ -910,34 +983,31 @@ impl JfLoginScreen {
                 y += theme::space::XS;
                 form.status.y = y;
                 y += STATUS_H;
-                form.buttons.push((SIGN_IN, Rect::new(x, y, w, WIDE_H)));
-                y += WIDE_H + theme::space::MD;
+                button(&mut form, &mut y, SIGN_IN);
+                y += theme::space::MD;
                 form.recent_caption = Some(Rect::new(x, y, w, LABEL_H));
                 y += LABEL_H + theme::space::MD;
-                form.buttons.push((QUICK, Rect::new(x, y, w, WIDE_H)));
-                y += WIDE_H;
+                button(&mut form, &mut y, QUICK);
             }
             Stage::QuickConnect => {
-                form.card = Some(Rect::new(x, y, w, LABEL_H));
-                y += LABEL_H + theme::space::LG;
-                form.code_caption = Some(Rect::new(x, y, w, LABEL_H));
-                y += LABEL_H + theme::space::SM;
-                form.code = Some(Rect::new(x, y, w, CODE_CELL_H));
-                y += CODE_CELL_H + theme::space::SM;
+                form.code = Some(Rect::new(x, y, w, CODE_H));
+                y += CODE_H + theme::space::SM;
                 form.status.y = y;
                 y += STATUS_H;
                 let pair: &[u32] = if self.offers_change() { &[USE_PASSWORD, CHANGE] } else { &[USE_PASSWORD] };
                 let ws: Vec<f32> = pair
                     .iter()
-                    .map(|&b| Button::pill_w_measured(&self.label_of(b), BUTTON_SZ, false, false, measure))
+                    .map(|&b| measure.width(&self.label_of(b), FIELD_SZ, true) + 2.0 * theme::space::LG)
                     .collect();
                 let total = ws.iter().sum::<f32>() + CONTROL_GAP * (pair.len() - 1) as f32;
                 let mut bx = x + ((w - total) * 0.5).max(0.0);
                 for (&b, bw) in pair.iter().zip(ws) {
-                    form.buttons.push((b, Rect::new(bx, y, bw, PAIR_H)));
+                    form.buttons.push((b, Rect::new(bx, y, bw, LOGIN_CTL_H)));
                     bx += bw + CONTROL_GAP;
                 }
-                y += PAIR_H;
+                y += LOGIN_CTL_H + theme::space::LG;
+                form.card = Some(Rect::new(x, y, w, LABEL_H));
+                y += LABEL_H;
             }
             Stage::Consent => {
                 form.card = Some(Rect::new(x, y, w, CARD_H));
@@ -950,42 +1020,51 @@ impl JfLoginScreen {
                 }
                 form.status.y = y;
                 y += STATUS_H;
-                form.buttons.push((ALLOW, Rect::new(x, y, w, WIDE_H)));
-                y += WIDE_H + theme::space::MD;
-                form.buttons.push((NOT_NOW, Rect::new(x, y, w, WIDE_H)));
-                y += WIDE_H;
+                button(&mut form, &mut y, ALLOW);
+                y += theme::space::MD;
+                button(&mut form, &mut y, NOT_NOW);
             }
             Stage::Pick => {
-                form.card = Some(Rect::new(x, y, w, LABEL_H));
-                y += LABEL_H + theme::space::LG;
                 let grid = self.grid();
-                let cell_w = w / PEOPLE_COLS as f32;
+                let cols = self.cols();
+                let rows = grid.len().div_ceil(cols);
+                // below `tile_scale` only where the measured title and copy leave the rows, the
+                // status band, the caption and Quick Connect less than the safe area's height
+                let below = STATUS_H + LABEL_H + theme::space::MD + LOGIN_CTL_H + (rows - 1) as f32 * theme::space::MD;
+                let room = (crate::ui::consts::SAFE.h - y - below) / rows as f32;
+                // (floored: a server name that wraps the copy for many lines still leaves tiles)
+                let k = self.tile_scale().min((room - (LOGIN_PERSON_H - LOGIN_AVATAR)) / LOGIN_AVATAR)
+                    .max(PEOPLE_COMPACT * 0.5);
+                let pitch = PEOPLE_PITCH * k;
+                form.pitch = pitch;
+                let x0 = x + ((w - cols.min(grid.len()) as f32 * pitch) * 0.5).max(0.0);
+                let (d, row_h) = (LOGIN_AVATAR * k, LOGIN_PERSON_H - LOGIN_AVATAR * (1.0 - k));
                 for (i, &elem) in grid.iter().enumerate() {
-                    let (row, col) = (i / PEOPLE_COLS, i % PEOPLE_COLS);
-                    let cy = y + row as f32 * (PERSON_H + theme::space::MD);
-                    let cx = x + col as f32 * cell_w + (cell_w - PERSON_DISC) * 0.5;
-                    form.buttons.push((elem, Rect::new(cx, cy, PERSON_DISC, PERSON_DISC)));
+                    let (row, col) = (i / cols, i % cols);
+                    let cy = y + row as f32 * (row_h + theme::space::MD);
+                    let cx = x0 + col as f32 * pitch + (pitch - d) * 0.5;
+                    form.buttons.push((elem, Rect::new(cx, cy, d, d)));
                 }
-                let rows = grid.len().div_ceil(PEOPLE_COLS);
-                y += rows as f32 * PERSON_H + (rows - 1) as f32 * theme::space::MD;
+                y += rows as f32 * row_h + (rows - 1) as f32 * theme::space::MD;
                 form.status.y = y;
                 y += STATUS_H;
-                form.recent_caption = Some(Rect::new(x, y, w, LABEL_H));
+                // the "or" and Quick Connect stand at the form's measure, centred under the list
+                let (bx, bw) = (x + (w - w.min(FORM_W)) * 0.5, w.min(FORM_W));
+                form.recent_caption = Some(Rect::new(bx, y, bw, LABEL_H));
                 y += LABEL_H + theme::space::MD;
-                form.buttons.push((QUICK, Rect::new(x, y, w, WIDE_H)));
-                y += WIDE_H;
+                form.buttons.push((QUICK, Rect::new(bx, y, bw, LOGIN_CTL_H)));
+                y += LOGIN_CTL_H;
             }
         }
-        let h = y + PANEL_PAD;
         let safe = crate::ui::consts::SAFE;
-        let top = (safe.y + (safe.h - h) * 0.5).max(layout.content.y.min(safe.y));
-        form.panel = Rect::new(px, top, pw, h);
+        let top = safe.y + ((safe.h - y) * 0.5).max(0.0);
         let mv = |r: &mut Rect| r.y += top;
+        mv(&mut form.title);
+        mv(&mut form.copy);
         form.card.as_mut().map(mv);
         form.bullets.iter_mut().for_each(mv);
         form.hint.as_mut().map(mv);
         form.code.as_mut().map(mv);
-        form.code_caption.as_mut().map(mv);
         form.or_rule.as_mut().map(mv);
         form.recent_caption.as_mut().map(mv);
         mv(&mut form.status);
@@ -993,6 +1072,21 @@ impl JfLoginScreen {
             mv(r);
         }
         form
+    }
+
+    /// The server's list draws its tiles at full size in up to two rows of four, compact beyond
+    /// that ([`Self::cols`]); `form` shrinks either further only to fit the safe area.
+    fn tile_scale(&self) -> f32 {
+        if self.compact() { PEOPLE_COMPACT } else { 1.0 }
+    }
+
+    fn compact(&self) -> bool {
+        self.grid().len() > 2 * PEOPLE_COLS
+    }
+
+    /// Tiles a row of the server's list holds: four, or six compact ones.
+    fn cols(&self) -> usize {
+        if self.compact() { PEOPLE_COLS_COMPACT } else { PEOPLE_COLS }
     }
 
     /// A button's words: [`button_label`], except that adding a user, the way back from the
@@ -1024,18 +1118,20 @@ impl JfLoginScreen {
             }
     }
 
-    fn draw_field(&self, p: Painter, field: u32, rect: Rect, focused: bool, measure: &dyn Measure) {
+    /// An input as Litefin draws it (`widgets::draw_login_input`), its text and, editing, the caret.
+    fn draw_field(&self, p: Painter, field: u32, rect: Rect, focused: bool, focus: f32, measure: &dyn Measure) {
         let editing = self.editing == Some(field);
-        let fill = if focused { theme::with_a(theme::TEXT_PRIMARY, 0.14) } else { theme::CONTROL_IDLE_FILL };
-        p.rrect(rect, FIELD_R, FIELD_R, fill);
-        if focused {
-            p.rring(rect, FIELD_R, 3.0, theme::ACCENT);
-        } else if self.faulted(field) {
-            p.rring(rect, FIELD_R, 2.0, theme::DANGER);
-        } else {
-            p.rring(rect, FIELD_R, 1.5, theme::HAIRLINE);
+        let mark = match field {
+            SERVER => crate::ui::icons::Icon::Server,
+            PASS => crate::ui::icons::Icon::Lock,
+            _ => crate::ui::icons::Icon::User,
+        };
+        let r = crate::ui::widgets::draw_login_input(p, rect, mark, focused, focus);
+        if !focused && self.faulted(field) {
+            p.rring(r, theme::settings_lf::LOGIN_RAD, 2.0, theme::DANGER);
         }
-        let inner = Rect::new(rect.x + FIELD_PAD, rect.y, rect.w - 2.0 * FIELD_PAD, rect.h);
+        let x = r.x + crate::ui::widgets::LOGIN_INPUT_TEXT_X;
+        let inner = Rect::new(x, r.y, r.x + r.w - crate::ui::widgets::LOGIN_INPUT_PAD_R - x, r.h);
         let buf = self.buffer(field);
         let (shown, head) = if field == PASS {
             let mask = |s: &str| "\u{2022}".repeat(s.chars().count());
@@ -1062,38 +1158,52 @@ impl JfLoginScreen {
         if editing {
             let cap = measure.cap_h(FIELD_SZ);
             let h = cap * 1.7;
-            p.rrect(Rect::new(caret_x + 2.0, rect.y + (rect.h - h) * 0.5, CARET_W, h), 1.5, 1.5, theme::ACCENT);
+            p.rrect(Rect::new(caret_x + 2.0, r.y + (r.h - h) * 0.5, CARET_W, h), 1.5, 1.5, theme::BRAND_FILL);
         }
     }
 
-    /// One inset cell per character of the Quick Connect code, centred in `rect`.
-    fn draw_code(&self, p: Painter, rect: Rect) {
+    /// The Quick Connect code, centred in `rect` in the accent, a character at a time so its
+    /// characters stand [`CODE_TRACKING`] of an em apart (the text engine has no letter spacing).
+    fn draw_code(&self, p: Painter, rect: Rect, measure: &dyn Measure) {
         let Some(qc) = &self.qc else {
             return;
         };
-        let n = qc.code.chars().count();
-        if n == 0 {
-            return;
-        }
-        let total = n as f32 * CODE_CELL_W + (n - 1) as f32 * CODE_GAP;
-        let cell_w = if total > rect.w { (rect.w - (n - 1) as f32 * CODE_GAP) / n as f32 } else { CODE_CELL_W };
-        let total = n as f32 * cell_w + (n - 1) as f32 * CODE_GAP;
-        let x0 = rect.x + (rect.w - total) * 0.5;
-        for (i, ch) in qc.code.chars().enumerate() {
-            let cell = Rect::new(x0 + i as f32 * (cell_w + CODE_GAP), rect.y, cell_w, rect.h);
-            p.rrect(cell, CODE_R, CODE_R, theme::scrim(0.40));
-            p.rring(cell, CODE_R, 1.0, theme::HAIRLINE);
-            let glyph = cstring(&ch.to_string());
-            Label::new(glyph.as_ptr(), theme::size::HERO, theme::TEXT_PRIMARY)
+        let glyphs: Vec<CString> = qc.code.chars().map(|c| cstring(&c.to_string())).collect();
+        let widths: Vec<f32> = glyphs.iter().map(|g| measure.width(g, CODE_SZ, true)).collect();
+        let track = CODE_SZ as f32 * CODE_TRACKING;
+        let total = widths.iter().sum::<f32>() + track * glyphs.len().saturating_sub(1) as f32;
+        let mut x = rect.cx() - total * 0.5;
+        for (glyph, w) in glyphs.iter().zip(widths) {
+            Label::new(glyph.as_ptr(), CODE_SZ, theme::BRAND_FILL)
                 .bold()
-                .h(HAlign::Center)
                 .v(VAlign::Middle)
-                .draw(p, cell);
+                .draw(p, Rect::new(x, rect.y, w + 1.0, rect.h));
+            x += w + track;
         }
     }
 
-    fn draw_status(&self, p: Painter, rect: Rect, centred: bool, measure: &dyn Measure) {
+    /// Quick Connect's status line's alpha: [`PULSE_LOW`]..1 and back over [`PULSE_MS`], on the
+    /// same clock that drives the busy spinner (it runs while the server is waited on).
+    fn pulse(&self) -> f32 {
+        let (_, cos) = nj_machine::motion::sin_cos((self.spin_ms / PULSE_MS) * std::f32::consts::TAU);
+        PULSE_LOW + (1.0 - PULSE_LOW) * 0.5 * (1.0 + cos)
+    }
+
+    /// Advance the clock the spinner and the pulse read, reporting motion while it runs.
+    fn advance_motion(&mut self, t: Tick, present: &mut nj_machine::machine::PresentHandle<'_>) {
         if self.spinning() {
+            self.spin_ms = self.spin.advance(t, present);
+        }
+    }
+
+    fn draw_status(&self, p: Painter, rect: Rect, measure: &dyn Measure) {
+        if self.stage == Stage::QuickConnect && self.waiting() && self.busy.is_none() {
+            // Litefin's status line: quiet, centred, breathing while the server waits
+            TextView::new(msg::jellyfin_login_waiting(), QC_STATUS_SZ, theme::TEXT_FAINT)
+                .h(HAlign::Center)
+                .max_lines(1)
+                .draw(p.alpha(self.pulse()), Rect::new(rect.x, rect.y + theme::space::SM, rect.w, rect.h));
+        } else if self.spinning() {
             let line = match self.busy {
                 Some(Busy::Connecting) => msg::jellyfin_login_connecting_c(),
                 Some(Busy::SigningIn | Busy::Adopting) => msg::jellyfin_login_signing_in_c(),
@@ -1101,14 +1211,15 @@ impl JfLoginScreen {
                 None => msg::jellyfin_login_waiting_c(),
             };
             let gutter = Spinner::inline_gutter();
-            let text_w = measure.width(line, theme::size::BODY, false);
+            let text_w = measure.width(line, STATUS_SZ, false);
+            let centred = self.stage == Stage::QuickConnect;
             let x = if centred { rect.x + ((rect.w - gutter - text_w) * 0.5).max(0.0) } else { rect.x };
             let row = Rect::new(x, rect.y, rect.w - (x - rect.x), rect.h);
             Spinner::leading(row.x, row.cy())
                 .phase(self.spin_ms as u32)
                 .tint(theme::TEXT_SECONDARY)
                 .draw(&Env::inert(), p);
-            Label::new(line.as_ptr(), theme::size::BODY, theme::TEXT_SECONDARY)
+            Label::new(line.as_ptr(), STATUS_SZ, theme::TEXT_SECONDARY)
                 .v(VAlign::Middle)
                 .draw(p, Rect::new(row.x + gutter, row.y, row.w - gutter, row.h));
         } else if let Some(error) = &self.error {
@@ -1120,12 +1231,13 @@ impl JfLoginScreen {
             let mx = rect.x + pad;
             let tx = mx + mark + pad;
             let tw = rect.x + rect.w - pad - tx;
-            let view = TextView::new(error, theme::size::LABEL, theme::TEXT_PRIMARY)
+            let view = TextView::new(error, STATUS_SZ, theme::TEXT_PRIMARY)
                 .with_measure(measure)
                 .max_lines(2);
             let th = view.measure_h(tw);
             let boxed = Rect::new(rect.x, rect.y + theme::space::XS, rect.w, th + 2.0 * pad);
-            p.rrect(boxed, 16.0, 16.0, theme::with_a(theme::DANGER, theme::DANGER_IDLE_TINT));
+            p.rrect(boxed, theme::settings_lf::LOGIN_RAD, theme::settings_lf::LOGIN_RAD,
+                theme::with_a(theme::DANGER, theme::DANGER_IDLE_TINT));
             crate::ui::icons::draw(
                 p,
                 crate::ui::icons::Icon::Alert,
@@ -1136,21 +1248,21 @@ impl JfLoginScreen {
         }
     }
 
-    /// A disc holding a mark: the server card's, the Recent row's and the step tracker's.
+    /// A disc holding a mark: the server card's and the Recent row's.
     fn disc(p: Painter, center_x: f32, center_y: f32, d: f32, fill: [f32; 4]) -> Rect {
         let r = Rect::new(center_x - d * 0.5, center_y - d * 0.5, d, d);
         p.rrect(r, d * 0.5, d * 0.5, fill);
         r
     }
 
-    /// The person picked from the server's list, as the password step heads its panel: their avatar,
+    /// The person picked from the server's list, as the password step heads its form: their avatar,
     /// their name, the server — and *Not name?* beside them.
     fn draw_person_card(&self, p: Painter, person: &Person, rect: Rect, change_x: f32) {
         let disc = Rect::new(rect.x, rect.cy() - CARD_DISC * 0.5, CARD_DISC, CARD_DISC);
         crate::ui::widgets::avatar_disc(p, disc, &person.name, &person.id, false, theme::size::HEADLINE);
         let tx = disc.x + disc.w + theme::space::MD;
         let tw = (change_x - theme::space::MD - tx).max(0.0);
-        TextView::new(&person.name, theme::size::BODY, theme::TEXT_PRIMARY)
+        TextView::new(&person.name, theme::size::lf::S26, theme::TEXT_PRIMARY)
             .bold()
             .max_lines(1)
             .draw(p, Rect::new(tx, rect.y + 2.0, tw, rect.h * 0.5));
@@ -1158,63 +1270,31 @@ impl JfLoginScreen {
             Some(origin) => format!("{} \u{b7} {}:{}", self.server_name, origin.host(), origin.port()),
             None => self.server_name.clone(),
         };
-        TextView::new(&server, theme::size::CAPTION, theme::TEXT_TERTIARY)
+        TextView::new(&server, theme::size::lf::S19, theme::TEXT_TERTIARY)
             .max_lines(1)
             .draw(p, Rect::new(tx, rect.y + rect.h * 0.5 + 4.0, tw, rect.h * 0.5));
     }
 
-    /// One tile of the server's list: the person's avatar (or *Other user*'s outline), their name,
-    /// and — someone already on this television — "On this TV", the whole tile quietened.
-    fn draw_person(&self, p: Painter, elem: u32, rect: Rect, focused: bool, scale: f32) {
-        let r = Rect::new(
-            rect.cx() - rect.w * scale * 0.5,
-            rect.cy() - rect.h * scale * 0.5,
-            rect.w * scale,
-            rect.h * scale,
-        );
+    /// One tile of the server's list (`widgets::draw_login_person`): the person's avatar, or
+    /// *Other user*'s mark, their name, and — someone already on this television — "On this TV",
+    /// the whole tile quietened.
+    fn draw_person(&self, p: Painter, elem: u32, rect: Rect, pitch: f32, focused: bool, scale: f32) {
+        use crate::ui::widgets::{draw_login_person, LoginPerson};
         let person = self.person(elem);
         let on_tv = person.is_some_and(|p| p.on_tv.is_some());
         let p = if on_tv && !focused { p.alpha(0.55) } else { p };
-        let name = match person {
-            Some(person) => {
-                crate::ui::widgets::avatar_disc(p, r, &person.name, &person.id, focused, theme::size::DISPLAY);
-                person.name.as_str()
-            }
-            None => {
-                let rad = r.w * 0.5;
-                p.rrect(r, rad, rad, theme::CONTROL_IDLE_FILL_UNKEYED);
-                p.rring(r, rad, if focused { 5.0 } else { 2.0 },
-                    if focused { theme::CONTROL_RIM_FOCUS_UNKEYED } else { theme::CONTROL_RIM_IDLE_UNKEYED });
-                let mark = r.w * 0.42;
-                crate::ui::icons::draw(
-                    p,
-                    crate::ui::icons::Icon::User,
-                    Rect::new(r.cx() - mark * 0.5, r.cy() - mark * 0.5, mark, mark),
-                    if focused { theme::TEXT_PRIMARY } else { theme::TEXT_SECONDARY },
-                );
-                msg::jellyfin_login_other_user()
-            }
-        };
-        let cell_w = rect.w + 2.0 * theme::space::LG;
-        let tx = rect.cx() - cell_w * 0.5;
-        let ty = rect.y + rect.h + (r.h - rect.h) * 0.5 + 16.0;
-        let ink = if focused { theme::TEXT_PRIMARY } else { theme::TEXT_SECONDARY };
-        let mut view = TextView::new(name, theme::size::LABEL, ink).h(HAlign::Center).max_lines(1);
-        if focused {
-            view = view.bold();
-        }
-        view.draw(p, Rect::new(tx, ty, cell_w, 36.0));
-        if on_tv {
-            TextView::new(msg::jellyfin_login_on_this_tv(), theme::size::MICRO, theme::TEXT_TERTIARY)
-                .h(HAlign::Center)
-                .max_lines(1)
-                .draw(p, Rect::new(tx, ty + 34.0, cell_w, 30.0));
+        let sub = on_tv.then(msg::jellyfin_login_on_this_tv);
+        match person {
+            Some(person) => draw_login_person(p, rect, pitch, LoginPerson::Person { name: &person.name, id: &person.id },
+                &person.name, sub, focused, scale),
+            None => draw_login_person(p, rect, pitch, LoginPerson::Mark(crate::ui::icons::Icon::User),
+                msg::jellyfin_login_other_user(), None, focused, scale),
         }
     }
 
     /// The server card: the server's mark, its name and its address, *Change server* beside them.
     fn draw_card(&self, p: Painter, rect: Rect, change_x: f32) {
-        let disc = Self::disc(p, rect.x + CARD_DISC * 0.5, rect.cy(), CARD_DISC, theme::CONTROL_IDLE_FILL_UNKEYED);
+        let disc = Self::disc(p, rect.x + CARD_DISC * 0.5, rect.cy(), CARD_DISC, theme::settings_lf::LOGIN_FILL);
         let mark = CARD_DISC * 0.5;
         crate::ui::icons::draw(
             p,
@@ -1224,7 +1304,7 @@ impl JfLoginScreen {
         );
         let tx = disc.x + disc.w + theme::space::MD;
         let tw = (change_x - theme::space::MD - tx).max(0.0);
-        TextView::new(&self.server_name, theme::size::BODY, theme::TEXT_PRIMARY)
+        TextView::new(&self.server_name, theme::size::lf::S26, theme::TEXT_PRIMARY)
             .bold()
             .max_lines(1)
             .draw(p, Rect::new(tx, rect.y + 2.0, tw, rect.h * 0.5));
@@ -1238,11 +1318,11 @@ impl JfLoginScreen {
                 crate::ui::icons::draw(p, crate::ui::icons::Icon::LockOpen,
                     Rect::new(line.x, line.y + 2.0, mark, mark), ink);
                 let text = format!("{} \u{b7} {address}", msg::jellyfin_login_not_encrypted());
-                TextView::new(&text, theme::size::CAPTION, ink)
+                TextView::new(&text, theme::size::lf::S19, ink)
                     .max_lines(1)
                     .draw(p, Rect::new(line.x + mark + theme::space::XS, line.y, line.w - mark - theme::space::XS, line.h));
             } else {
-                TextView::new(&address, theme::size::CAPTION, theme::TEXT_TERTIARY).max_lines(1).draw(p, line);
+                TextView::new(&address, theme::size::lf::S19, theme::TEXT_TERTIARY).max_lines(1).draw(p, line);
             }
         }
     }
@@ -1258,51 +1338,43 @@ impl JfLoginScreen {
         for (&rect, (icon, text)) in rects.iter().zip(lines) {
             crate::ui::icons::draw(p, icon, Rect::new(rect.x, rect.y + 4.0, BULLET_MARK, BULLET_MARK), theme::TEXT_SECONDARY);
             let tx = rect.x + BULLET_MARK + theme::space::MD;
-            TextView::new(text, theme::size::LABEL, theme::TEXT_READING)
+            TextView::new(text, COPY_SZ, theme::TEXT_READING)
                 .with_measure(measure)
                 .max_lines(2)
                 .draw(p, Rect::new(tx, rect.y, rect.w - (tx - rect.x), rect.h));
         }
     }
 
-    /// Quick Connect's one-line server reminder, centred over the code.
+    /// Quick Connect's one-line server reminder, centred under its buttons.
     fn draw_server_line(&self, p: Painter, rect: Rect, measure: &dyn Measure) {
         let line = match &self.origin {
             Some(origin) => format!("{} \u{b7} {}:{}", self.server_name, origin.host(), origin.port()),
             None => self.server_name.clone(),
         };
-        let mark = 26.0;
-        let gap = theme::space::SM;
-        let tw = measure.width_str(&line, theme::size::CAPTION, false).min(rect.w - mark - gap);
+        let mark = 24.0;
+        let gap = theme::space::XS;
+        let sz = theme::size::lf::S19;
+        let tw = measure.width_str(&line, sz, false).min(rect.w - mark - gap);
         let x = rect.x + ((rect.w - mark - gap - tw) * 0.5).max(0.0);
         crate::ui::icons::draw(
             p,
             crate::ui::icons::Icon::Server,
             Rect::new(x, rect.cy() - mark * 0.5, mark, mark),
-            theme::TEXT_SECONDARY,
+            theme::TEXT_FAINT,
         );
-        TextView::new(&line, theme::size::CAPTION, theme::TEXT_SECONDARY)
+        TextView::new(&line, sz, theme::TEXT_FAINT)
             .max_lines(1)
-            .draw(p, Rect::new(x + mark + gap, rect.y + 2.0, tw + 1.0, rect.h));
+            .draw(p, Rect::new(x + mark + gap, rect.cy() - measure.cap_h(sz) * 0.5, tw + 1.0, rect.h));
     }
 
-    /// The *Recent* row: a full-width row that wears the focus fill like a table row.
-    fn draw_recent(&self, p: Painter, rect: Rect, focused: bool, scale: f32) {
+    /// The *Recent* row: a secondary control holding the server's mark, name and address.
+    fn draw_recent(&self, p: Painter, rect: Rect, focused: bool, focus: f32) {
+        use crate::ui::widgets::{draw_login_face, login_popped, LoginKind};
         let Some(recent) = &self.recent else { return };
-        let r = Rect::new(
-            rect.cx() - rect.w * scale * 0.5,
-            rect.cy() - rect.h * scale * 0.5,
-            rect.w * scale,
-            rect.h * scale,
-        );
-        let (fill, ink, sub) = if focused {
-            (theme::ACCENT, theme::INK_ON_ACCENT, theme::with_a(theme::INK_ON_ACCENT, 0.62))
-        } else {
-            (theme::CONTROL_IDLE_FILL, theme::TEXT_PRIMARY, theme::TEXT_TERTIARY)
-        };
-        p.rrect(r, FIELD_R, FIELD_R, fill);
-        let disc_fill = if focused { theme::with_a(theme::INK_ON_ACCENT, 0.10) } else { theme::CONTROL_IDLE_FILL_UNKEYED };
-        let disc = Self::disc(p, r.x + theme::space::MD + RECENT_DISC * 0.5, r.cy(), RECENT_DISC, disc_fill);
+        let r = login_popped(rect, LoginKind::Secondary, focus);
+        draw_login_face(p, r, LoginKind::Secondary, focused);
+        let ink = LoginKind::Secondary.ink(focused);
+        let disc = Self::disc(p, r.x + theme::space::MD + RECENT_DISC * 0.5, r.cy(), RECENT_DISC, theme::CARD_BG_HOVER);
         let mark = RECENT_DISC * 0.5;
         crate::ui::icons::draw(
             p,
@@ -1312,192 +1384,37 @@ impl JfLoginScreen {
         );
         let tx = disc.x + disc.w + theme::space::MD;
         let tw = (r.x + r.w - theme::space::MD - tx).max(0.0);
-        TextView::new(&recent.name, theme::size::BODY, ink)
+        TextView::new(&recent.name, theme::size::lf::S26, ink)
             .bold()
             .max_lines(1)
             .draw(p, Rect::new(tx, r.y + 16.0, tw, r.h * 0.5));
-        TextView::new(&recent.address, theme::size::CAPTION, sub)
+        TextView::new(&recent.address, theme::size::lf::S19, theme::TEXT_TERTIARY)
             .max_lines(1)
             .draw(p, Rect::new(tx, r.y + r.h * 0.5 + 6.0, tw, r.h * 0.5));
     }
 
-    /// A small upper-case heading in the panel ("RECENT", "YOUR CODE").
-    fn draw_caption(p: Painter, text: &str, rect: Rect, centred: bool) {
+    /// A small upper-case heading in the form ("RECENT").
+    fn draw_caption(p: Painter, text: &str, rect: Rect) {
         let up = cstring(&text.to_uppercase());
-        let label = Label::new(up.as_ptr(), theme::size::MICRO, theme::TEXT_TERTIARY).bold().v(VAlign::Middle);
-        if centred { label.h(HAlign::Center).draw(p, rect) } else { label.draw(p, rect) };
+        Label::new(up.as_ptr(), LABEL_SZ, theme::TEXT_TERTIARY).bold().v(VAlign::Middle).draw(p, rect);
     }
 
-    /// The thin rule between two parts of the panel; with a word, the word sits in a gap at its
+    /// The thin rule between two parts of the form; with a word, the word sits in a gap at its
     /// centre ("or").
     fn draw_rule(p: Painter, rect: Rect, word: Option<&CStr>, measure: &dyn Measure) {
         match word {
             None => p.rrect(Rect::new(rect.x, rect.y, rect.w, 1.0), 0.0, 0.0, theme::HAIRLINE),
             Some(word) => {
-                let ww = measure.width(word, theme::size::CAPTION, false);
+                let ww = measure.width(word, LABEL_SZ, false);
                 let gap = theme::space::MD;
                 let side = ((rect.w - ww) * 0.5 - gap).max(0.0);
                 let y = rect.cy();
                 p.rrect(Rect::new(rect.x, y, side, 1.0), 0.0, 0.0, theme::HAIRLINE);
                 p.rrect(Rect::new(rect.x + rect.w - side, y, side, 1.0), 0.0, 0.0, theme::HAIRLINE);
-                Label::new(word.as_ptr(), theme::size::CAPTION, theme::TEXT_TERTIARY)
+                Label::new(word.as_ptr(), LABEL_SZ, theme::TEXT_TERTIARY)
                     .h(HAlign::Center)
                     .v(VAlign::Middle)
                     .draw(p, rect);
-            }
-        }
-    }
-
-    /// The narrative column, vertically centred: the step eyebrow, the title, then the copy (on
-    /// Quick Connect, three numbered instructions) and, on the first two steps of a first sign-in,
-    /// the tracker. Adding a user has no tracker: the server is the one already signed in to.
-    fn draw_narrative(&self, p: Painter, measure: &dyn Measure) {
-        let layout = RouteLayout::screen();
-        let x = layout.narrative.x;
-        let w = layout.narrative.w;
-        let eyebrow = match self.stage {
-            Stage::QuickConnect => msg::jellyfin_login_step_quick_connect(),
-            _ if self.adding => msg::jellyfin_login_step_add_user(),
-            Stage::Server | Stage::Consent => msg::jellyfin_login_step_server(),
-            Stage::Credentials | Stage::Pick => msg::jellyfin_login_step_sign_in(),
-        };
-        let title = match (self.stage, &self.picked) {
-            (Stage::Consent, _) => msg::settings_plaintext_question().to_owned(),
-            (Stage::Pick, _) => msg::jellyfin_login_title_pick_user().to_owned(),
-            (Stage::Credentials, Some(person)) => msg::jellyfin_login_title_sign_in_as(&person.name),
-            (Stage::Server, _) => msg::jellyfin_login_title_server().to_owned(),
-            (Stage::Credentials, None) if !self.server_name.trim().is_empty() => {
-                msg::jellyfin_login_title_sign_in(&self.server_name)
-            }
-            (Stage::Credentials, None) => msg::jellyfin_login_title().to_owned(),
-            (Stage::QuickConnect, _) => msg::jellyfin_login_title_quick_connect().to_owned(),
-        };
-        let copy = match (self.stage, &self.picked) {
-            (Stage::Consent, _) if self.consent.as_ref().is_some_and(|c| c.internet) => {
-                msg::jellyfin_login_consent_internet(&self.server_name)
-            }
-            (Stage::Consent, _) => msg::jellyfin_login_consent_home(&self.server_name),
-            (Stage::Pick, _) => msg::jellyfin_login_pick_user_intro(&self.server_name),
-            (Stage::Credentials, Some(person)) => msg::jellyfin_login_sign_in_as_intro(&person.name),
-            (Stage::Server, _) => msg::jellyfin_login_server_intro().to_owned(),
-            _ => msg::jellyfin_login_credentials_intro().to_owned(),
-        };
-        let tracked = !self.adding && self.stage != Stage::QuickConnect;
-        let title_view = RouteLayout::narrative_title(&title).with_measure(measure);
-        let title_h = title_view.measure_h(w);
-        let copy_size = theme::size::LABEL;
-        let copy_lead = copy_size as f32 + theme::space::XS;
-        let steps: [&str; 3] = [
-            msg::jellyfin_login_qc_step_open(),
-            msg::jellyfin_login_qc_step_profile(),
-            msg::jellyfin_login_qc_step_code(),
-        ];
-        let step_text_x = STEP_DISC + theme::space::MD;
-        let copy_h = match self.stage {
-            Stage::QuickConnect => steps
-                .iter()
-                .map(|s| {
-                    TextView::new(s, copy_size, theme::TEXT_READING)
-                        .with_measure(measure)
-                        .leading(copy_lead)
-                        .measure_h(w - step_text_x)
-                        .max(STEP_DISC)
-                })
-                .sum::<f32>()
-                + 2.0 * theme::space::MD,
-            _ => TextView::new(&copy, copy_size, theme::TEXT_READING).with_measure(measure).leading(copy_lead).measure_h(w),
-        };
-        let tracker_h = if tracked { theme::space::LG + 2.0 * STEP_ROW_H } else { 0.0 };
-        let total = EYEBROW_H + theme::space::SM + title_h + theme::space::MD + copy_h + tracker_h;
-        let safe = crate::ui::consts::SAFE;
-        let mut y = (safe.y + (safe.h - total) * 0.5).max(layout.narrative.y);
-
-        Self::draw_caption(p, eyebrow, Rect::new(x, y, w, EYEBROW_H), false);
-        y += EYEBROW_H + theme::space::SM;
-        title_view.draw(p, Rect::new(x, y, w, title_h));
-        y += title_h + theme::space::MD;
-        match self.stage {
-            Stage::QuickConnect => {
-                for (i, s) in steps.iter().enumerate() {
-                    let view = TextView::new(s, copy_size, theme::TEXT_READING).with_measure(measure).leading(copy_lead);
-                    let h = view.measure_h(w - step_text_x).max(STEP_DISC);
-                    let disc = Self::disc(p, x + STEP_DISC * 0.5, y + STEP_DISC * 0.5, STEP_DISC, theme::CONTROL_IDLE_FILL_UNKEYED);
-                    let n = cstring(&(i + 1).to_string());
-                    Label::new(n.as_ptr(), theme::size::CAPTION, theme::TEXT_PRIMARY)
-                        .bold()
-                        .h(HAlign::Center)
-                        .v(VAlign::Middle)
-                        .draw(p, disc);
-                    view.draw(p, Rect::new(x + step_text_x, y + 4.0, w - step_text_x, h));
-                    y += h + theme::space::MD;
-                }
-            }
-            _ => {
-                let view = TextView::new(&copy, copy_size, theme::TEXT_READING).with_measure(measure).leading(copy_lead);
-                view.draw(p, Rect::new(x, y, w, copy_h));
-                y += copy_h + theme::space::LG;
-                if tracked {
-                    self.draw_tracker(p, x, y, w);
-                }
-            }
-        }
-    }
-
-    /// *Server → Sign in*: the current step a filled disc with its number, a finished one a tick
-    /// with what it settled (the server's name and address), a step still to come an outline.
-    fn draw_tracker(&self, p: Painter, x: f32, y: f32, w: f32) {
-        let rows: [(&CStr, bool, bool); 2] = [
-            (msg::jellyfin_login_server_row_c(), matches!(self.stage, Stage::Server | Stage::Consent),
-                !matches!(self.stage, Stage::Server | Stage::Consent)),
-            (msg::jellyfin_login_sign_in_c(), self.stage == Stage::Credentials, false),
-        ];
-        for (i, &(label, current, done)) in rows.iter().enumerate() {
-            let row = Rect::new(x, y + i as f32 * STEP_ROW_H, w, STEP_ROW_H);
-            let cx = x + STEP_DISC * 0.5;
-            let tx = x + STEP_DISC + theme::space::MD;
-            let tw = w - (tx - x);
-            if current {
-                let disc = Self::disc(p, cx, row.cy(), STEP_DISC, theme::ACCENT);
-                let n = cstring(&(i + 1).to_string());
-                Label::new(n.as_ptr(), theme::size::CAPTION, theme::INK_ON_ACCENT)
-                    .bold()
-                    .h(HAlign::Center)
-                    .v(VAlign::Middle)
-                    .draw(p, disc);
-                Label::new(label.as_ptr(), theme::size::BODY, theme::TEXT_PRIMARY)
-                    .bold()
-                    .v(VAlign::Middle)
-                    .draw(p, Rect::new(tx, row.y, tw, row.h));
-            } else if done {
-                let disc = Self::disc(p, cx, row.cy(), STEP_DISC, theme::CONTROL_IDLE_FILL_UNKEYED);
-                let mark = STEP_DISC * 0.5;
-                crate::ui::icons::draw(
-                    p,
-                    crate::ui::icons::Icon::Check,
-                    Rect::new(disc.cx() - mark * 0.5, disc.cy() - mark * 0.5, mark, mark),
-                    theme::TEXT_PRIMARY,
-                );
-                Label::new(label.as_ptr(), theme::size::BODY, theme::TEXT_SECONDARY)
-                    .draw(p, Rect::new(tx, row.y + 2.0, tw, row.h * 0.5));
-                let settled = match &self.origin {
-                    Some(origin) => format!("{} \u{b7} {}:{}", self.server_name, origin.host(), origin.port()),
-                    None => self.server_name.clone(),
-                };
-                TextView::new(&settled, theme::size::CAPTION, theme::TEXT_TERTIARY)
-                    .max_lines(1)
-                    .draw(p, Rect::new(tx, row.y + row.h * 0.5 + 2.0, tw, row.h * 0.5));
-            } else {
-                let disc = Rect::new(cx - STEP_DISC * 0.5, row.cy() - STEP_DISC * 0.5, STEP_DISC, STEP_DISC);
-                p.rring(disc, STEP_DISC * 0.5, 2.0, theme::CONTROL_RIM_IDLE_UNKEYED);
-                let n = cstring(&(i + 1).to_string());
-                Label::new(n.as_ptr(), theme::size::CAPTION, theme::TEXT_TERTIARY)
-                    .bold()
-                    .h(HAlign::Center)
-                    .v(VAlign::Middle)
-                    .draw(p, disc);
-                Label::new(label.as_ptr(), theme::size::BODY, theme::TEXT_TERTIARY)
-                    .v(VAlign::Middle)
-                    .draw(p, Rect::new(tx, row.y, tw, row.h));
             }
         }
     }
@@ -1727,13 +1644,17 @@ impl<H: AppLike> Screen<H> for JfLoginScreen {
     }
     fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, H>) {}
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
+        use crate::ui::widgets::{draw_login_button, pop_progress, LoginKind, LOGIN_AVATAR_POP};
         let p = f.painter;
-        self.ground.draw_default(Painter::root());
-        self.draw_narrative(p, f.measure);
+        // Litefin's sign-in stands on the flat black page (`docs/litefin-look.md` 2.1, 8)
+        Painter::root().rect(Rect::FULL, 0.0, theme::SURFACE_APP, theme::SURFACE_APP, 0.0);
+        crate::ui::widgets::draw_login_brand(p, f.measure);
 
         let form = self.form(f.measure);
         let focus = f.focus.current.filter(|k| k.entry == self.entry).map(|k| k.elem);
-        crate::ui::widgets::panel_ground(p, form.panel, PANEL_R, f.underlay);
+        let (title, copy) = (self.title_text(), self.copy_text());
+        self.title_view(&title).with_measure(f.measure).draw(p, form.title);
+        self.copy_view(&copy).with_measure(f.measure).draw(p, form.copy);
         if let Some(rect) = form.card {
             let change_x = form.buttons.iter().find(|(b, _)| *b == CHANGE).map_or(rect.x + rect.w, |(_, r)| r.x);
             match (self.stage, &self.picked) {
@@ -1744,58 +1665,56 @@ impl<H: AppLike> Screen<H> for JfLoginScreen {
         }
         self.draw_bullets(p, &form.bullets, f.measure);
         for &(field, rect) in &form.labels {
-            Label::new(field_label(field).as_ptr(), theme::size::CAPTION, theme::TEXT_SECONDARY)
+            Label::new(field_label(field).as_ptr(), LABEL_SZ, theme::TEXT_SECONDARY)
+                .bold()
                 .v(VAlign::Middle)
                 .draw(p, rect);
         }
         for &(field, rect) in &form.fields {
-            self.draw_field(p, field, rect, focus == Some(field), f.measure);
+            let focused = focus == Some(field);
+            self.draw_field(p, field, rect, focused, if focused { 1.0 } else { 0.0 }, f.measure);
         }
         if let Some(rect) = form.hint {
-            TextView::new(msg::jellyfin_login_port_hint(), theme::size::CAPTION, theme::TEXT_TERTIARY)
+            TextView::new(msg::jellyfin_login_port_hint(), LABEL_SZ, theme::TEXT_FAINT)
                 .max_lines(1)
                 .draw(p, Rect::new(rect.x, rect.y + 2.0, rect.w, rect.h));
         }
-        if let Some(rect) = form.code_caption {
-            Self::draw_caption(p, msg::jellyfin_login_code_label(), rect, true);
-        }
         if let Some(rect) = form.code {
-            self.draw_code(p, rect);
+            self.draw_code(p, rect, f.measure);
         }
-        self.draw_status(p, form.status, self.stage == Stage::QuickConnect, f.measure);
+        self.draw_status(p, form.status, f.measure);
         if let Some(rect) = form.or_rule {
             Self::draw_rule(p, rect, None, f.measure);
         }
         if let Some(rect) = form.recent_caption {
             match self.stage {
                 Stage::Credentials | Stage::Pick => Self::draw_rule(p, rect, Some(msg::jellyfin_login_or_c()), f.measure),
-                _ => Self::draw_caption(p, msg::jellyfin_login_recent(), rect, false),
+                _ => Self::draw_caption(p, msg::jellyfin_login_recent(), rect),
             }
         }
         let buttons = self.buttons();
         for &(button, rect) in &form.buttons {
-            let scale = buttons
+            let focused = focus == Some(button);
+            // the shared pop's progress, or a plain on/off for a control outside its slots
+            let progress = buttons
                 .iter()
                 .position(|&b| b == button)
-                .map_or(1.0, |i| self.pop.scale_with(i, f.press.scale));
+                .map_or(if focused { 1.0 } else { 0.0 }, |i| pop_progress(&self.pop, i, f.press.scale));
             if button == RECENT {
-                self.draw_recent(p, rect, focus == Some(button), scale);
+                self.draw_recent(p, rect, focused, progress);
                 continue;
             }
             if button == OTHER || self.person(button).is_some() {
-                let focused = focus == Some(button);
-                let scale = if button == OTHER { scale } else if focused { CTRL_POP } else { 1.0 };
-                self.draw_person(p, button, rect, focused, scale);
+                let scale = 1.0 + (LOGIN_AVATAR_POP - 1.0) * progress;
+                self.draw_person(p, button, rect, form.pitch, focused, scale);
                 continue;
             }
-            let label = self.label_of(button);
-            let mut b = Button::new(label.as_ptr(), BUTTON_SZ, rect)
-                .focused(focus == Some(button))
-                .scale(scale);
-            if button == QUICK {
-                b = b.icon(crate::ui::icons::Icon::Phone);
-            }
-            b.draw(&Env::inert(), p);
+            let kind = match button {
+                QUICK | CONNECT | ALLOW => LoginKind::Primary,
+                _ => LoginKind::Secondary,
+            };
+            let mark = (button == QUICK).then_some(crate::ui::icons::Icon::Phone);
+            draw_login_button(p, rect, &self.label_of(button), kind, focused, progress, mark, f.measure);
         }
         if f.records_stops() {
             for &(elem, rect) in form.fields.iter().chain(form.buttons.iter()) {
@@ -1913,11 +1832,11 @@ mod tests {
         assert_eq!(a, s.hash(), "same length, same state: the password itself is never hashed");
     }
 
-    /// The status band is tall enough for the error box at its largest (two lines of `LABEL`,
-    /// padded) with air left before the control under it.
+    /// The status band is tall enough for the error box at its largest (two lines of
+    /// [`STATUS_SZ`], padded) with air left before the control under it.
     #[test]
     fn the_status_band_holds_a_two_line_error_with_air_to_spare() {
-        let two_lines = 2.0 * (theme::size::LABEL as f32 + theme::space::XS);
+        let two_lines = 2.0 * (STATUS_SZ as f32 + theme::space::XS);
         let boxed = theme::space::XS + two_lines + 2.0 * theme::space::SM;
         assert!(boxed + theme::space::SM <= STATUS_H, "{boxed} in {STATUS_H}");
     }
@@ -1931,8 +1850,10 @@ mod tests {
             (Icon::Server, include_str!("../../../assets/icons/server.svg")),
             (Icon::Phone, include_str!("../../../assets/icons/phone.svg")),
             (Icon::Plus, include_str!("../../../assets/icons/plus.svg")),
+            (Icon::Lock, include_str!("../../../assets/icons/lock.svg")),
+            (Icon::BrandMark, include_str!("../../../assets/icons/brand-mark.svg")),
         ] {
-            for px in [26, 28, 32] {
+            for px in [26, 28, 32, 70] {
                 let rgba = nj_gfx::svg::rasterize(svg, px, px).unwrap_or_else(|| panic!("{id:?} at {px}px"));
                 let alpha = |x: i32, y: i32| rgba[((y * px + x) * 4 + 3) as usize];
                 let max = (0..px).flat_map(|y| (0..px).map(move |x| alpha(x, y))).max().unwrap();
@@ -1944,6 +1865,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **The status clock runs only while something is waited on** (the two animation tests
+    /// `ui/CLAUDE.md` asks for): a tick reports motion while the screen is busy or Quick Connect
+    /// waits for approval, and nothing at rest; Quick Connect's status line reads its pulse off
+    /// that clock, full at the start of each 2.5 s breath and at half at its middle.
+    #[test]
+    fn the_status_clock_reports_while_waiting_and_is_silent_at_rest() {
+        let tick = |ms| Tick { ms, dt_us: 16_000 };
+        let reported = |s: &mut JfLoginScreen, ms| {
+            let mut present = nj_machine::present::Present::new();
+            present.take(0);
+            let mut out = Vec::new();
+            let mut fx = Effects::<TestHost>::new(&mut out, MachineId::Session, &mut present);
+            s.advance_motion(tick(ms), &mut fx.present());
+            drop(fx);
+            present.changed()
+        };
+        let mut s = JfLoginScreen::new(EntryId(0), InstanceId(0));
+        assert!(!reported(&mut s, 100), "at rest the clock is still and reports nothing");
+        assert_eq!(s.spin_ms, 0.0);
+        s.busy = Some(Busy::Starting);
+        assert!(reported(&mut s, 200), "while waited on, every tick reports");
+        assert!(reported(&mut s, 1_450));
+        assert!((s.spin_ms - 1_250.0).abs() < 0.5, "the clock is the frame clock");
+        assert!((s.pulse() - PULSE_LOW).abs() < 1e-3, "half a breath in, the line is at its low");
+        s.spin_ms = 0.0;
+        assert!((s.pulse() - 1.0).abs() < 1e-3);
+        s.spin_ms = PULSE_MS;
+        assert!((s.pulse() - 1.0).abs() < 1e-3, "and full again once a breath is over");
+        s.busy = None;
+        assert!(!reported(&mut s, 3_000), "and silent again once nothing is waited on");
     }
 
     /// The stages walk as drawn: a column, except Quick Connect's pair, which is a row.
@@ -2042,6 +1995,39 @@ mod tests {
         let (_, auth) = effects(&mut s, |s, fx| s.activate(PERSON + 2, fx));
         assert_eq!(auth, ["password:Kids"], "no password: straight in");
         assert_eq!(s.busy, Some(Busy::SigningIn));
+    }
+
+    /// **The server's list fits the safe area however long it is**: every tile with its name and
+    /// quiet line, the status band, the caption and Quick Connect, in every shipped language, and
+    /// focus walks it as the rows are drawn.
+    #[test]
+    fn the_pick_list_fits_the_safe_area_at_any_length() {
+        use nj_base::fontcov::advances::ShippedMeasure;
+        use crate::ui::consts::inside_safe;
+        for language in nj_platform::i18n::SHIPPED {
+            let _guard = nj_platform::i18n::language_on_this_thread_for_test(language);
+            for n in [1, 3, 4, 7, 8, 9, MAX_PEOPLE, MAX_PEOPLE + 4] {
+                let s = adding((0..n).map(|i| person(&format!("user{i}"), true, None)).collect());
+                let form = s.form(&ShippedMeasure);
+                let tiles = form.buttons.iter().filter(|(e, _)| *e != QUICK)
+                    .map(|(_, r)| Rect::new(r.x, r.y, r.w, r.h + LOGIN_PERSON_H - LOGIN_AVATAR));
+                let quick = form.buttons.iter().find(|(e, _)| *e == QUICK).map(|(_, r)| *r);
+                for r in [form.title, form.copy, form.status].into_iter().chain(form.recent_caption).chain(quick).chain(tiles) {
+                    assert!(inside_safe(r), "{} with {n} people: {r:?} leaves the safe area", language.tag());
+                }
+                let grid = s.grid();
+                let last = *grid.last().expect("Other user");
+                assert_eq!(s.grid_step(last, Dir::Down), Some(QUICK));
+                for (i, &e) in grid.iter().enumerate().skip(1) {
+                    let (a, b) = (s.elem_rect(grid[i - 1], &ShippedMeasure).unwrap(), s.elem_rect(e, &ShippedMeasure).unwrap());
+                    if (a.y - b.y).abs() < 0.5 {
+                        assert_eq!(s.grid_step(grid[i - 1], Dir::Right), Some(e), "RIGHT walks the drawn row");
+                    } else {
+                        assert!(b.y > a.y && s.grid_step(grid[i - 1], Dir::Right).is_none(), "a drawn row ends RIGHT");
+                    }
+                }
+            }
+        }
     }
 
     /// *Other user* types a username on the same server — no *Change server*: adding a user never

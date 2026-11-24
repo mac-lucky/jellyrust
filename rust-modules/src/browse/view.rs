@@ -32,6 +32,7 @@ struct ListingData {
     sort_idx: usize,
     sort_desc: bool,
     genre: Option<Arc<GenreEntry>>,
+    drill: bool,
     unwatched: bool,
     cursor: Option<Arc<super::Cursor>>,
 }
@@ -144,6 +145,7 @@ impl ListingSnapshot {
                 sort_idx: 0,
                 sort_desc: false,
                 genre: None,
+                drill: false,
                 unwatched: false,
                 cursor: None,
             }),
@@ -226,6 +228,11 @@ impl<'a> ListingView<'a> {
         let data = self.0.data.as_ref()?;
         data.library_type.filters().then_some(())?;
         data.genre.as_deref()
+    }
+    /// Is the applied genre a Genres-tab drill-in's (`QueryEdit::Drill`) rather than the reader's
+    /// FILTER choice?
+    pub(crate) fn drilled(self) -> bool {
+        self.genre().is_some() && self.0.data.as_ref().is_some_and(|s| s.drill)
     }
     /// The Unwatched filter AS APPLIED — `false` while collections are listed, even though the
     /// section keeps the switch for when its own type is listed again.
@@ -311,6 +318,7 @@ impl super::BrowseState {
                     sort_idx: state.sort_idx,
                     sort_desc: state.sort_desc,
                     genre: state.genre.clone(),
+                    drill: state.drill,
                     unwatched: state.unwatched,
                     cursor: state.cursor.clone(),
                 }),
@@ -341,7 +349,6 @@ struct DirectoryData {
 #[derive(Clone)]
 pub(crate) struct DirectorySnapshot {
     preferred: [Option<usize>; 2],
-    kind_fetch: [SecFetch; 2],
     stamp: Option<(u32, u32, usize, usize)>,
     data: Arc<DirectoryData>,
     source: Option<usize>,
@@ -355,7 +362,6 @@ impl Default for DirectorySnapshot {
     fn default() -> Self {
         Self {
             preferred: [None; 2],
-            kind_fetch: [SecFetch::Loading; 2],
             stamp: None,
             data: Arc::default(),
             source: None,
@@ -395,7 +401,6 @@ impl DirectorySnapshot {
         self.tabs_gen = state.tabs_gen();
         for (i, kind) in [super::SecKind::Movie, super::SecKind::Show].into_iter().enumerate() {
             self.preferred[i] = state.tab_of_kind(kind).and_then(|tab| state.tab_section(tab));
-            self.kind_fetch[i] = state.kind_state(kind);
         }
     }
 
@@ -408,7 +413,6 @@ impl DirectorySnapshot {
     ) -> Self {
         Self {
             preferred: [None; 2],
-            kind_fetch: [fetch; 2],
             stamp: Some((epoch, 0, 0, 1)),
             data: Arc::new(DirectoryData {
                 sources: vec![(sid, source)],
@@ -431,33 +435,19 @@ impl DirectorySnapshot {
             && self.sections_gen == other.sections_gen
             && self.tabs_gen == other.tabs_gen
             && self.preferred == other.preferred
-            && self.kind_fetch == other.kind_fetch
     }
-    /// The single builder behind both `fixture` and the selector matrix suite: a section table
-    /// AND the source table `library_label` reads a handle from. `fixture` used to hardcode
-    /// `sources: Vec::new()`, which made a source's handle/tier/state permanently unreachable
-    /// from a host fixture — the pill label's owner-handle branch and every tier/state cell of
-    /// `selector_matrix_tests.rs` need a real source table to vary, so this is that one source of
-    /// truth rather than a second parallel builder.
     #[cfg(test)]
-    pub(crate) fn fixture_with_sources(
-        epoch: u32,
-        current: usize,
-        sources: Vec<(ServerId, super::SrcGroup)>,
-        sections: Vec<SectionView>,
-    ) -> Self {
+    pub(crate) fn fixture(epoch: u32, current: usize, sections: Vec<SectionView>) -> Self {
         let preferred = [super::SecKind::Movie, super::SecKind::Show]
             .map(|kind| sections.iter().position(|s| s.kind == kind && s.row.pinned));
         let favorites = sections.iter().filter_map(|section| {
             section.sid.map(|sid| (sid, section.key, section.row.pinned))
         }).collect();
-        let source_count = sources.len();
         Self {
             preferred,
-            kind_fetch: [SecFetch::Ready; 2],
-            stamp: Some((epoch, 0, current, source_count)),
+            stamp: Some((epoch, 0, current, 0)),
             data: Arc::new(DirectoryData {
-                sources,
+                sources: Vec::new(),
                 sections,
                 favorites,
             }),
@@ -467,11 +457,6 @@ impl DirectorySnapshot {
             sections_gen: 0,
             tabs_gen: 0,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fixture(epoch: u32, current: usize, sections: Vec<SectionView>) -> Self {
-        Self::fixture_with_sources(epoch, current, Vec::new(), sections)
     }
 
     pub(crate) fn view(&self) -> DirectoryView<'_> {
@@ -537,12 +522,6 @@ impl<'a> DirectoryView<'a> {
             super::SecKind::Show => 1,
         }]
     }
-    pub(crate) fn kind_fetch(self, kind: super::SecKind) -> SecFetch {
-        self.0.kind_fetch[match kind {
-            super::SecKind::Movie => 0,
-            super::SecKind::Show => 1,
-        }]
-    }
     pub(crate) fn epoch(self) -> Option<u32> {
         self.0.stamp.map(|s| s.0)
     }
@@ -566,23 +545,6 @@ impl<'a> DirectoryView<'a> {
     }
     pub(crate) fn discovery(self) -> SecFetch {
         self.0.discovery
-    }
-    /// Press-time section, not necessarily the committed one during a page fade.
-    pub(crate) fn rows_for(self, section: usize) -> impl Iterator<Item = &'a super::SrcRow> {
-        let kind = self.sections().get(section).map(|s| s.kind);
-        self.sections()
-            .iter()
-            .filter(move |s| Some(s.kind) == kind && s.row.pinned)
-            .map(|s| &s.row)
-    }
-
-    /// Favourite libraries represented by the current type pill, with their table indices.
-    pub(crate) fn favorite_sections_for(
-        self,
-        section: usize,
-    ) -> impl Iterator<Item = (usize, &'a SectionView)> {
-        self.rows_for(section)
-            .filter_map(move |row| self.sections().get(row.section).map(|s| (row.section, s)))
     }
 }
 
@@ -647,15 +609,6 @@ mod tests {
         assert_eq!(view.source().unwrap().0, view.sections()[0].sid.unwrap());
         assert_eq!(view.source_fetch(), state.cur_source_state());
         assert_eq!(view.discovery(), state.discovery_state());
-        assert_eq!(
-            view.rows_for(0).cloned().collect::<Vec<_>>(),
-            state.source_rows_for(0)
-        );
-        assert_eq!(
-            view.rows_for(1).cloned().collect::<Vec<_>>(),
-            state.source_rows_for(1)
-        );
-        assert_eq!(view.rows_for(999).count(), 0);
         state.source_mut(0).unwrap().name = "Changed".into();
         state.bump_source_facts_gen();
         directory.capture_from(&mut state);

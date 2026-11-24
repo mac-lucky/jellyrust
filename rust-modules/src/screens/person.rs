@@ -38,7 +38,7 @@ use crate::ui::screen::{
 use crate::ui::screen::Enter;
 use crate::ui::text_view::TextView;
 use crate::ui::theme;
-use crate::ui::widgets::{Art, PageGround, StatusKind, StatusOverlay};
+use crate::ui::widgets::{Art, StatusKind, StatusOverlay};
 use crate::ui::{Column, Env, Painter, Rect, ScrollColumn, View};
 
 use super::registry::{
@@ -52,6 +52,7 @@ use super::registry::{
 
 const HEADER_ELEM: u32 = 0;
 const ENTRY_ELEM: u32 = 1;
+const FAVORITE_ELEM: u32 = 2;
 const FIRST_CARD_ELEM: u32 = 0x1000;
 
 const HEADER_GROUP: GroupId = GroupId(1);
@@ -62,6 +63,7 @@ const HEADER_GROUP: GroupId = GroupId(1);
 /// its own single control for the same reason.
 const ENTRY_GROUP: GroupId = GroupId(0);
 const SHELF_GROUP: [GroupId; NSHELF] = [GroupId(2), GroupId(3)];
+const FAVORITE_GROUP: GroupId = GroupId(4);
 
 /// Where an element key falls in this screen's own row model — the one place the `u32` namespace
 /// is decoded, so `on_header`/`focus_pos`'s legacy jobs (deriving "which row" from a struct field)
@@ -70,6 +72,7 @@ const SHELF_GROUP: [GroupId; NSHELF] = [GroupId(2), GroupId(3)];
 enum Located {
     Header,
     Entry,
+    Favorite,
     Shelf(usize, usize),
 }
 
@@ -97,8 +100,11 @@ const LIFE_GAP: f32 = theme::space::MD;
 // `HL_PAD_Y` on every side, so the cap-to-prose gap this measures to has to carry both.
 const BIO_GAP: f32 = theme::space::MD + HL_PAD_Y;
 const SHELF_COUNT_GAP: f32 = theme::space::SM;
+/// The page's left edge: Litefin's content edge beside the rail plus a row's 60 of padding, the
+/// line the detail page's split and rows stand on (`docs/litefin-look.md` 2.4, 4.2).
+const LEFT: f32 = crate::ui::detail_layout::SPLIT_X;
 const fn text_w_const(d: f32) -> f32 {
-    SCR_W - MARGIN_X - (MARGIN_X + d + BAND_GAP)
+    SCR_W - MARGIN_X - (LEFT + d + BAND_GAP)
 }
 const BIO_W: f32 = text_w_const(PORTRAIT_EXP);
 const BIO_LINES: usize = 3;
@@ -112,13 +118,19 @@ const BIO_MORE_GAP: f32 = theme::space::LG;
 const BAND_GAP_TO_SHELF: f32 = theme::space::MD;
 const SHELF_GAP: f32 = UNDER_LABEL_AIR;
 const SHELF_LABEL_H: f32 = TITLE_DY + CARD_DY;
-const SHELF_STYLE: RowStyle = RowStyle::HOME;
+const SHELF_STYLE: RowStyle = RowStyle { margin_x: LEFT + 12.0, ..RowStyle::HOME };
 const TOP_MARGIN: f32 = HEADER_TOP;
 const BOTTOM_PAD: f32 = crate::ui::consts::MARGIN_Y;
 
 // The owner's reference mock, 2026-09-19: the bio-to-pill gap drops two rungs from `LG` to `SM` —
 // the pill reads as the header block's own closing line, not a new section starting under it.
 const ENTRY_GAP: f32 = theme::space::SM;
+
+/// The favourite heart: one of the detail page's action circles (`detail::hero`'s `CD`), at its
+/// control size, its name floating beside it while focused at the detail row's name size.
+const FAVORITE_D: f32 = crate::ui::widgets::ACTION_D;
+const FAVORITE_SZ: std::os::raw::c_int = theme::size::lf::S20;
+const FAVORITE_NAME_SZ: std::os::raw::c_int = theme::size::lf::S18;
 
 
 // -------------------------------------------------------------------------------------------
@@ -157,6 +169,12 @@ fn has_entry(p: &Person) -> bool {
     has_entry_of(p.credited, crate::person::filmography_total(p))
 }
 
+/// Does the page draw the favourite heart? Only for a person whose server keeps favourites, once
+/// their profile has said which way the flag stands.
+fn has_favorite(p: &Person) -> bool {
+    p.favorite.is_some()
+}
+
 /// **Should the entry row be OFFERED at all right now** — present or merely still pending an
 /// answer? This is `groups()`'s own question, not `has_entry`'s: the legacy `Scene::on_entry` HELD
 /// focus on the entry row through the whole credits load (mounting there — module doc — "the one
@@ -193,6 +211,7 @@ struct HeaderFlow {
     life_y: Option<f32>,
     bio_y: Option<f32>,
     entry_y: Option<f32>,
+    favorite_y: Option<f32>,
 }
 
 /// Pure over the facts it needs, so it is testable with no `Person`/`PersonScreen` in scope — see
@@ -204,6 +223,7 @@ fn header_flow(
     has_roles: bool,
     has_life: bool,
     has_entry: bool,
+    has_favorite: bool,
     measure: &dyn Measure,
 ) -> HeaderFlow {
     let mut f = HeaderFlow::default();
@@ -241,6 +261,11 @@ fn header_flow(
         f.entry_y = Some(y);
         y += LinkedHeading::HEIGHT;
     }
+    if has_favorite {
+        y += ENTRY_GAP;
+        f.favorite_y = Some(y);
+        y += FAVORITE_D;
+    }
     let bare = !pending && f.meta_y.is_none() && f.life_y.is_none() && f.bio_y.is_none();
     f.exp_d = if bare { PORTRAIT_BARE } else { PORTRAIT_EXP };
     f.exp_h = y.max(f.exp_d);
@@ -248,7 +273,7 @@ fn header_flow(
         f.portrait_y = (f.exp_h - f.exp_d) * 0.5;
         let ty = (f.exp_h - y) * 0.5;
         f.name_y = ty;
-        for v in [&mut f.meta_y, &mut f.life_y, &mut f.bio_y, &mut f.entry_y]
+        for v in [&mut f.meta_y, &mut f.life_y, &mut f.bio_y, &mut f.entry_y, &mut f.favorite_y]
             .into_iter()
             .flatten()
         {
@@ -275,7 +300,7 @@ fn text_w(d: f32) -> f32 {
 }
 
 fn col_x(d: f32) -> f32 {
-    MARGIN_X + d + BAND_GAP
+    LEFT + d + BAND_GAP
 }
 
 fn cstr_elide(s: &str, w: f32, sz: std::os::raw::c_int, bold: std::os::raw::c_int, measure: &dyn Measure) -> CString {
@@ -284,6 +309,12 @@ fn cstr_elide(s: &str, w: f32, sz: std::os::raw::c_int, bold: std::os::raw::c_in
     }
     let elided = nj_gfx::text::elide_by(s, w, false, |t| measure.width_str(t, sz, bold != 0));
     CString::new(elided).unwrap_or_default()
+}
+
+/// A filmography card's facts with the part this person plays in it, which its label words
+/// "{year} · as {role}" as Litefin's person page does (`card_row::tile_label`).
+fn credited<'a>(m: &'a crate::catalog_fetch::PmsMovie, role: &'a str) -> crate::ui::tile::TileFacts<'a> {
+    crate::ui::tile::TileFacts { role, ..tile_facts::of(m) }
 }
 
 fn shelf_block_h_at(band: f32) -> f32 {
@@ -540,8 +571,6 @@ pub(crate) struct PersonScreen {
     // ---- render cache: animation (never hashed; a spring position is not logical state) ----
     shelves: [CardRow; NSHELF],
     scroll: ScrollColumn,
-    amb: PageGround,
-    amb_seeded: bool,
     /// Skeleton spinner clock, in ms — cached each tick from [`spin_phase`](Self::spin_phase)'s
     /// `advance`.
     spin_ms: f32,
@@ -564,6 +593,8 @@ pub(crate) struct PersonScreen {
     covered_ready_c: bool,
     /// The biography's focus lift ([`Self::bio_marked`]). Presentation, not logical state.
     bio_lift: crate::ui::text_lift::TextLift,
+    /// The favourite heart's focus pop. Presentation, not logical state.
+    heart_pop: crate::ui::widgets::CtlPop<1>,
 }
 
 impl LogicalState for PersonScreen {
@@ -624,8 +655,6 @@ impl PersonScreen {
             teardown_closed: false,
             shelves: [CardRow::new(); NSHELF],
             scroll: ScrollColumn::new(HEADER_TOP, TOP_MARGIN),
-            amb: PageGround::new(),
-            amb_seeded: false,
             spin_ms: 0.0,
             spin_phase: nj_machine::motion::Phase::default(),
             name_c: CString::default(),
@@ -637,6 +666,7 @@ impl PersonScreen {
             links_c: Vec::new(),
             covered_ready_c: false,
             bio_lift: crate::ui::text_lift::TextLift::new(),
+            heart_pop: crate::ui::widgets::CtlPop::new(),
         }
     }
 
@@ -653,7 +683,6 @@ impl PersonScreen {
             }),
         )));
         self.header_dirty = true;
-        self.amb_seeded = false;
     }
 
     fn person<'a, H: PersonLike>(&self, cx: &Cx<'a, H>) -> Option<&'a Person> {
@@ -677,16 +706,19 @@ impl PersonScreen {
         let Some(person) = self.person(cx) else { return };
         self.covered_ready_c = person.credited && !H::person(cx).loading();
         let (kinds, n) = present(person);
+        // Top to bottom: the header, the Filmography entry and the heart where the page has them,
+        // then the shelves.
+        let mut chain = vec![HEADER_GROUP];
         if entry_reachable(person) {
-            self.links_c.push(Link { from: HEADER_GROUP, dir: Dir::Down, to: ENTRY_GROUP });
-            self.links_c.push(Link { from: ENTRY_GROUP, dir: Dir::Up, to: HEADER_GROUP });
-            if let Some(&first) = kinds[..n].first() {
-                self.links_c.push(Link { from: ENTRY_GROUP, dir: Dir::Down, to: SHELF_GROUP[first] });
-                self.links_c.push(Link { from: SHELF_GROUP[first], dir: Dir::Up, to: ENTRY_GROUP });
-            }
-        } else if let Some(&first) = kinds[..n].first() {
-            self.links_c.push(Link { from: HEADER_GROUP, dir: Dir::Down, to: SHELF_GROUP[first] });
-            self.links_c.push(Link { from: SHELF_GROUP[first], dir: Dir::Up, to: HEADER_GROUP });
+            chain.push(ENTRY_GROUP);
+        }
+        if has_favorite(person) {
+            chain.push(FAVORITE_GROUP);
+        }
+        chain.extend(kinds[..n].first().map(|&first| SHELF_GROUP[first]));
+        for pair in chain.windows(2) {
+            self.links_c.push(Link { from: pair[0], dir: Dir::Down, to: pair[1] });
+            self.links_c.push(Link { from: pair[1], dir: Dir::Up, to: pair[0] });
         }
         for pair in kinds[..n].windows(2) {
             self.links_c.push(Link { from: SHELF_GROUP[pair[0]], dir: Dir::Down, to: SHELF_GROUP[pair[1]] });
@@ -744,6 +776,9 @@ impl PersonScreen {
         }
         if elem == ENTRY_ELEM {
             return Some(Located::Entry);
+        }
+        if elem == FAVORITE_ELEM {
+            return Some(Located::Favorite);
         }
         let id = self.cards.get(elem)?;
         for kind in 0..NSHELF {
@@ -811,6 +846,7 @@ impl PersonScreen {
             !p.roles.is_empty(),
             !self.life_parts.is_empty(),
             has_entry(p),
+            has_favorite(p),
             measure,
         );
         self.header_dirty = false;
@@ -821,7 +857,7 @@ impl PersonScreen {
     /// struct field.
     fn flow_child(&self, p: &Person, elem: Option<u32>) -> Option<usize> {
         match elem.and_then(|e| self.locate(p, e))? {
-            Located::Header | Located::Entry => Some(0),
+            Located::Header | Located::Entry | Located::Favorite => Some(0),
             Located::Shelf(kind, _) => {
                 let (kinds, n) = present(p);
                 kinds[..n]
@@ -851,16 +887,17 @@ impl PersonScreen {
     /// The zero-area geometric anchor. Keeping this separate from [`Self::header_rect`] lets DOWN
     /// project to the first shelf tile without making the drawn biography impossible to click.
     fn header_anchor(&self) -> Rect {
-        Rect::new(MARGIN_X, HEADER_TOP, 0.0, self.header.exp_h.max(1.0))
+        Rect::new(LEFT, HEADER_TOP, 0.0, self.header.exp_h.max(1.0))
     }
 
     /// The actual drawn/clickable header band. `place` and the hit-map stop both return this exact
-    /// rectangle; the Filmography pill overlaps it but is registered later and therefore wins z.
+    /// rectangle; the Filmography pill and the heart overlap it but are registered later and
+    /// therefore win z.
     fn header_rect(&self) -> Rect {
         Rect::new(
-            MARGIN_X,
+            LEFT,
             HEADER_TOP,
-            SCR_W - 2.0 * MARGIN_X,
+            SCR_W - MARGIN_X - LEFT,
             self.header.exp_h.max(1.0),
         )
     }
@@ -889,6 +926,15 @@ impl PersonScreen {
             0.0,
             &measured,
         )
+    }
+
+    /// The heart's frame: the text column's left edge, on its own row under the Filmography entry.
+    fn favorite_rect(&self) -> Rect {
+        let x = col_x(self.header.exp_d);
+        match self.header.favorite_y {
+            Some(y) => Rect::new(x, HEADER_TOP + y - self.scroll.scroll.pos, FAVORITE_D, FAVORITE_D),
+            None => Rect::new(x, HEADER_TOP, 0.0, 1.0),
+        }
     }
 
     /// A shelf's absolute SCREEN-space row-y, given its flow position among the present shelves —
@@ -954,15 +1000,6 @@ impl PersonScreen {
             self.remeasure_header(p, cx.measure);
         }
 
-        let focused_movie = self.focused_movie_in(p, cur);
-        let k = PageGround::page_target(focused_movie.map(tile_facts::of));
-        if self.amb_seeded {
-            self.amb.key_target(k, dt);
-        } else {
-            self.amb.jump_target(k);
-            self.amb_seeded = true;
-        }
-
         let focus_child = self.flow_child(p, cur);
         for kind in 0..NSHELF {
             let n = p.shelf(kind).len();
@@ -992,6 +1029,7 @@ impl PersonScreen {
             fx.note(PresentEvent::Motion);
         }
         self.bio_lift.step(self.bio_marked(cur), dt);
+        self.heart_pop.step((cur == Some(FAVORITE_ELEM)).then_some(0), dt);
     }
 
     /// OK on the header: opens the biography panel when the bio is truncated. Mirrors
@@ -1056,6 +1094,25 @@ impl PersonScreen {
         }
     }
 
+    /// OK on the heart: favourite the person, or unfavourite them, through the view-state store,
+    /// which flips the heart at once (`PersonCmd::SetFavoriteLocal`) and writes it to their server.
+    fn activate_favorite<H: ContentLike + PersonLike>(&mut self, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
+        let Some(on) = self.person(cx).and_then(|p| p.favorite) else {
+            return;
+        };
+        fx.push(nj_machine::machine::Fx::App(AppFx::Store(
+            crate::stores::StoreId::ViewState,
+            crate::stores::StoreCmd::ViewState(crate::stores::viewstate::ViewStateCmd::Request {
+                sid: self.sid,
+                rk: self.key.clone(),
+                write: crate::viewstate::Write::Favorite(!on),
+                detail: None,
+                guid: String::new(),
+            }),
+        )));
+        fx.invalidate(Provenance::Input);
+    }
+
     fn commit_card<H: ContentLike + PersonLike>(&mut self, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
         if let Some(m) = self.focused_item(cx.focus.current, cx) {
             fx.push(nj_machine::machine::Fx::App(AppFx::Content(
@@ -1109,11 +1166,11 @@ impl PersonScreen {
             1.0
         };
         let scale = self.shelves[kind].scale(col) * press_scale;
-        let label = card_row::TileLabel::titled(&item.title, person.role(kind, col))
+        let label = card_row::TileLabel::default()
             .settling(self.shelves[kind].settle_lag(person.shelf(kind).len(), col, &SHELF_STYLE));
         card_row::draw_focused(
             f.painter.alpha(f.page_alpha),
-            Art::Poster(Some(tile_facts::of(item))),
+            Art::Poster(Some(credited(item, person.role(kind, col)))),
             placed.rest_rect.scaled(scale),
             scale,
             &SHELF_STYLE,
@@ -1128,7 +1185,7 @@ impl PersonScreen {
     fn draw_header(&self, p: Painter, person: &Person, focus_elem: Option<u32>, measure: &dyn nj_machine::machine::Measure) {
         let flow = self.header;
         let d = flow.exp_d;
-        let portrait = Rect::new(MARGIN_X, flow.portrait_y, d, d);
+        let portrait = Rect::new(LEFT, flow.portrait_y, d, d);
         crate::ui::widgets::card(
             p,
             portrait,
@@ -1228,10 +1285,31 @@ impl PersonScreen {
         }
         if let Some(y) = flow.entry_y {
             // Same x the name/roles/life column starts at (`col_x_`, above) — never bare
-            // `MARGIN_X`, which is the pre-phase-7 regression `entry_rect`'s doc explains.
+            // `LEFT`, which is the pre-phase-7 regression `entry_rect`'s doc explains.
             let entry = self.entry_heading();
             let measured = entry.measure(measure);
             entry.draw(p, col_x_, y, f32::from(focus_elem == Some(ENTRY_ELEM)), &measured, measure);
+        }
+        if let (Some(y), Some(on)) = (flow.favorite_y, person.favorite) {
+            // Litefin's heart: outline until the person is a favourite, filled in the accent after.
+            let focused = focus_elem == Some(FAVORITE_ELEM);
+            let scale = crate::ui::widgets::action_scale(self.heart_pop.scale(0), crate::ui::widgets::ACTION_FOCUS_SCALE);
+            let r = Rect::new(col_x_, y, FAVORITE_D, FAVORITE_D);
+            let icon = if on { crate::ui::icons::Icon::HeartFill } else { crate::ui::icons::Icon::Heart };
+            crate::ui::widgets::Button::new(c"".as_ptr(), FAVORITE_SZ, r)
+                .icon(icon)
+                .style(crate::ui::widgets::ControlStyle::Action { active: on })
+                .focused(focused)
+                .scale(scale)
+                .draw(&Env::inert(), p);
+            if focused {
+                // Beside the circle, not under it: the shelf heading sits right below the header.
+                let r = r.scaled(scale);
+                Label::new(nj_platform::i18n::msg::details_favorite_c().as_ptr(), FAVORITE_NAME_SZ, theme::TEXT_PRIMARY)
+                    .bold()
+                    .v(VAlign::Middle)
+                    .draw(p, Rect::new(r.x + r.w + crate::ui::widgets::ACTION_GAP, r.y, 0.0, r.h));
+            }
         }
     }
 
@@ -1247,7 +1325,7 @@ impl PersonScreen {
         )
         .bold()
         .v(VAlign::CapTop)
-        .draw(p, Rect::new(MARGIN_X, hy, SCR_W, 0.0));
+        .draw(p, Rect::new(LEFT, hy, SCR_W, 0.0));
         if !self.shelf_count_c[kind].as_bytes().is_empty() {
             let tw = measure.width(shelf_title()[kind], theme::size::HEADLINE, true);
             Label::new(
@@ -1259,7 +1337,7 @@ impl PersonScreen {
             .draw(
                 p,
                 Rect::new(
-                    MARGIN_X + tw + SHELF_COUNT_GAP,
+                    LEFT + tw + SHELF_COUNT_GAP,
                     hy,
                     0.0,
                     measure.cap_h(theme::size::HEADLINE),
@@ -1277,12 +1355,9 @@ impl PersonScreen {
             pitch,
             &SHELF_STYLE,
             SCR_W,
-            |i| Art::Poster(items.get(i).map(tile_facts::of)),
+            |i| Art::Poster(items.get(i).map(|m| credited(m, person.role(kind, i)))),
             |i| items.get(i).and_then(|m| m.resume_frac()),
-            |i| match items.get(i) {
-                Some(m) => card_row::TileLabel::titled(&m.title, person.role(kind, i)),
-                None => card_row::TileLabel::default(),
-            },
+            |_| card_row::TileLabel::default(),
             |_, _, _, _| {},
             measure,
         );
@@ -1298,12 +1373,12 @@ impl PersonScreen {
             let phase = crate::ui::widgets::skeleton_phase(self.spin_ms as u32);
             crate::ui::widgets::skeleton_bar(
                 p,
-                Rect::new(MARGIN_X, y + TITLE_DY - 32.0, 214.0, 32.0),
+                Rect::new(LEFT, y + TITLE_DY - 32.0, 214.0, 32.0),
                 phase,
             );
             let cy = y + TITLE_DY + CARD_DY;
             for i in 0..5 {
-                let cx_ = MARGIN_X + i as f32 * (CARD_W + GAP);
+                let cx_ = SHELF_STYLE.margin_x + i as f32 * (SHELF_STYLE.w + SHELF_STYLE.gap);
                 crate::ui::widgets::skeleton_sheet(
                     p,
                     Rect::new(cx_, cy, CARD_W, CARD_H),
@@ -1367,6 +1442,19 @@ impl<H: ContentLike + PersonLike> Focusable<H> for PersonScreen {
                 elem: ElemKind::Bare,
             });
         }
+        if has_favorite(p) {
+            let down = if nshelves(p) > 0 { EdgeRule::Geometric } else { EdgeRule::Stop };
+            out.push(GroupSpec {
+                id: FAVORITE_GROUP,
+                kind: GroupKind::Free,
+                seat: Seat::First,
+                reachable: AxisMask::VERTICAL,
+                edge: [EdgeRule::Geometric, down, EdgeRule::Stop, EdgeRule::Stop],
+                extent: self.favorite_rect(),
+                len: 1,
+                elem: ElemKind::Bare,
+            });
+        }
         for kind in 0..NSHELF {
             if let Some(shelf) = self.offset_shelf(p, kind) {
                 Focusable::<H>::groups(&shelf, cx, out);
@@ -1379,6 +1467,7 @@ impl<H: ContentLike + PersonLike> Focusable<H> for PersonScreen {
         match self.locate(p, *key)? {
             Located::Header => Some(HEADER_GROUP),
             Located::Entry => entry_reachable(p).then_some(ENTRY_GROUP),
+            Located::Favorite => has_favorite(p).then_some(FAVORITE_GROUP),
             Located::Shelf(kind, _) => self
                 .offset_shelf(p, kind)
                 .and_then(|s| Focusable::<H>::group_of(&s, key, cx)),
@@ -1427,6 +1516,10 @@ impl<H: ContentLike + PersonLike> Focusable<H> for PersonScreen {
                     index: Some(0),
                 })
             }
+            Located::Favorite => {
+                let r = has_favorite(p).then(|| self.favorite_rect())?;
+                Some(Placed { rect: r, rest_rect: r, clip: Rect::FULL, index: Some(0) })
+            }
             Located::Shelf(kind, _) => self
                 .offset_shelf(p, kind)
                 .and_then(|s| Focusable::<H>::place(&s, key, cx, at)),
@@ -1472,6 +1565,11 @@ impl<H: ContentLike + PersonLike> Focusable<H> for PersonScreen {
                     self.fallback(p)
                 }
             }
+            Some(Located::Favorite) if has_favorite(p) => nj_machine::machine::FocusKey {
+                entry: self.entry,
+                elem: FAVORITE_ELEM,
+            },
+            Some(Located::Favorite) => self.fallback(p),
             Some(Located::Shelf(_, _)) => nj_machine::machine::FocusKey {
                 entry: self.entry,
                 elem: want.elem,
@@ -1504,6 +1602,9 @@ impl<H: ContentLike + PersonLike> Focusable<H> for PersonScreen {
                 entry: self.entry,
                 elem: ENTRY_ELEM,
             };
+        }
+        if g == FAVORITE_GROUP {
+            return nj_machine::machine::FocusKey { entry: self.entry, elem: FAVORITE_ELEM };
         }
         for kind in 0..NSHELF {
             if SHELF_GROUP[kind] == g {
@@ -1595,6 +1696,7 @@ impl<H: ContentLike + PersonLike> Machine<H> for PersonScreen {
                 match self.person(cx).and_then(|p| self.locate(p, *e)) {
                     Some(Located::Header) => self.activate_header(cx, fx),
                     Some(Located::Entry) => self.activate_entry(cx, fx),
+                    Some(Located::Favorite) => self.activate_favorite(cx, fx),
                     _ => {}
                 }
                 Handled::Yes
@@ -1685,13 +1787,15 @@ impl<H: ContentLike + PersonLike> Screen<H> for PersonScreen {
     }
     fn prepare(&mut self, _b: &mut crate::ui::frame::Budget, _cx: &Cx<'_, H>) {}
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
+        // Litefin's flat black page (`docs/litefin-look.md` 2.1): the wash that used to cover the
+        // frame is gone, so the page clears it as Detail and Home do.
+        nj_gfx::gfx::frame_clear(theme::CLEAR_RGB.0, theme::CLEAR_RGB.1, theme::CLEAR_RGB.2);
         let p = f.painter.alpha(f.page_alpha);
         let cur = f.focus.current.map(|k| k.elem);
         let env = Env::inert();
         let Some(person) = self.person(f.cx) else {
             return;
         };
-        self.amb.draw(p, Rect::FULL);
         let col = self.scroll;
         let live = self.live_flow(person, cur);
         col.draw(&live, &env, p, f.measure);
@@ -1726,9 +1830,9 @@ impl<H: ContentLike + PersonLike> Screen<H> for PersonScreen {
 }
 
 impl PersonScreen {
-    /// Register this frame's hit-map stops for the header/entry Bare rows — the shelves' own
+    /// Register this frame's hit-map stops for the header/entry/heart Bare rows — the shelves' own
     /// stops are the engine's ordinary `Card` hit-testing over [`OffsetShelf::place`], which needs
-    /// no separate registration; only the two Bare rows (no drawn tile the strip already stops)
+    /// no separate registration; only the Bare rows (no drawn tile the strip already stops)
     /// need one, mirroring `screens::login::LoginScreen::draw_readout`'s single `f.stop(...)`.
     fn record_stops<H: ContentLike + PersonLike>(
         &self,
@@ -1772,6 +1876,22 @@ impl PersonScreen {
                         clip: placed.clip,
                         hover: Hover::Focus,
                         activate: Activate::Press,
+                    },
+                );
+            }
+        }
+        if has_favorite(person) {
+            let r = self.favorite_rect();
+            if crate::ui::on_axis(r.y, r.h, SCR_H, 0.0) {
+                f.stop(
+                    hp,
+                    Stop {
+                        key: nj_machine::machine::FocusKey { entry: self.entry, elem: FAVORITE_ELEM },
+                        rect: r,
+                        rest_rect: r,
+                        clip: Rect::FULL,
+                        hover: Hover::Focus,
+                        activate: Activate::Direct,
                     },
                 );
             }
@@ -2218,17 +2338,17 @@ mod tests {
         let measure = FixtureMeasure;
         let long = "A long biography whose visible lines must all remain above Filmography. ".repeat(60);
         for (pending, bio) in [(false, "Short biography."), (false, long.as_str()), (true, "")] {
-            let flow = header_flow(pending, bio, true, true, true, &measure);
+            let flow = header_flow(pending, bio, true, true, true, false, &measure);
             let entry_y = flow.entry_y.expect("credits offer the entry");
             let biography_top = flow.bio_y.expect("biography or its placeholder is present");
             let biography_h = if pending { BIO_LEAD * BIO_LINES as f32 }
                 else { bio_view(bio, 1.0, &measure).measure_h(BIO_W) };
-            assert!(col_x(flow.exp_d) >= MARGIN_X + flow.exp_d + BAND_GAP,
+            assert!(col_x(flow.exp_d) >= LEFT + flow.exp_d + BAND_GAP,
                 "the action must sit under the text, not the portrait");
             assert!((entry_y - biography_top - biography_h - ENTRY_GAP).abs() < 0.01);
             assert!(flow.exp_h >= entry_y + LinkedHeading::HEIGHT, "the next shelf clears the action");
         }
-        let bare = header_flow(false, "", false, false, true, &measure);
+        let bare = header_flow(false, "", false, false, true, false, &measure);
         let entry_y = bare.entry_y.unwrap();
         assert!((entry_y - bare.name_y - measure.cap_h(theme::size::DISPLAY) - ENTRY_GAP).abs() < 0.01,
             "without biography the centered identity and action remain one text stack");
@@ -2240,7 +2360,7 @@ mod tests {
     #[test]
     fn person_filmography_entry_keeps_translated_labels_and_focus_inside_the_safe_frame() {
         let measure = FixtureMeasure;
-        let flow = header_flow(false, "A short biography.", true, false, true, &measure);
+        let flow = header_flow(false, "A short biography.", true, false, true, false, &measure);
         let mut labels = Vec::new();
         for preference in [nj_platform::i18n::Preference::En, nj_platform::i18n::Preference::Es, nj_platform::i18n::Preference::Be, nj_platform::i18n::Preference::Ru] {
             let locale = nj_platform::i18n::LocaleContext::resolve(preference, None, None, None, None);
@@ -2318,12 +2438,12 @@ mod tests {
     fn header_flow_distinguishes_pending_from_answered_empty_from_answered_full() {
         let m = FixtureMeasure;
         // answered, with nothing: no reserved space for the meta/life/bio lines at all.
-        let flow = header_flow(false, "", false, false, false, &m);
+        let flow = header_flow(false, "", false, false, false, false, &m);
         assert!(flow.meta_y.is_none() && flow.life_y.is_none() && flow.bio_y.is_none());
 
         // pending: not yet asked at all — reserves the full placeholder stack even though every
         // cached run is still empty.
-        let pending_flow = header_flow(true, "", false, false, false, &m);
+        let pending_flow = header_flow(true, "", false, false, false, false, &m);
         assert!(
             pending_flow.meta_y.is_some()
                 && pending_flow.life_y.is_some()
@@ -2335,7 +2455,7 @@ mod tests {
         );
 
         // answered, WITH content: the runs actually drive the reserved space.
-        let full_flow = header_flow(false, "", true, false, false, &m);
+        let full_flow = header_flow(false, "", true, false, false, false, &m);
         assert!(full_flow.meta_y.is_some());
         assert!(full_flow.life_y.is_none(), "no life facts were given");
     }
@@ -2352,14 +2472,14 @@ mod tests {
         let m = FixtureMeasure;
         let long = "A biography far longer than the header's three lines can hold. ".repeat(40);
         for (bio, want) in [(long.as_str(), true), ("One short line.", false)] {
-            let flow = header_flow(false, bio, false, false, false, &m);
+            let flow = header_flow(false, bio, false, false, false, false, &m);
             assert_eq!(flow.bio_truncated, bio_view(bio, 1.0, &m).truncates(BIO_W));
             assert_eq!(flow.bio_truncated, want, "fixture sanity for {:.20}", bio);
             s.header = flow;
             s.header_dirty = false;
             assert_eq!(s.bio_more(), want);
         }
-        s.header = header_flow(false, &long, false, false, false, &m);
+        s.header = header_flow(false, &long, false, false, false, false, &m);
         s.header_dirty = true;
         assert!(!s.bio_more(), "a header awaiting its remeasure offers no panel yet");
         store.run(PersonCmd::Close);
@@ -3193,13 +3313,90 @@ mod tests {
         store.run(PersonCmd::Close);
     }
 
+    /// A person their server lets the viewer favourite (Jellyfin) gets Litefin's heart under the
+    /// header, between it and the first shelf; a person with no favourite flag gets none.
+    #[test]
+    fn a_favouritable_person_offers_a_heart_above_the_shelves() {
+        let _serial = nj_base::testlock::serial();
+        let (mut store, mut s) = seed(1, 0);
+        let measure = FixtureMeasure;
+        let groups_of = |s: &mut PersonScreen, store: &crate::stores::person::PersonStore| {
+            s.refresh_store_cache(&cx(&measure, store.view()));
+            s.remeasure_header(store.view().current().unwrap(), &measure);
+            let mut groups = Vec::new();
+            Focusable::<PersonHost>::groups(s, &cx(&measure, store.view()), &mut groups);
+            groups.iter().map(|g| g.id).collect::<Vec<_>>()
+        };
+        assert!(!groups_of(&mut s, &store).contains(&FAVORITE_GROUP), "no favourite flag, no heart");
+        store.install_favorite_for_test(Some(false));
+        assert!(groups_of(&mut s, &store).contains(&FAVORITE_GROUP));
+        let mut links = Vec::new();
+        Screen::<PersonHost>::links(&s, &mut links);
+        let down = |from, to| links.iter().any(|l| l.from == from && l.dir == Dir::Down && l.to == to);
+        assert!(down(HEADER_GROUP, FAVORITE_GROUP) && down(FAVORITE_GROUP, SHELF_GROUP[0]), "{links:?}");
+        let heart = s.favorite_rect();
+        let header = s.header_rect();
+        assert!(heart.y >= header.y && heart.y + heart.h <= header.y + header.h, "the heart is part of the header block");
+        store.run(PersonCmd::Close);
+    }
+
+    /// OK on the heart asks the view-state store to flip the person's favourite: on while it is
+    /// off, off while it is on, by the person's own key.
+    #[test]
+    fn the_heart_toggles_the_persons_favourite() {
+        let _serial = nj_base::testlock::serial();
+        let (mut store, mut s) = seed(1, 0);
+        let measure = FixtureMeasure;
+        for (now, want) in [(false, true), (true, false)] {
+            store.install_favorite_for_test(Some(now));
+            let mut present = nj_machine::present::Present::new();
+            let mut out = Vec::new();
+            let context = cx(&measure, store.view());
+            let mut fx = Effects::new(&mut out,
+                nj_machine::machine::MachineId::Instance(nj_machine::machine::InstanceId(0)), &mut present);
+            assert_eq!(Machine::<PersonHost>::step(&mut s, &ScreenEvent::Activate(FAVORITE_ELEM), &context, &mut fx), Handled::Yes);
+            drop(fx);
+            assert!(out.iter().any(|st| matches!(&st.fx,
+                nj_machine::machine::Fx::App(AppFx::Store(crate::stores::StoreId::ViewState, crate::stores::StoreCmd::ViewState(
+                    crate::stores::viewstate::ViewStateCmd::Request { sid, rk, write: crate::viewstate::Write::Favorite(on), detail: None, .. })))
+                if *sid == ServerId::UNSET && rk == "161" && *on == want)), "favourite {now} -> {want}");
+        }
+        store.run(PersonCmd::Close);
+    }
+
+    /// The heart pops while it holds focus and comes back to rest, settled, once focus leaves.
+    #[test]
+    fn the_heart_pops_while_focused_and_settles_after() {
+        let _serial = nj_base::testlock::serial();
+        let (mut store, mut s) = seed(1, 0);
+        store.install_favorite_for_test(Some(false));
+        let measure = FixtureMeasure;
+        let heart = nj_machine::machine::FocusKey { entry: s.entry, elem: FAVORITE_ELEM };
+        let mut present = nj_machine::present::Present::new();
+        let mut out = Vec::new();
+        let mut run = |s: &mut PersonScreen, focus: Option<nj_machine::machine::FocusKey<u32>>, frames: u32| {
+            for i in 0..frames {
+                let context = Cx { focus: FocusRead { current: focus, ..Default::default() }, ..cx(&measure, store.view()) };
+                let mut fx = Effects::new(&mut out,
+                    nj_machine::machine::MachineId::Instance(nj_machine::machine::InstanceId(0)), &mut present);
+                Machine::<PersonHost>::step(s, &ScreenEvent::Tick(Tick { ms: i * 16, dt_us: 16_667 }), &context, &mut fx);
+            }
+        };
+        run(&mut s, Some(heart), 30);
+        assert!(s.heart_pop.scale(0) > 1.05, "focused: {}", s.heart_pop.scale(0));
+        run(&mut s, None, 240);
+        assert!((s.heart_pop.scale(0) - 1.0).abs() < 1e-4, "at rest: {}", s.heart_pop.scale(0));
+        drop(run);
+        store.run(PersonCmd::Close);
+    }
+
     #[test]
     fn header_geometric_anchor_is_not_its_pointer_hit_rectangle() {
         let _serial = nj_base::testlock::serial();
         let (mut store, s) = seed(1, 0);
         let anchor = s.header_anchor();
         let hit = s.header_rect();
-        assert_eq!(anchor.x, MARGIN_X);
+        assert_eq!(anchor.x, LEFT);
         assert_eq!(anchor.w, 0.0, "the navigation projection stays left-pinned");
         assert!(
             hit.w > 0.0 && hit.h > 0.0,

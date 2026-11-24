@@ -6,7 +6,7 @@ use super::test_support::*;
 use super::test_support::{frame, frame_with_tap};
 
 #[test]
-fn keyboard_rail_ok_down_up_returns_without_arming_or_requesting_a_card() {
+fn keyboard_bar_ok_down_up_jumps_without_arming_or_requesting_a_card() {
     let _guard = nj_base::testlock::serial();
     struct Cleanup;
     impl Drop for Cleanup {
@@ -35,18 +35,19 @@ fn keyboard_rail_ok_down_up_returns_without_arming_or_requesting_a_card() {
     frame(&mut d, &mut rig, AppArg::Library, tick(0), vec![]);
     Bridge::library_command(
         &mut d,
-        crate::screens::registry::LibraryCmd::FocusGrid { row: 2, col: 5 },
+        crate::screens::registry::LibraryCmd::FocusGrid { row: 0, col: 5 },
     );
     for i in 1..80 {
         frame(&mut d, &mut rig, AppArg::Library, tick(i), vec![]);
     }
     let grid = d.focus().unwrap();
+    // UP from the grid's first row is the alphabet bar, on the letter of the title it left.
     frame(
         &mut d,
         &mut rig,
         AppArg::Library,
         tick(80),
-        script_key(Key::Right, tick(80)),
+        script_key(Key::Up, tick(80)),
     );
     assert_ne!(d.focus(), Some(grid));
     let page = d
@@ -87,11 +88,12 @@ fn keyboard_rail_ok_down_up_returns_without_arming_or_requesting_a_card() {
             }],
             &mut tap,
         );
-        assert_eq!(
-            d.focus(),
-            Some(grid),
-            "both key edges keep the exact midway-letter item"
-        );
+        let page = d.top_screen().unwrap().as_any().unwrap()
+            .downcast_ref::<crate::screens::library::LibraryScreen>().unwrap();
+        assert_eq!(page.probe_viewport(d.focus()).0, "grid");
+        assert_eq!(page.grid_position(d.focus()), Some((0, 0)),
+            "OK on the letter jumps to its first title, and the key's other edge leaves it there");
+        assert_ne!(d.focus(), Some(grid));
         assert!(
             !d.input.press.is_live(),
             "rail OK must not arm a card press on its returned grid item"
@@ -219,19 +221,11 @@ fn library_sweep_visits_the_whole_document_and_reverses_at_its_ends() {
     for i in 0..80 {
         frame(&mut d, &mut rig, AppArg::Library, tick(i), vec![]);
     }
-    let instance = d.nav.top_page().unwrap().inst.as_ref().unwrap().id;
-    d.emit(
-        MachineId::Nav,
-        Fx::Deliver(
-            MachineId::Instance(instance),
-            Delivery::Screen(ScreenEvent::Enter(crate::ui::screen::Enter::Fresh {
-                focus: crate::ui::screen::FocusTarget::ContainerGroup(
-                    crate::screens::library::LIBRARY_GROUP,
-                ),
-            })),
-        ),
-    );
+    // The document head is the first shelf: the page shows one library, so there is no row of
+    // library pills above it any more (the rail's popover picks the library).
+    Bridge::library_command(&mut d, crate::screens::registry::LibraryCmd::FocusShelf { shelf: 0, col: 0 });
     frame(&mut d, &mut rig, AppArg::Library, tick(80), vec![]);
+    let rows = 120usize.div_ceil(crate::ui::poster_grid::COLS);
     let mut visited = std::collections::BTreeSet::new();
     let mut shelves = std::collections::BTreeSet::new();
     let mut grid_rows = std::collections::BTreeSet::new();
@@ -254,7 +248,7 @@ fn library_sweep_visits_the_whole_document_and_reverses_at_its_ends() {
         if region == "grid" {
             grid_rows.insert(row);
         }
-        if region == "library" && grid_rows.contains(&19) {
+        if region == "shelf" && row == 0 && grid_rows.contains(&(rows as i32 - 1)) {
             returned = true;
             break;
         }
@@ -263,13 +257,13 @@ fn library_sweep_visits_the_whole_document_and_reverses_at_its_ends() {
     }
     assert_eq!(
         visited,
-        ["library", "shelf", "toolbar", "grid"]
+        ["shelf", "toolbar", "grid"]
             .into_iter()
             .collect(),
         "{path:?}"
     );
     assert_eq!(shelves, (0..12).collect());
-    assert_eq!(grid_rows, (0..20).collect());
+    assert_eq!(grid_rows, (0..rows as i32).collect());
     assert!(
         returned,
         "the real engine sweep reverses and returns to the document head"

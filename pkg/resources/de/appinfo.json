@@ -1,4 +1,4 @@
 {
-  "title": "Native Jelly",
-  "appDescription": "Inoffizieller nativer Jellyfin-Client - steht in keiner Verbindung zu Jellyfin"
+  "title": "JellyRust",
+  "appDescription": "Nativer Jellyfin-Client für LG-webOS-Fernseher. Steht in keiner Verbindung zu Jellyfin."
 }

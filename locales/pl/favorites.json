@@ -1,0 +1,9 @@
+{
+  "favorites.movies": "Filmy",
+  "favorites.series": "Seriale TV",
+  "favorites.seasons": "Sezony",
+  "favorites.episodes": "Odcinki",
+  "favorites.people": "Ludzie",
+  "favorites.empty": "Brak ulubionych. Dodaj coś!",
+  "favorites.failed": "Nie udało się wczytać ulubionych"
+}

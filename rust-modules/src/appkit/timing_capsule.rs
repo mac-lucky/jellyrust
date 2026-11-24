@@ -12,7 +12,6 @@
 //! a raw hardware repeat this module would have to re-gate itself.
 use crate::ui::consts::Key;
 use crate::ui::icons::{self, Icon};
-use crate::ui::label::{HAlign, Label};
 use nj_machine::machine::Edge;
 use crate::ui::{theme, Painter, Rect, Spring};
 use std::ffi::CString;
@@ -261,10 +260,10 @@ impl TimingCapsule {
             right_ink,
         );
         let text_x = r.x + CAPSULE_PAD_X + CHEVRON_SZ + CAPSULE_GAP;
-        Label::new(self.caption.as_ptr(), theme::size::TITLE, theme::TEXT_PRIMARY)
-            .bold()
-            .h(HAlign::Center)
-            .draw(p, Rect::new(text_x, r.y, CAPSULE_TEXT_W, r.h));
+        // Centred on its block: figure cells hold the sentence still while the offset steps
+        // (Poppins' digits are proportional).
+        crate::ui::widgets::draw_figures(p, self.caption.to_str().unwrap_or_default(), text_x + CAPSULE_TEXT_W * 0.5,
+            r.cy(), theme::size::TITLE, theme::TEXT_PRIMARY, 1, true, &crate::ui::widgets::LegacyMeasure);
     }
 }
 
@@ -402,13 +401,12 @@ mod tests {
         use nj_base::fontcov::advances::ShippedMeasure;
         use crate::ui::fit::HEADROOM;
         use nj_platform::i18n::{LocaleContext, Preference};
-        use nj_machine::machine::Measure;
         let mut out = Vec::new();
         for (language, region) in [(Preference::En, "en-US"), (Preference::Es, "es-ES"), (Preference::Be, "be-BY"), (Preference::Ru, "ru-RU")] {
             let locale = LocaleContext::resolve(language, None, Some(region), None, None);
             for ms in [-60_000, 60_000, 0] {
                 let t = text_in(ms, &locale);
-                let w = ShippedMeasure.width_str(&t, theme::size::TITLE, true);
+                let w = crate::ui::widgets::figures_width(&t, theme::size::TITLE, true, &ShippedMeasure);
                 if w > CAPSULE_TEXT_W * HEADROOM {
                     out.push(format!("{}: {t:?} is {w:.0}px in {CAPSULE_TEXT_W:.0}px", language.tag()));
                 }

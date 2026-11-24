@@ -266,6 +266,7 @@ def _selftest() -> int:
     variables that no Python test can otherwise see. `make check` runs it, beside `flavor.py`'s.
     """
     maintainer_cases = {
+        "macluckylab <support@macluckylab.com>": True,
         "sostk <sostk@users.noreply.github.com>": True,
         "Gleb Linnik <support@nativejelly.com>": True,
         "Gleb Linnik <GLinnik21@users.noreply.github.com>": True,
@@ -1136,7 +1137,7 @@ check(binary.exists(), f"the staged payload carries the binary ({binary.name})")
 # THE ID IS THE RULE, and it is graded whatever the stamp says — note the `if IS_STABLE`
 # below sits BESIDE the `BUILD` branch, never inside it.
 #
-# `com.sostk.nativejelly` is what a user installs, so a dev-featured binary under it ships the whole
+# `com.macluckylab.jellyrust` is what a user installs, so a dev-featured binary under it ships the whole
 # /tmp trigger surface, the world-writable `nativejelly-remote` FIFO and the `:8910` listener to the
 # public. The Makefile's `release-guard` refuses to BUILD that; this is the same rule on the bytes,
 # which is the half that survives someone reaching for the documented `ALLOW_DEV_ON_STABLE=1`
@@ -1307,8 +1308,8 @@ elif sha_file.exists():
 
 # The Makefile derives IPK_VERSION from appinfo.json, so the built filename is the fourth witness.
 # Scoped to THIS flavour's id: two flavours' artifacts can sit in pkg/ side by side, and the
-# `_arm.ipk` suffix in the pattern is what keeps `com.sostk.nativejelly_*` from also matching
-# `com.sostk.nativejelly.debug_*` (the dot is not a `_`, but a bare prefix test would still match).
+# `_arm.ipk` suffix in the pattern is what keeps `com.macluckylab.jellyrust_*` from also matching
+# `com.macluckylab.jellyrust.debug_*` (the dot is not a `_`, but a bare prefix test would still match).
 built = sorted((ROOT / "pkg").glob(f"{PACKAGED_ID}_*_arm.ipk"))
 if built:
     check(len(built) == 1, f"exactly one built {PACKAGED_ID} ipk in pkg/ (saw {[p.name for p in built]})")
@@ -1411,8 +1412,10 @@ print("== shipped fonts ==")
 # Landed 2026-08-01: Inter (SIL OFL 1.1). This is now a REAL gate, not an XFAIL — its job is to
 # stop Monotype Arial coming back through a stale local copy, which is exactly how it would
 # return (the files are named appfont*.ttf, so nothing about the filename reveals the swap).
-ALLOWED = {"Inter", "Arimo", "Roboto", "Noto Sans", "Source Sans 3", "Noto Sans CJK KR"}
-for f in ("pkg/appfont.ttf", "pkg/appfont-bold.ttf", "pkg/appfont-cjk.ttf"):
+# Poppins SemiBold is the bold face (tools/cut-poppins.py); its nameID 1 carries the weight.
+ALLOWED = {"Poppins", "Poppins SemiBold", "Inter", "Arimo", "Roboto", "Noto Sans", "Source Sans 3", "Noto Sans CJK KR"}
+for f in ("pkg/appfont.ttf", "pkg/appfont-bold.ttf", "pkg/appfont-inter.ttf", "pkg/appfont-inter-bold.ttf",
+          "pkg/appfont-cjk.ttf"):
     fam = font_family(ROOT / f)
     check(fam in ALLOWED, f"{f} family={fam!r} is redistributable (allowed: {sorted(ALLOWED)})")
 # The fallback face, checked for PRESENCE separately: the payload assertion below only runs when
@@ -1424,9 +1427,9 @@ check(_cjk.exists() and _cjk.stat().st_size > 15_000_000,
       "pkg/appfont-cjk.ttf present and whole — the CJK fallback face (see rust-modules/base/src/fontcov.rs)")
 check((ROOT / "pkg/OFL.txt").exists(),
       "pkg/OFL.txt present — the OFL requires the licence to travel with the font")
-# One OFL text covers both faces: Inter's and Noto CJK's licence bodies are byte-identical after
-# their differing copyright headers, and the per-font copyright notices live in THIRD-PARTY-NOTICES
-# and in each font's own name table (ID 0/7/13/14, asserted by tools/cut-noto-cjk.py).
+# One OFL text covers every face: Poppins', Inter's and Noto CJK's licence bodies are the same text after
+# their differing copyright headers (one URL line apart), and the per-font copyright notices live
+# in THIRD-PARTY-NOTICES and in each font's own name table (ID 0/7/13/14, asserted by tools/cut-noto-cjk.py).
 check("Noto Sans CJK" in (ROOT / "THIRD-PARTY-NOTICES.md").read_text(),
       "THIRD-PARTY-NOTICES.md attributes Noto Sans CJK (OFL 1.1 §2 wants the notice to travel)")
 # The subtitle faces (tools/cut-noto-subs.py): libass finds them by family name, so a missing or
@@ -1510,7 +1513,8 @@ expected = {
     "nativejelly", "sentry-crash", "libass-plx.so.0", "appinfo.json", "icon.png", "largeIcon.png", "splash.png",
     # appfont-cjk.ttf is the fallback face. Its absence is not a cosmetic loss: every Korean,
     # Japanese and Chinese title in the library becomes tofu, which is LG checklist #6 and #48.
-    "appfont.ttf", "appfont-bold.ttf", "appfont-cjk.ttf", "OFL.txt",
+    # appfont-inter*.ttf are the subtitle family and the UI chain's Cyrillic/Greek/Latin Extended link.
+    "appfont.ttf", "appfont-bold.ttf", "appfont-inter.ttf", "appfont-inter-bold.ttf", "appfont-cjk.ttf", "OFL.txt",
     "THIRD-PARTY-NOTICES.md", "LICENSE", "LICENSING.md", "TRADEMARKS.md", *NEEDED_LICENCES,
 }
 data_blob = None

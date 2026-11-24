@@ -1041,12 +1041,14 @@ impl Measure for BareMeasure {
 #[cfg(any(test, feature = "test-support"))]
 impl Measure for nj_base::fontcov::advances::ShippedMeasure {
     fn width(&self, s: &CStr, sz: i32, bold: bool) -> f32 {
-        nj_base::fontcov::advances::shipped(bold).width(&s.to_string_lossy(), sz)
+        nj_base::fontcov::advances::width(&s.to_string_lossy(), sz, bold)
     }
+    /// Poppins' "H" is 697/1000 em (698 SemiBold).
     fn cap_h(&self, sz: i32) -> f32 {
-        sz as f32 * 0.73
+        sz as f32 * 0.70
     }
+    /// Poppins' line box, hhea ascent 1050 + descent 350 over 1000 units.
     fn line_h(&self, sz: i32) -> f32 {
-        sz as f32 * 1.21
+        sz as f32 * 1.40
     }
 }

@@ -301,7 +301,7 @@ fn owned_search_wheel_scrolls_without_moving_focus_and_dpad_reveals_again() {
         let split = rig.split();
         let cx = parts.cx::<AppHost>(split.views, split.measure);
         let placed = d.top_screen().unwrap().place(&field.elem, &cx, At::Drawn).unwrap();
-        assert_eq!(placed.clip.y, crate::ui::widgets::TOP_BAR_BOTTOM,
+        assert_eq!(placed.clip.y, 0.0,
             "scrolling under the tab track must not leave an active page hit above its floor");
     }
     frame(&mut d, &mut rig, AppArg::Search, tick(80), script_key(Key::Down, tick(80)));
@@ -570,9 +570,9 @@ fn owned_search_opens_system_ownership_and_empty_down_keeps_editing() {
     assert!(!d.input.keyboard);
     assert!(owned_search_probe(&d).contains("editing=false"));
     assert_eq!(d.nav.tabs.stack.depth(), 1);
-    frame(&mut d, &mut rig, AppArg::Search, tick(4), script_key(Key::Up, tick(4)));
-    assert_eq!(d.focus().unwrap().elem, crate::ui::dispatch::STRIP_BASE + 3,
-        "UP from the field chooses Search's own shared-strip pill");
+    frame(&mut d, &mut rig, AppArg::Search, tick(4), script_key(Key::Left, tick(4)));
+    assert_eq!(d.focus().unwrap().elem, crate::app::chrome::item_key(crate::app::chrome::Dest::Search),
+        "LEFT from the field enters the rail on Search's own item");
 }
 
 #[test]
@@ -710,14 +710,12 @@ fn owned_search_return_memory_reconstructs_positions_with_a_query_guard() {
     }
 }
 
-/// Legacy `ui/search/mod.rs`'s `the_strip_is_a_zone_with_its_own_cursor` and
-/// `the_profile_chip_is_the_bars_leftmost_stop`, on the shared container: Search no longer keeps
-/// a strip cursor of its own — `TabContainer` publishes the members and the focus engine walks
-/// them — so what is left to grade is the seam. ▲ from the field lands under OUR pill (the one the
-/// screen is drawn as selected on), ◀ walks to the profile chip at the left end and cannot
-/// underflow it, ▶ comes back onto the first pill, and ▼ off the bar is the field again.
+/// The rail seam on Search: LEFT from the field enters the rail on Search's own item (the page's
+/// destination), UP walks to Home and stops there, DOWN walks to the avatar at the foot and stops
+/// there, and RIGHT comes back to the field it left — the seat, not the nearest control.
 #[test]
-fn owned_search_walks_the_shared_strip_to_the_chip_and_back_to_the_field() {
+fn owned_search_walks_the_rail_and_back_to_the_field() {
+    use crate::app::chrome::{item_key, Dest, ACCOUNT_KEY};
     let _serial = nj_base::testlock::serial();
     let session = crate::catalog::session::TempSession::new("owned-search-strip");
     session.watching("synthetic-strip");
@@ -725,25 +723,23 @@ fn owned_search_walks_the_shared_strip_to_the_chip_and_back_to_the_field() {
     let mut d = Dispatcher::<AppHost>::new();
     let mut rig = Bridge::for_test(|| 0);
     frame(&mut d, &mut rig, AppArg::Search, tick(0), vec![]);
+    frame(&mut d, &mut rig, AppArg::Search, tick(1), vec![]);
     let field = d.focus().unwrap();
-    let base = crate::ui::dispatch::STRIP_BASE;
 
-    frame(&mut d, &mut rig, AppArg::Search, tick(1), script_key(Key::Up, tick(1)));
-    assert_eq!(d.focus().map(|key| key.elem), Some(base + 3),
-        "▲ lands under the pill the screen is drawn as selected on");
-
-    for i in 2..10 {
-        frame(&mut d, &mut rig, AppArg::Search, tick(i), script_key(Key::Left, tick(i)));
+    frame(&mut d, &mut rig, AppArg::Search, tick(2), script_key(Key::Left, tick(2)));
+    assert_eq!(d.focus().map(|key| key.elem), Some(item_key(Dest::Search)),
+        "LEFT lands on the item of the page on screen");
+    for i in 3..8 {
+        frame(&mut d, &mut rig, AppArg::Search, tick(i), script_key(Key::Up, tick(i)));
     }
-    assert_eq!(d.focus().map(|key| key.elem), Some(base + 4),
-        "◀ walks the pills to the profile chip and stops there rather than wrapping");
+    assert_eq!(d.focus().map(|key| key.elem), Some(item_key(Dest::Home)), "UP stops on the first item");
+    for i in 8..16 {
+        frame(&mut d, &mut rig, AppArg::Search, tick(i), script_key(Key::Down, tick(i)));
+    }
+    assert_eq!(d.focus().map(|key| key.elem), Some(ACCOUNT_KEY), "DOWN stops on the avatar");
 
-    frame(&mut d, &mut rig, AppArg::Search, tick(10), script_key(Key::Right, tick(10)));
-    assert_eq!(d.focus().map(|key| key.elem), Some(base),
-        "▶ walks back onto the FIRST pill, the one it left");
-
-    frame(&mut d, &mut rig, AppArg::Search, tick(11), script_key(Key::Down, tick(11)));
-    assert_eq!(d.focus(), Some(field), "▼ off the bar lands on the field, whatever pill it was on");
+    frame(&mut d, &mut rig, AppArg::Search, tick(16), script_key(Key::Right, tick(16)));
+    assert_eq!(d.focus(), Some(field), "RIGHT returns to the field it left");
 }
 
 /// What the `/tmp/nativejelly-search[=<query>]` boot trigger now does, once the retired legacy
@@ -854,7 +850,8 @@ fn leaving_owned_search_through_a_real_route_change_releases_its_keyboard() {
 /// Library only.
 #[test]
 fn every_route_wearing_the_shared_bar_reaches_the_chrome_paint_guard() {
-    for (route, name) in [(AppArg::Home, "Home"), (AppArg::Library, "Library"), (AppArg::Search, "Search")] {
+    for (route, name) in [(AppArg::Home, "Home"), (AppArg::Library, "Library"), (AppArg::Search, "Search"),
+        (detail_arg("1001"), "Detail")] {
         assert_eq!(route.chrome(), Chrome::TabBar, "{name} must still wear the shared bar");
         assert!(
             Bridge::draws_chrome_for(&route),
@@ -862,10 +859,10 @@ fn every_route_wearing_the_shared_bar_reaches_the_chrome_paint_guard() {
              guard (`draws_chrome_for`) would not reach its paint body"
         );
     }
-    // The negative control: a page with no bar must still be refused, so this is not a guard that
+    // The negative control: a page with no rail must still be refused, so this is not a guard that
     // vacuously admits everything.
-    assert!(!Bridge::draws_chrome_for(&detail_arg("1001")),
-        "Detail has no shared bar and must not reach draw_chrome's paint body");
+    assert!(!Bridge::draws_chrome_for(&AppArg::Player),
+        "the player has no rail and must not reach draw_chrome's paint body");
 }
 
 /// **Pins the USE SITE of `draws_chrome_for`, not just the predicate.**
@@ -918,61 +915,34 @@ fn draw_chromes_guard_calls_the_named_predicate_and_names_no_page_literal() {
     );
 }
 
-/// **Pins the `AppArg::Search` arm of `app::run::update` that keeps the shared top strip's springs
-/// and hit rects live while Search is on screen.**
-///
-/// `SearchScreen::tick` steps only this screen's OWN rows/springs — it never touches the strip's
-/// travelling capsules, its scroll spring or the profile chip's unfurl, which all live in
-/// `Bridge`'s own `strip: StripRender` field and are stepped by `Bridge::update_home_chrome`.
-/// Home and Library each get an arm in `update` that calls it every frame they are on screen; if
-/// Search's mirroring arm (added alongside the owned cutover) were ever deleted, those springs
-/// would freeze at whatever the previously-drawn page left them, and `ChromeSnapshot::members`'s
-/// published strip rects (read by pointer hit-testing and by focus) would go stale under Search —
-/// exactly the regression `search_route_steps_the_shared_strip_so_its_published_rects_do_not_go_stale`
-/// (this file, above) proves `update_home_chrome` FIXES once it is actually called.
-///
-/// That test cannot see the arm itself: it calls `Bridge::update_home_chrome` directly, never
-/// `app::run::update`, so it stays green whether or not `update`'s `AppArg::Search` branch exists
-/// at all — which is exactly how this arm could vanish with every test still passing. And
-/// `app::run::update` cannot be driven end to end from a host test either: it is `unsafe fn
-/// update(app: &mut App, fr: &mut Frame)`, and `App`/`Frame` carry the live SDL/GL window state
-/// boot creates — there is no host constructor for either. So, like
-/// `draw_chromes_guard_calls_the_named_predicate_and_names_no_page_literal` above (the same
-/// shape of gap, one function over), this reads the source text of the arm itself rather than
-/// running it.
-///
-/// Observed RED: commenting out the `else if !host_frozen(&app.pages) && matches!(app.route(),
-/// AppArg::Search) { ... }` block in `run.rs` (leaving the Home/Library arms above it and the
-/// `search_osc` block below it untouched) makes this test fail with "update must still branch on
-/// AppArg::Search to step the shared strip", while `cargo +nightly test --lib` on that same
-/// mutation reports every other test passing — the disabled-arm-passes-every-test blind spot the
-/// finding named directly.
+/// **Pins the rail arm of `app::run::update` that keeps the rail's springs live on whichever
+/// rail page is on screen.** No screen's tick steps them — they live in `Bridge`'s own `rail` and
+/// are stepped by `Bridge::update_chrome` — so if that one arm were deleted the focus pops and
+/// label pills would freeze. `surface_navigation_tests`'
+/// `every_rail_page_steps_the_rails_focus_motion` proves the call works; it cannot see the arm,
+/// and `app::run::update` cannot be driven from a host test (`App`/`Frame` carry the live SDL/GL
+/// state), so like `draw_chromes_guard_calls_the_named_predicate_and_names_no_page_literal` above
+/// this reads the arm's source.
 #[test]
-fn update_still_steps_the_shared_strip_on_search_the_way_home_and_library_do() {
+fn update_still_steps_the_rail_on_every_page_that_wears_it() {
     let src = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app/run.rs"),
     ).expect("read run.rs");
     let fn_start = src.find("unsafe fn update(app: &mut App, fr: &mut Frame)")
         .expect("app::run::update must exist with its documented signature");
-    // `page_of(app.route)` until restructure phase 10, when the two popover routes it resolved
-    // were deleted and `page_of` became the identity function and went with them.
-    let needle = "matches!(app.route(), AppArg::Search)";
+    let needle = "ScreenArg::chrome(&app.route()) == nj_machine::machine::Chrome::TabBar";
     let arm_at = src[fn_start..].find(needle).map(|i| fn_start + i).expect(
-        "update must still branch on AppArg::Search to step the shared strip — no arm of this \
-         shape was found after fn update's own start",
+        "update must still branch on the rail-wearing pages (`ScreenArg::chrome`) to step the rail",
     );
     let body_start = src[arm_at..].find('{').map(|i| arm_at + i)
-        .expect("the AppArg::Search condition must open a block");
-    // Bounded by this arm's OWN closing statement rather than a raw character window, so the
-    // search cannot spill into the unrelated `search_osc` block right after it (which mentions
-    // neither `update_home_chrome` nor `scoped_motion`) and read that as a false pass.
+        .expect("the rail condition must open a block");
     let body_end = src[body_start..].find("fr.underlay_moving |= moving;").map(|i| body_start + i)
-        .expect("the AppArg::Search arm must still report underlay motion the way Home/Library do");
+        .expect("the rail arm must still report underlay motion");
     let body = &src[body_start..body_end];
     assert!(
-        body.contains("update_home_chrome"),
-        "the AppArg::Search arm must call Bridge::update_home_chrome — without it the shared \
-         strip's springs and published hit rects freeze while Search is on screen — got: {body:?}"
+        body.contains("update_chrome"),
+        "the rail arm must call Bridge::update_chrome — without it the rail's focus pops and label \
+         pills freeze on whichever page is up — got: {body:?}"
     );
 }
 
@@ -1034,18 +1004,15 @@ fn owned_search_content_probe_reports_zone_row_col_pill_and_card_as_focus_moves(
     assert!(back_on_field.contains("zone=Field"), "Up from the shelf must return to the field: {back_on_field}");
     assert!(back_on_field.contains(" row=-1 col=-1 "), "the field carries no shelf position: {back_on_field}");
 
-    // Up again, from the field itself, reaches the shared strip's Search pill — the same
-    // transition `tests/keytable.json`'s Search "up" row records. With no library tabs seeded
-    // here the strip holds only Home (index 0) and Search (index 1), so the pill lands at 1
-    // rather than the real 4-slot device's 3 — the field is a POSITION, not a fixed constant,
-    // and this asserts it moved off -1 onto the strip's own answer rather than hardcoding a
-    // count this test's fixture does not seed.
-    frame(&mut d, &mut rig, AppArg::Search, tick(20), script_key(Key::Up, tick(20)));
+    // LEFT from the field itself enters the rail on Search's own item. With no library seeded
+    // here the rail holds Home (slot 0), Favorites (1), Search (2), Random (3) and Settings (4),
+    // so the probe names slot 2 — a POSITION in the rail's column, off this screen's own groups.
+    frame(&mut d, &mut rig, AppArg::Search, tick(20), script_key(Key::Left, tick(20)));
     for i in 21..30 { frame(&mut d, &mut rig, AppArg::Search, tick(i), vec![]); }
     let on_strip = content_probe(&d, &rig);
-    assert!(on_strip.contains("zone=Strip"), "Up from the field must reach the shared strip: {on_strip}");
-    assert!(on_strip.contains(" row=-1 col=-1 recent=-1 pill=1 card=0 "),
-        "the Search pill (Home, Search — no library tabs seeded here) sits at index 1, off this screen's own groups: {on_strip}");
+    assert!(on_strip.contains("zone=Strip"), "LEFT from the field must reach the rail: {on_strip}");
+    assert!(on_strip.contains(" row=-1 col=-1 recent=-1 pill=2 card=0 "),
+        "Search's item (no library seeded here) is slot 2: {on_strip}");
 }
 
 /// OK on a Collections-shelf tile asks for the COLLECTION page with the hit's identity, and the

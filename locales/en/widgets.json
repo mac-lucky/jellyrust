@@ -98,10 +98,6 @@
     "value": "The app needs one library",
     "description": "Sub-line under the last remaining library row in the Library panel. One line, no wrap (about 400px at most in Spanish, 450px in Belarusian): keep it short."
   },
-  "widgets.source.new_shares": {
-    "value": "Check for shared libraries",
-    "description": "Row in the Library panel that re-checks the account for newly shared libraries. A row label in a 527px column, no wrap: keep it short."
-  },
   "widgets.source.unauthorized": {
     "value": "Not authorized",
     "description": "Server/library availability, connection type, or library-picker action."
@@ -202,32 +198,6 @@
   "widgets.player.chapters": {
     "value": "Chapters",
     "description": "Bottom navigation tab in the player."
-  },
-  "widgets.card.new_episode": {
-    "value": "New episode",
-    "description": "Secondary caption beneath a focused media card."
-  },
-  "widgets.card.show_new_episode": {
-    "value": "{show} · New episode",
-    "description": "Secondary caption beneath a focused media card.",
-    "args": {
-      "show": "str"
-    }
-  },
-  "widgets.card.season_episode": {
-    "value": "S{season} • E{episode}",
-    "description": "Secondary caption beneath a focused media card.",
-    "args": {
-      "episode": "i64",
-      "season": "i64"
-    }
-  },
-  "widgets.card.episode": {
-    "value": "E{episode}",
-    "description": "Secondary caption beneath a focused media card.",
-    "args": {
-      "episode": "i64"
-    }
   },
   "widgets.failure.jail": {
     "value": "Playback failed — this TV's sandbox blocks native video",
@@ -485,7 +455,7 @@
     }
   },
   "widgets.panel.jail": {
-    "value": "this install's sandbox blocks access to /dev/rtkmem; Native Jelly can offer a confirmed repair through rooted Homebrew Channel access",
+    "value": "this install's sandbox blocks access to /dev/rtkmem; JellyRust can offer a confirmed repair through rooted Homebrew Channel access",
     "description": "panel jail"
   },
   "widgets.panel.refused": {
@@ -549,11 +519,11 @@
     "description": "reason forced_playback_help"
   },
   "widgets.repair.question": {
-    "value": "Repair Native Jelly’s sandbox?",
+    "value": "Repair JellyRust’s sandbox?",
     "description": "repair question"
   },
   "widgets.repair.body": {
-    "value": "Use Homebrew Channel’s root access to update Native Jelly’s sandbox with LG’s native profile. This requires a rooted TV. Close and reopen Native Jelly afterward.",
+    "value": "Use Homebrew Channel’s root access to update JellyRust’s sandbox with LG’s native profile. This requires a rooted TV. Close and reopen JellyRust afterward.",
     "description": "repair body"
   },
   "widgets.repair.action": {
@@ -573,7 +543,7 @@
     "description": "repair completed"
   },
   "widgets.repair.reopen": {
-    "value": "Close and reopen Native Jelly before playing video.",
+    "value": "Close and reopen JellyRust before playing video.",
     "description": "repair reopen"
   },
   "widgets.repair.failed": {
@@ -581,7 +551,7 @@
     "description": "repair failed"
   },
   "widgets.repair.start_failed": {
-    "value": "Could not start the repair. Close and reopen Native Jelly to try again.",
+    "value": "Could not start the repair. Close and reopen JellyRust to try again.",
     "description": "repair start_failed"
   },
   "widgets.repair.hbc_unavailable": {

@@ -108,7 +108,7 @@ control POST routes, every path and method is a bare 404.
 
 ```json
 {"kind":"envelope","seq":3,"session":"a1b2c3d4","sent_at_ms":812433,
- "app":{"version":"0.4.1","id":"com.sostk.nativejelly.debug","flavour":"debug",
+ "app":{"version":"0.4.1","id":"com.macluckylab.jellyrust.debug","flavour":"debug",
         "features":["lab-diagnostics","devtools"],"uptime_ms":812433},
  "device":{"webos_release":"10.3.1","codename":"…","api":"…","model":"OLED55C1",
            "board":"k8hpp","panel":"3840x2160","drawable":"1920x1080"},
@@ -394,7 +394,7 @@ only cheap check that the path actually exists before a tester spends a lab hour
 ```
 nativejelly-lab start                       # prints session + the make line below
 make LAB=1 FLAVOR=debug ipk               # bakes pkg/lab.json into the package
-   → upload pkg/com.sostk.nativejelly.debug_0.4.1_arm.ipk to Cloud Test Lab and install it
+   → upload pkg/com.macluckylab.jellyrust.debug_0.4.1_arm.ipk to Cloud Test Lab and install it
 nativejelly-lab status                       # wait for tv_control: connected
 nativejelly-lab send down down ok wait:1000 diag
 nativejelly-lab logs --follow               # the agent watches

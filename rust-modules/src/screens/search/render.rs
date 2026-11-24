@@ -3,16 +3,24 @@ use super::*;
 use crate::screens::registry::tile_facts;
 use crate::search::scope::{ScopeSource, SourceScopeSnapshot};
 use crate::ui::card_row::{self, TileLabel};
-use crate::ui::consts::{MARGIN_X, SCR_H, SCR_W};
+use crate::ui::consts::{SCR_H, SCR_W};
 use crate::ui::label::{HAlign, Label, VAlign};
 use crate::ui::widgets::{Art, Button, StatusKind, StatusOverlay};
 use crate::ui::{theme, Env, Painter, View};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
 
-const CARET_W: f32 = 5.0;
-const CARET_GAP: f32 = 8.0;
-const GHOST_GAP: f32 = theme::size::BODY as f32;
+const CARET_W: f32 = 3.0;
+const CARET_GAP: f32 = 4.0;
+/// The field's text: Litefin's 22.4px in a 72-tall box, 32 in from either side (7 Input).
+const FIELD_TEXT: c_int = theme::size::lf::S22;
+const FIELD_PAD: f32 = 32.0;
+const GHOST_GAP: f32 = theme::space::SM;
+/// The empty state's outline search icon and the air under it (7 Empty state).
+const EMPTY_ICON: f32 = 80.0;
+const EMPTY_ICON_GAP: f32 = theme::space::MD;
+/// Its line, at the caption floor (Litefin's `p` there is unsized).
+const EMPTY_TEXT: c_int = theme::size::CAPTION;
 const COUNT_GAP: f32 = theme::space::SM;
 const SOURCE_PAD: f32 = theme::space::XS;
 
@@ -57,11 +65,11 @@ impl Resources {
             };
             let (_, head) = run_and_head(q, caret);
             self.head = cstring(head);
-            self.run_w = cx.measure.width(&self.run, theme::size::HERO, true);
+            self.run_w = cx.measure.width(&self.run, FIELD_TEXT, false);
             self.head_w = if q.trim().is_empty() {
                 0.0
             } else {
-                cx.measure.width(&self.head, theme::size::HERO, true)
+                cx.measure.width(&self.head, FIELD_TEXT, false)
             };
         }
         let scope = H::search(cx).scope();
@@ -137,7 +145,6 @@ fn count_keys(shelves: &[crate::search::Shelf]) -> [Option<(Kind, usize)>; 5] {
 pub(super) fn draw<H: SearchLike>(screen: &SearchScreen, f: &mut DrawFrame<'_, '_, H>) {
     nj_gfx::gfx::frame_clear(theme::CLEAR_RGB.0, theme::CLEAR_RGB.1, theme::CLEAR_RGB.2);
     let p = f.painter.alpha(f.page_alpha);
-    screen.ground.draw(p, Rect::FULL);
     field(screen, f, p);
     let p = p.alpha(screen.fade.alpha());
     if !screen.recents.is_empty() {
@@ -180,7 +187,7 @@ pub(super) fn draw<H: SearchLike>(screen: &SearchScreen, f: &mut DrawFrame<'_, '
                     } else {
                         p
                     },
-                    Rect::new(MARGIN_X + dx, top - row.motion.lift(), 0.0, cap),
+                    Rect::new(layout::ROW_X + dx, top - row.motion.lift(), 0.0, cap),
                 );
                 f.cx.measure.width(run, size, bold != 0)
             },
@@ -200,6 +207,9 @@ pub(super) fn draw<H: SearchLike>(screen: &SearchScreen, f: &mut DrawFrame<'_, '
     }
 }
 
+/// Litefin's search input (7 Input): the action fill inside a 2px border, radius 16, the border
+/// turning the accent while the field holds focus - this fork's answer to the upstream "focus by
+/// ink alone" verdict - and the query in white, the placeholder in the tertiary ink.
 fn field<H: SearchLike>(screen: &SearchScreen, f: &mut DrawFrame<'_, '_, H>, p: Painter) {
     let data = &screen.render;
     let rect = Rect::new(
@@ -209,35 +219,27 @@ fn field<H: SearchLike>(screen: &SearchScreen, f: &mut DrawFrame<'_, '_, H>, p: 
         layout::FIELD.h,
     );
     let blank = data.query.trim().is_empty();
-    let hot = screen.hot.pos;
-    let ink = if blank {
-        theme::cross(theme::TEXT_TERTIARY, theme::TEXT_SECONDARY, hot)
-    } else {
-        theme::cross(theme::TEXT_SECONDARY, ink_target(screen.editing), hot)
-    };
+    // Two draws: a rim in the same pass as this white film would be added to its white ink.
+    p.rect(rect, theme::radius::LG, theme::ACTION_FILL, theme::ACTION_FILL, 0.0);
+    p.rring(rect, theme::radius::LG, theme::ACTION_BORDER_W, field_border(screen.hot.pos));
+    let ink = if blank { theme::TEXT_TERTIARY } else { theme::TEXT_PRIMARY };
+    let text = Rect::new(rect.x + FIELD_PAD, rect.y, rect.w - 2.0 * FIELD_PAD, rect.h);
     let (run_dx, caret_dx) = run_layout(
         data.run_w,
         run_caret_w(blank, data.head_w),
-        rect.w,
+        text.w,
         screen.editing,
     );
-    let (cap_top, cap_base) = nj_gfx::text::text_cap_band(theme::size::HERO, 1);
-    let pad = descent_pad(
-        rect.h,
-        nj_gfx::text::text_height(theme::size::HERO, 1),
-        cap_top,
-        cap_base,
-    );
+    let (cap_top, cap_base) = nj_gfx::text::text_cap_band(FIELD_TEXT, 0);
     {
-        let _clip = f.clip(p, Rect::new(rect.x, rect.y, rect.w, rect.h + pad));
-        Label::new(data.run.as_ptr(), theme::size::HERO, ink)
-            .bold()
-            .draw(p, Rect::new(rect.x + run_dx, rect.y, rect.w, rect.h));
-        let text_y = nj_gfx::text::text_vcenter_y(theme::size::HERO, 1, rect.cy());
+        let _clip = f.clip(p, text);
+        Label::new(data.run.as_ptr(), FIELD_TEXT, ink)
+            .draw(p, Rect::new(text.x + run_dx, text.y, text.w, text.h));
+        let text_y = nj_gfx::text::text_vcenter_y(FIELD_TEXT, 0, rect.cy());
         if caret_shown(screen.editing, screen.blink_us < super::BLINK_US) {
             p.rect(
                 Rect::new(
-                    rect.x + caret_dx,
+                    text.x + caret_dx,
                     text_y + cap_top,
                     CARET_W,
                     cap_base - cap_top,
@@ -249,13 +251,12 @@ fn field<H: SearchLike>(screen: &SearchScreen, f: &mut DrawFrame<'_, '_, H>, p: 
             );
         }
         if ghost_shown(&data.query) {
-            let y = nj_gfx::text::baseline_y(theme::size::BODY, 0, theme::size::HERO, 1, text_y);
             p.text(
                 nj_platform::i18n::msg::browse_search_one_more_c().as_ptr(),
-                rect.x + caret_dx + CARET_W + GHOST_GAP,
-                y,
-                theme::size::BODY,
-                theme::cross(theme::TEXT_TERTIARY, theme::TEXT_SECONDARY, hot),
+                text.x + caret_dx + CARET_W + GHOST_GAP,
+                text_y,
+                FIELD_TEXT,
+                theme::TEXT_TERTIARY,
                 0,
                 0,
             );
@@ -285,7 +286,7 @@ fn recents<H: SearchLike>(screen: &SearchScreen, f: &mut DrawFrame<'_, '_, H>, p
     .draw(
         p,
         Rect::new(
-            MARGIN_X + crate::ui::table::CONTENT_X,
+            layout::ROW_X,
             layout::CONTENT_TOP - screen.scroll.pos,
             0.0,
             crate::ui::table::HDR_H,
@@ -356,37 +357,34 @@ fn empty<H: SearchLike>(screen: &SearchScreen, f: &DrawFrame<'_, '_, H>, p: Pain
             .draw(&Env::inert(), p);
         return;
     }
-    let header = header_of(empty);
+    // Litefin's empty state: the 80px outline search icon over "Start typing to search"; no
+    // results is the statement alone (7 Empty state).
     let statement = if empty == EmptyState::NoResults {
         let shell =
             f.cx.measure
-                .width_str(&nj_platform::i18n::msg::browse_search_no_results(""), theme::size::TITLE, true);
+                .width_str(&nj_platform::i18n::msg::browse_search_no_results(""), EMPTY_TEXT, false);
         no_results_line(&elide(
             screen.draft.query().trim(),
             1200.0 - shell,
-            theme::size::TITLE,
-            true,
+            EMPTY_TEXT,
+            false,
             f.cx.measure,
         ))
     } else {
-        nj_platform::i18n::msg::browse_search_not_yet().into()
+        nj_platform::i18n::msg::browse_litefin_start_typing().into()
     };
     let statement = cstring(&statement);
-    let hh = f.cx.measure.cap_h(theme::size::CAPTION);
-    let sh = f.cx.measure.cap_h(theme::size::TITLE);
-    let top = rect.y + (rect.h - hh - sh - theme::space::MD) * 0.5;
-    Label::new(header.as_ptr(), theme::size::CAPTION, theme::TEXT_TERTIARY)
+    let text_h = f.cx.measure.cap_h(EMPTY_TEXT);
+    let icon = (empty == EmptyState::NotYet).then_some(EMPTY_ICON + EMPTY_ICON_GAP).unwrap_or(0.0);
+    let top = rect.y + (rect.h - icon - text_h) * 0.5;
+    if empty == EmptyState::NotYet {
+        crate::ui::icons::draw(p, crate::ui::icons::Icon::Search,
+            Rect::new(rect.cx() - EMPTY_ICON * 0.5, top, EMPTY_ICON, EMPTY_ICON), theme::TEXT_PRIMARY);
+    }
+    Label::new(statement.as_ptr(), EMPTY_TEXT, theme::TEXT_PRIMARY)
         .h(HAlign::Center)
         .v(VAlign::CapTop)
-        .draw(p, Rect::new(rect.x, top, rect.w, 0.0));
-    Label::new(statement.as_ptr(), theme::size::TITLE, theme::TEXT_HEADING)
-        .bold()
-        .h(HAlign::Center)
-        .v(VAlign::CapTop)
-        .draw(
-            p,
-            Rect::new(rect.x, top + hh + theme::space::MD, rect.w, 0.0),
-        );
+        .draw(p, Rect::new(rect.x, top + icon, rect.w, 0.0));
 }
 
 pub(super) fn tile<H: SearchLike>(
@@ -418,42 +416,28 @@ pub(super) fn tile<H: SearchLike>(
     if !crate::ui::on_axis(rect.x, rect.w, SCR_W, 32.0) {
         return;
     }
-    let art = tile_art(model.kind, item);
     let resume = match item {
-        Item::Media(media) if model.kind != Kind::Episode => media.resume_frac(),
+        Item::Media(media) => media.resume_frac(),
         _ => None,
     };
+    let sid = match item {
+        Item::Media(media) => media.sid,
+        Item::Tag(tag) => tag.sid,
+        Item::Collection(hit) => hit.item.sid,
+    };
+    let handle = view
+        .scope()
+        .sources()
+        .iter()
+        .find(|source| source.sid == sid && !source.household)
+        .map_or("", |source| source.handle.as_str());
+    // Every card wears its label at rest too (spec 7: Home-style rows); a catalog row names
+    // itself in `draw_cell`, so this text is drawn only for a person or a tag.
+    let mut label = TileLabel::titled(item.title(), &subtitle(model.kind, item, handle));
     if focused {
-        let sid = match item {
-            Item::Media(media) => media.sid,
-            Item::Tag(tag) => tag.sid,
-            Item::Collection(hit) => hit.item.sid,
-        };
-        let handle = view
-            .scope()
-            .sources()
-            .iter()
-            .find(|source| source.sid == sid && !source.household)
-            .map_or("", |source| source.handle.as_str());
-        let fact = subtitle(model.kind, item, handle);
-        card_row::draw_focused(
-            p,
-            art,
-            rect,
-            scale,
-            &style,
-            resume,
-            &TileLabel::titled(item.title(), &fact)
-                .revealed(model.motion.band_reveal())
-                .settling(model.motion.settle_lag(model.elems.len(), col, &style)),
-            f.measure,
-        );
-    } else {
-        card_row::draw_tile(p, art, rect, scale, &style, resume);
+        label = label.settling(model.motion.settle_lag(model.elems.len(), col, &style));
     }
-    if let (Kind::Episode, Item::Media(media)) = (model.kind, item) {
-        crate::ui::widgets::still_overlay(p, &tile_facts::of(media), rect, style.tile_radius(rect, scale), false, f.measure);
-    }
+    card_row::draw_cell(p, tile_art(model.kind, item), rect, scale, &style, resume, &label, focused, f.measure);
     stop(
         screen,
         model.elems[col],
@@ -571,16 +555,9 @@ fn caret_shown(editing: bool, phase_on: bool) -> bool {
     editing && phase_on
 }
 
-fn descent_pad(box_h: f32, full_h: f32, cap_top: f32, cap_base: f32) -> f32 {
-    (full_h - box_h * 0.5 - (cap_top + cap_base) * 0.5).max(0.0)
-}
-
-fn ink_target(editing: bool) -> [f32; 4] {
-    if editing {
-        theme::FIELD_EDITING_INK
-    } else {
-        theme::FIELD_WAITING_INK
-    }
+/// The field's border at focus heat `hot`: the action border at rest, the accent focused.
+fn field_border(hot: f32) -> [f32; 4] {
+    theme::cross(theme::ACTION_BORDER, theme::browse_lf::SEARCH_BORDER_FOCUS, hot)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -597,13 +574,6 @@ fn empty_state(state: crate::search::State, has_shelves: bool) -> Option<EmptySt
         State::Searching => None,
         State::Ready => (!has_shelves).then_some(EmptyState::NoResults),
         State::Failed => Some(EmptyState::Fault),
-    }
-}
-
-fn header_of(state: EmptyState) -> &'static CStr {
-    match state {
-        EmptyState::NoResults => nj_platform::i18n::msg::browse_search_results_c(),
-        _ => nj_platform::i18n::msg::browse_search_recents_c(),
     }
 }
 
@@ -721,7 +691,9 @@ fn name_set(sources: &[&ScopeSource]) -> String {
     join(&names)
 }
 fn scope_text(sources: &[ScopeSource]) -> Option<String> {
-    if sources.is_empty() {
+    // Litefin's search names no scope (7): one answering server is the whole library, so only a
+    // second source or a silent one earns the line.
+    if sources.is_empty() || (sources.len() == 1 && sources[0].live) {
         return None;
     }
     let (live, down): (Vec<_>, Vec<_>) = sources.iter().partition(|source| source.live);
@@ -855,25 +827,14 @@ mod tests {
         assert!(!ghost_shown("ab"));
     }
 
+    /// Litefin's field focus is its border turning the accent (7 Input), from the action border
+    /// at rest, on the same `hot` heat the field already springs.
     #[test]
-    fn ink_target_picks_pure_white_off_editing_and_the_editing_stop_on() {
-        assert_eq!(ink_target(false), theme::FIELD_WAITING_INK);
-        assert_eq!(ink_target(true), theme::FIELD_EDITING_INK);
-        assert_ne!(theme::FIELD_WAITING_INK, theme::FIELD_EDITING_INK);
-    }
-
-    #[test]
-    fn focus_is_carried_by_a_wide_ink_step_and_nothing_else() {
-        let idle = theme::cross(theme::TEXT_SECONDARY, ink_target(false), 0.0);
-        assert_eq!(idle, theme::TEXT_SECONDARY);
-        let waiting = theme::cross(theme::TEXT_SECONDARY, ink_target(false), 1.0);
-        let editing = theme::cross(theme::TEXT_SECONDARY, ink_target(true), 1.0);
-        assert_eq!(waiting, theme::FIELD_WAITING_INK);
-        assert_eq!(editing, theme::FIELD_EDITING_INK);
-        let luma = |c: [f32; 4]| (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) * c[3];
-        assert!(luma(waiting) - luma(idle) > 0.15);
-        assert!(luma(editing) - luma(idle) > 0.15);
-        assert!(luma(waiting) > luma(editing));
+    fn focus_turns_the_fields_border_from_the_action_border_to_the_accent() {
+        let near = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1.0e-6);
+        assert!(near(field_border(0.0), theme::ACTION_BORDER));
+        assert!(near(field_border(1.0), theme::browse_lf::SEARCH_BORDER_FOCUS));
+        assert!(!near(field_border(0.5), field_border(0.0)));
     }
 
     #[test]
@@ -992,23 +953,9 @@ mod tests {
     }
 
     #[test]
-    fn the_clip_reserves_only_the_descent_centering_does_not_already_clear() {
-        assert_eq!(descent_pad(80.0, 87.0, 17.0, 70.0), 3.5);
-        assert_eq!(descent_pad(80.0, 40.0, 17.0, 20.0), 0.0);
-        assert_eq!(descent_pad(80.0, 10.0, 17.0, 70.0), 0.0);
-    }
-
-    #[test]
-    fn one_source_is_named_and_only_no_source_is_silent() {
-        assert_eq!(
-            scope_text(&[own("nas-home")]).unwrap(),
-            "Searching nas-home"
-        );
-        assert_eq!(scope_text(&[own("")]).unwrap(), "Searching your server");
-        assert_eq!(
-            scope_text(&[share("Film Club", "friend")]).unwrap(),
-            "Searching Film Club"
-        );
+    fn one_answering_source_is_silent_and_a_silent_one_is_named() {
+        assert_eq!(scope_text(&[own("nas-home")]), None, "Litefin's search names no scope");
+        assert_eq!(scope_text(&[share("Film Club", "friend")]), None);
         assert_eq!(
             scope_text(&[down(own("nas-home"))]).unwrap(),
             "nas-home unreachable"
@@ -1024,12 +971,12 @@ mod tests {
     #[test]
     fn a_household_profiles_only_source_is_named_not_read_as_a_shared_server() {
         assert_eq!(
-            scope_text(&[household("nas-home")]).unwrap(),
-            "Searching nas-home"
+            scope_text(&[down(household("nas-home"))]).unwrap(),
+            "nas-home unreachable"
         );
         assert_eq!(
-            scope_text(&[household("")]).unwrap(),
-            "Searching your server"
+            scope_text(&[down(household(""))]).unwrap(),
+            "your server unreachable"
         );
     }
 
@@ -1202,8 +1149,6 @@ mod tests {
         assert_eq!(empty_state(State::Ready, true), None);
         assert_eq!(empty_state(State::Failed, true), Some(EmptyState::Fault));
         assert_eq!(empty_state(State::Idle, true), Some(EmptyState::NotYet));
-        assert_eq!(header_of(EmptyState::NotYet), c"RECENT SEARCHES");
-        assert_eq!(header_of(EmptyState::NoResults), c"SEARCH RESULTS");
     }
 
     #[test]

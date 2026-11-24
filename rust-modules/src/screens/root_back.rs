@@ -110,7 +110,7 @@ impl RootBackPage {
             (None, RootBack::LaunchApp(id)) => id.clone(),
             _ => String::new(),
         };
-        self.form.table.compact = false;
+        super::family::style_page_table(&mut self.form.table);
         self.form.set(root_back_form(&self.state.choice, &shown, self.state.busy), Some(&keep));
         self.form.table.list_focused = true;
     }
@@ -122,7 +122,7 @@ impl RootBackPage {
             Notice::SaveFailed => msg::settings_root_back_save_failed(),
             Notice::None => msg::settings_root_back_copy(),
         };
-        TableScreen::new(Header::new(RouteLayout::screen(), Some(msg::settings_title()),
+        TableScreen::new(Header::new(RouteLayout::panel(), Some(msg::settings_title()),
             msg::settings_root_back_title(), copy), &self.form.table, GroupId(0), self.entry).keyed(&self.form)
     }
 
@@ -249,7 +249,7 @@ impl Machine<InnerHost> for RootBackPage {
             }
             ScreenEvent::Tick(t) => {
                 if self.poll_save() { fx.invalidate(nj_machine::present::Provenance::Input); }
-                self.form.table.update(t.dt(), RouteLayout::screen().sectioned_table().h);
+                self.form.table.update(t.dt(), RouteLayout::panel().sectioned_table().h);
                 Handled::Yes
             }
             ScreenEvent::FocusMoved { to, .. } => {

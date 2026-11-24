@@ -34,6 +34,7 @@ pub(crate) fn of(m: &PmsMovie) -> TileFacts<'_> {
         kind: kind_of(m.kind),
         title: &m.title,
         show_title: &m.show_title,
+        role: "",
         thumb: &m.thumb,
         still: &m.still,
         art: &m.art,
@@ -41,6 +42,7 @@ pub(crate) fn of(m: &PmsMovie) -> TileFacts<'_> {
         season_index: m.season_index,
         ep_index: m.ep_index,
         child_count: m.child_count,
+        unplayed: m.unplayed,
         resume: m.resume_frac().map(|frac| Resume {
             frac,
             left_ms: m.dur_ns / 1_000_000 - m.resume_ms,
@@ -114,6 +116,7 @@ mod tests {
             season_index: 2,
             ep_index: 5,
             child_count: 7,
+            unplayed: 4,
             kind: 3,
             ..Default::default()
         };
@@ -122,7 +125,7 @@ mod tests {
         assert_eq!(f.src, m.sid.raw());
         assert_eq!((f.title, f.show_title), ("Pilot", "Show"));
         assert_eq!((f.thumb, f.still, f.art), ("/poster", "/still", "/art"));
-        assert_eq!((f.year, f.season_index, f.ep_index, f.child_count), (1999, 2, 5, 7));
+        assert_eq!((f.year, f.season_index, f.ep_index, f.child_count, f.unplayed), (1999, 2, 5, 7, 4));
         assert_eq!(f.kind, TileKind::Episode);
     }
 

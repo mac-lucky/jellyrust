@@ -580,9 +580,9 @@ impl<R: super::playback::PlaybackResources> LiveItemPlayback<'_, R> {
 /// **`req` carries what `MenuHost` used to say, and it is two bits rather than six variants.**
 /// `loaded_episode` is the only one that changes what an action MEANS: only the detail page's
 /// episode filmstrip holds an item that is a leaf of the loaded season, so its Play from Start goes
-/// through that page's own episode path and its scrobble makes the page re-read itself. Every other
-/// entry point — Home, the Library grid, a Search shelf, a person's filmography, and the detail
-/// page's own RELATED shelf, which stands on that page while its tiles are OTHER items — is a card
+/// through that page's own episode path (a watch write from either of the page's strips re-reads
+/// the page: `menu_detail_refresh`). Every other entry point — Home, the Library grid, a Search
+/// shelf, a person's filmography, and the detail page's own RELATED shelf, which stands on that page while its tiles are OTHER items — is a card
 /// row, and they are all the same arm: the row rides on the request instead of being looked up in
 /// the hub catalog, which only Home's cards are ever in.
 ///
@@ -644,23 +644,7 @@ pub(super) unsafe fn apply_item_action<R: super::playback::PlaybackResources>(
             // panic here unwinds out of the SDL loop and kills the app. If a third write row
             // is ever added to this pattern without a verb, it does nothing instead.
             let Some(w) = a.watch_write() else { return };
-            // Only the FILMSTRIP's host re-reads the page: its rk is an episode of the loaded
-            // season, so the tab ticks, the checks and the hero's own discs all change with it. A
-            // RELATED tile is a different item — the page it is drawn on says nothing about it, and
-            // asking for a refetch here would re-read the mounted show for a write that never
-            // touched it. The tile's own tick is flipped by `metadata::set_watched_local` instead,
-            // which walks the Related shelf for exactly this case.
-            let detail = loaded_episode.then(|| ()).and_then(|()| {
-                let entry = pages.nav.top_page()?;
-                let crate::screens::registry::AppArg::Content(
-                    crate::screens::registry::ContentArg::Detail { sid, rk: detail_rk },
-                ) = &entry.arg else { return None };
-                Some(crate::stores::viewstate::DetailRefresh {
-                    sid: *sid,
-                    rk: detail_rk.clone(),
-                    keep: Some(rk.clone()),
-                })
-            });
+            let detail = menu_detail_refresh(pages, item.as_ref(), loaded_episode, rk);
             // NO GUID from here, and deliberately: a catalog row carries none, and the guid the
             // detail page is holding belongs to the SHOW when this rk is one of its episodes. A
             // guid that is merely close marks a DIFFERENT title watched on every other source, so
@@ -939,6 +923,58 @@ pub(crate) fn note_global_press(
     if *ok_armed && !is_ok(sym) {
         press.cancel();
         *ok_armed = false;
+    }
+}
+
+/// The Detail page a watch write from an item menu re-reads. Only a menu on the mounted page's own
+/// strips carries no catalog row (`item`): the FILMSTRIP, whose rk is an episode of the loaded
+/// season, and the SEASON TABS, whose write flips every episode of that season. Either changes the
+/// tab ticks, the checks and the hero's own discs and next episode. A RELATED tile is a different
+/// item — the page it is drawn on says nothing about it, and asking for a refetch here would re-read
+/// the mounted show for a write that never touched it. The tile's own tick is flipped by
+/// `metadata::set_watched_local` instead, which walks the Related shelf for exactly this case.
+/// `keep` is the episode whose filmstrip position survives the re-read (a season keeps none).
+fn menu_detail_refresh(
+    pages: &crate::ui::dispatch::Dispatcher<super::bridge::AppHost>,
+    item: Option<&crate::catalog_fetch::PmsMovie>,
+    loaded_episode: bool,
+    rk: &str,
+) -> Option<crate::stores::viewstate::DetailRefresh> {
+    if item.is_some() {
+        return None;
+    }
+    let entry = pages.nav.top_page()?;
+    let crate::screens::registry::AppArg::Content(
+        crate::screens::registry::ContentArg::Detail { sid, rk: detail_rk },
+    ) = &entry.arg else { return None };
+    Some(crate::stores::viewstate::DetailRefresh {
+        sid: *sid,
+        rk: detail_rk.clone(),
+        keep: loaded_episode.then(|| rk.to_string()),
+    })
+}
+
+#[cfg(test)]
+mod menu_detail_refresh_tests {
+    use super::super::bridge::{self, AppHost, Bridge};
+    use crate::screens::registry::{AppArg, ContentArg};
+    use crate::stores::viewstate::DetailRefresh;
+
+    /// **A season tab's Mark as Watched re-reads the page** (audit): only the filmstrip's did, so
+    /// the tab's check, the season's ticks and the hero's next episode stayed as they were.
+    #[test]
+    fn a_strip_menus_watch_write_rereads_the_mounted_detail_page() {
+        let _g = nj_base::testlock::serial();
+        let sid = crate::catalog::ServerId::from_raw(0);
+        let mut d = crate::ui::dispatch::Dispatcher::<AppHost>::new();
+        let mut rig = Bridge::for_test(|| 0);
+        bridge::show_page(&mut d, AppArg::Content(ContentArg::Detail { sid, rk: "show-7".into() }));
+        bridge::frame(&mut d, &mut rig, crate::ui::fixture::tick(16), vec![]);
+        let page = |keep: Option<&str>| Some(DetailRefresh { sid, rk: "show-7".into(), keep: keep.map(String::from) });
+        assert_eq!(super::menu_detail_refresh(&d, None, false, "season-2"), page(None), "a season tab");
+        assert_eq!(super::menu_detail_refresh(&d, None, true, "ep-5"), page(Some("ep-5")), "an episode");
+        let related = crate::catalog_fetch::PmsMovie { rk: "film-9".into(), ..Default::default() };
+        assert_eq!(super::menu_detail_refresh(&d, Some(&related), false, "film-9"), None, "a Related tile");
     }
 }
 
@@ -1265,7 +1301,7 @@ mod delete_all_tests {
         fn persistent(&self) -> Vec<std::path::PathBuf> {
             ["lastplace.json", "telemetry.json", "telemetry-spool.bin", "telemetry-crashmark.json"]
                 .iter()
-                .map(|name| self.0.join("persistent").join(format!(".com.sostk.nativejelly.debug-{name}")))
+                .map(|name| self.0.join("persistent").join(format!(".com.macluckylab.jellyrust.debug-{name}")))
                 .collect()
         }
         fn runtime(&self) -> std::path::PathBuf {
@@ -1360,74 +1396,14 @@ mod delete_all_tests {
 // dispatcher/container tree before this ladder is ever consulted (see the retirement notes at
 // `run.rs`'s nav-direction arm and its former `top_focus` call site). Both were already
 // unconditional no-ops for those routes by the time main's copy above was written.
-/// The profile chip's activation, shared by the OK key and the pointer click — the top bar is one
-/// control on three screens and this is the one thing it does.
-///
-/// It deliberately does NOT go through `home_activate`'s `trail.reset()` the way Home's chip press
-/// used to: the account menu is a POPOVER over whatever page is showing, not a navigation, and on
-/// the Library or Search a reset would throw away history the user is still standing on. (At Home
-/// the reset was a no-op anyway — arriving at Home is itself the trail's reset, so the stack there
-/// is already just the root.)
-///
-/// **The popover is a SURFACE since phase 10, which is what finally makes that sentence
-/// structural.** `Route::Account` was a unit variant meaning "Home, plus the panel", so a press on
-/// the Library's chip swapped the page underneath to Home on the press frame and dropped the user
-/// there when they dismissed it; `Route::Account { over: BarHost }` fixed that by NAMING the host,
-/// and a `ModalStack` surface needs no name at all — the page it was presented over stays the top
-/// page and is never replaced. A route with no chip on it opens nothing.
-pub(crate) fn chip_activate(
-    pages: &mut crate::ui::dispatch::Dispatcher<super::bridge::AppHost>,
-) {
-    use crate::ui::screen::ScreenArg;
-    if pages.top_arg().map(|a| a.chrome()) != Some(nj_machine::machine::Chrome::TabBar) {
-        return;
-    }
-    // Search USED to need an explicit keyboard-dismissal nudge here (`BarHost::Search =>` the
-    // retired legacy screen's own `end_editing()`) for the one path that could still reach this
-    // function with the television's own keyboard up — a pointer click on the chip from inside
-    // the field.
-    // That path is retired (phase 7 Search cutover): `owns_input()` in `app/run.rs` now takes
-    // every Search click before it ever reaches `chip_clicked`/`chip_activate`, and the owned
-    // path that replaces it (`content.rs`'s `SearchReq::Account`) does not call this function at
-    // all — the owned screen releases its own keyboard before emitting the request, and calling
-    // `end_editing` here a second time on an instance that already dismissed it would be the
-    // stale-request problem `an_old_search_keyboard_request_cannot_close_the_new_instances_keyboard`
-    // guards against.
-    super::bridge::open_account_menu(pages);
-}
-
-/// The bar-wearing pages, i.e. the ones with a profile chip on them at all — `BarHost::of`'s
-/// successor, and the whole of what that type was still doing once the menu became a surface.
-/// DERIVED from [`crate::ui::screen::ScreenArg::chrome`] rather than listing Home/Library/Search a second time: the
-/// chip is a control ON the shared bar, so "is there a chip to press" is "does this page wear the
-/// bar", and the two cannot drift.
-pub(crate) fn wears_the_chip(route: &AppArg) -> bool {
-    use crate::ui::screen::ScreenArg;
-    route.chrome() == nj_machine::machine::Chrome::TabBar
-}
-
-/// Did this click land on the profile chip of a screen that is WEARING the shared bar? The pointer
-/// twin of [`chip_activate`]'s key path, and the route test is the whole of what makes it safe:
-/// `widgets::CHIP_FRAME` is a constant (the chip never moves), so nothing else bounds it to the
-/// screens that actually draw one.
-pub(crate) fn chip_clicked(route: &AppArg, ev: &[u8]) -> bool {
-    if !wears_the_chip(route) {
-        return false;
-    }
-    let (mx, my) = ptr_xy(ev);
-    crate::ui::widgets::profile_chip_at(mx, my)
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn key_ok(
-    ps: &crate::route::PlaybackSession,
     pa: &mut crate::player::adapter::PlayerAdapter,
     now: u32,
     _ptr: &mut Pointer,
     ok_armed: &mut bool,
     press: &mut crate::ui::press::Press,
     pages: &mut crate::ui::dispatch::Dispatcher<super::bridge::AppHost>,
-    bridge: &mut super::bridge::Bridge,
 ) {
     // The shared top bar's PROFILE CHIP used to be answered here, ahead of the per-route ladder
     // below, off `top_focus` — retired with that function (Home/Library/Search are all owned
@@ -1435,13 +1411,12 @@ pub(crate) unsafe fn key_ok(
     // well above this chain, and never reaches here).
     if super::bridge::player(pages).is_some() {
         // The cursor and the pre-press visibility are the mounted screen's, read ONCE into copies
-        // so the arms below are free to present a panel on the same container (`open_player_overlay`
-        // takes it mutably). The pre-press sample is the one the other player arms take too:
+        // so the arms below are free to borrow the container again. The pre-press sample is the one the other player arms take too:
         // `begin_fresh_press` has already cleared `dismissed`, so re-asking calls a hand-hidden
         // transport visible and this arm would open a panel from behind it
         // (`HudState::visible_at_press`).
-        let Some((vis, focus, tab)) = super::bridge::player(pages)
-            .map(|player| (player.hud.visible_at_press, player.hud.nav.focus, player.hud.nav.tab))
+        let Some((vis, focus)) = super::bridge::player(pages)
+            .map(|player| (player.hud.visible_at_press, player.hud.nav.focus))
         else {
             return;
         };
@@ -1454,12 +1429,6 @@ pub(crate) unsafe fn key_ok(
         if vis && focus == 1 {
             press.begin_ctl(now);
             *ok_armed = true;
-        } else if vis && focus == 2 {
-            if tab == 0 {
-                super::bridge::open_player_overlay(ps, bridge.metadata_view(), pages, crate::screens::player::overlay::OverlayKind::Info);
-            } else if tab == 1 {
-                super::bridge::open_player_overlay(ps, bridge.metadata_view(), pages, crate::screens::player::overlay::OverlayKind::Chapters);
-            }
         } else {
             let np = !super::lifecycle::viewer_paused();
             if np {

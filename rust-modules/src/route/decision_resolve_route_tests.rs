@@ -1364,6 +1364,7 @@ fn a_retry_keeps_the_subtitle_offset_a_new_item_does_not() {
         resume_ns: 0,
         audio_sid: 17,
         sub_sid: 23,
+        sub_off: false,
         sub_offset_ms: crate::player::subtitle_offset_ms(),
         suppress_enhancement: false,
     };
@@ -1425,6 +1426,7 @@ fn a_refused_retry_keeps_its_position_and_full_request_for_the_next_quality() {
             resume_ns: 3_600_000_000_000,
             audio_sid: 17,
             sub_sid: 23,
+            sub_off: false,
             sub_offset_ms: 0,
             suppress_enhancement: false,
         },
@@ -1906,4 +1908,49 @@ fn retry_after_start_failure_suppresses_enhancement() {
     assert_eq!(crate::player::audio_enhancements(), enh, "suppression is per-resolve, not persisted");
 
     crate::player::restore_audio_enhancements(crate::catalog::AudioEnhancements::NONE);
+}
+
+/// **The facts row says what Play will do with the voice preference and with external audio.** A
+/// direct-playable lektor the server picked is skipped under "Dubbing, never lektor" for an English
+/// TrueHD that needs converting; an automatic pick that lands on the AI lektor sidecar is a
+/// conversion (the server remuxes an `AudioIsExternal` track in); Force Direct Play cannot carry a
+/// sidecar at all.
+#[test]
+fn the_preview_follows_the_voice_preference_and_external_audio() {
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    restore_quality(Quality::Original);
+    struct Restore(VoicePreference);
+    impl Drop for Restore { fn drop(&mut self) { restore_voice_preference(self.0); restore_direct_play_mode(DirectPlayMode::Auto); } }
+    let _restore = Restore(voice_preference());
+    let track = |id: i64, codec: &str, lang: &str, title: &str| crate::metadata::Stream {
+        id, index: id, codec: codec.into(), lang_code: lang.into(), title: title.into(), channels: 2, ..Default::default()
+    };
+    let mut d = crate::metadata::Detail {
+        vcodec: "h264".to_string(),
+        part: "/library/parts/1/2/file.mkv".to_string(),
+        width: 1920,
+        height: 1080,
+        audio: vec![
+            crate::metadata::Stream { default: true, ..track(1, "truehd", "eng", "English") },
+            crate::metadata::Stream { selected: true, ..track(2, "ac3", "pol", "Lektor") },
+        ],
+        ..Default::default()
+    };
+    restore_voice_preference(VoicePreference::Any);
+    assert_eq!(playback_preview(&d), Some(Preview::DirectPlay), "the lektor direct-plays");
+    restore_voice_preference(VoicePreference::DubbingNoLektor);
+    assert_eq!(playback_preview(&d), Some(Preview::Remux), "only the English TrueHD is left");
+
+    d.audio = vec![
+        crate::metadata::Stream { default: true, ..track(1, "ac3", "eng", "English") },
+        crate::metadata::Stream { selected: true, external: true, ..track(9, "aac", "pol", "Lektor AI") },
+    ];
+    restore_voice_preference(VoicePreference::Any);
+    assert_eq!(playback_preview(&d), Some(Preview::Remux), "the server's pick is the sidecar");
+    restore_voice_preference(VoicePreference::NoAiLektor);
+    assert_eq!(playback_preview(&d), Some(Preview::DirectPlay), "the English original");
+    d.audio.remove(0);
+    restore_direct_play_mode(DirectPlayMode::Forced);
+    assert_eq!(playback_preview(&d), None, "Force cannot carry a sidecar");
 }

@@ -288,7 +288,12 @@ pub(crate) struct App {
     /// `pump_detail()` (`app/run.rs`).
     pub(crate) menu_play_await: Option<MenuPlayAwait>,
     pub(crate) prev: u32,
+    /// The post-playback Home refresh: armed by every `exit_player`, fired once the frame clock
+    /// reaches it AND the stop's reports have landed (`route::stop_reports_landed`).
     pub(crate) refresh_hubs_at: u32,
+    /// The Detail page a playback was started from, re-read once the stop's reports have landed so
+    /// its Resume, progress and watched state are the server's new ones (`restore_played_entry`).
+    pub(crate) post_play_detail: Option<crate::stores::viewstate::DetailRefresh>,
     /// Noticing a library change on the server (`stores::library_poll`), stepped every frame.
     pub(crate) library_poll: crate::stores::library_poll::LibraryPoll,
     /// The HTTPS retry for servers on a plaintext grant (`plex::grant::UpgradeRetry`), stepped
@@ -488,6 +493,9 @@ fn pre_boot_diagnostics() -> crate::telemetry::native::Guard {
     // Last: the worker must observe every boot-time environment/trigger mutation above, while a
     // controlled replay which deliberately skips this preflight keeps the conservative Unknown.
     nj_platform::tv::start_capability_probe();
+    // Whether the set is switched off while a film is parked decides how it comes back
+    // (`player::lifecycle::ForegroundLifecycle::settle_park_clock`).
+    nj_platform::devcaps::power::watch();
     telemetry_guard
 }
 
@@ -500,7 +508,7 @@ unsafe fn run_and_shutdown(mut app: App) -> c_int {
         || app.bridge.controlled_failure().is_some();
     app.glass.sources.borrow_mut().clear();
     let code = i32::from(failed);
-    match run::shutdown(&mut app.player.session, &mut app.adapters.player) {
+    match run::shutdown(&mut app) {
         run::Teardown::Return => {
             let gl_context = app.gl_context;
             // webOS 22 Mali faults if SDL destroys the native window before the EGL context/surface.

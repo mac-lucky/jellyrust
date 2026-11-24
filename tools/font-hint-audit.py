@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 font-hint-audit.py — verify the theme::size ladder rasterizes with design-true stroke
-weights for the INTER faces we ship (`FONTS` below).
+weights for the UI faces we ship (`FONTS` below: Poppins Regular and SemiBold since the Litefin
+fork; the Inter faces behind them draw only the letters Poppins lacks).
 
 Scope, because a third face ships and is deliberately NOT audited here: `pkg/appfont-cjk.ttf`
 (Noto Sans CJK KR, the fallback chain's link 2 — see rust-modules/gfx/src/text.rs) never draws Latin
@@ -44,11 +45,15 @@ FONTS = {
 }
 # Named carve-outs living outside the ladder (see the size-module doc in gfx/tokens.rs).
 CARVEOUTS = {54: "HUD_TITLE_SZ (bold)", 36: "subtitle caption (bold)"}
-# Known, accepted imbalances — reviewed 2026-07-18. MICRO (22) and LABEL's rare regular
-# sites (26) are bar-heavy by one solid pixel even under LIGHT hinting; both are low-
-# prominence roles and every remedy (size nudge) costs scale hierarchy. Anything NOT in
-# this set that measures bar-heavy is a regression and fails the audit.
-ACCEPTED = {("regular", 22), ("regular", 26)}
+# Known, accepted imbalances. Poppins (2026-11-20): regular BODY (28) is bar-heavy by one
+# solid pixel under LIGHT hinting (bar 2 + 0.13 against stem 1 + 1.55, a stem that straddles a
+# pixel boundary); every remedy is a rung change, which moves every layout that reads BODY.
+# Inter's two (regular 22 and 26) measure clean in Poppins. Anything NOT in this set that
+# measures bar-heavy is a regression and fails the audit. The Litefin rungs (`size::lf`) copy
+# Litefin's CSS sizes, so their straddling stems are accepted the same way: regular 16, 17, 29
+# and bold 17, 18.
+ACCEPTED = {("regular", 28), ("regular", 16), ("regular", 17), ("regular", 29),
+            ("bold", 17), ("bold", 18)}
 
 
 def ladder():

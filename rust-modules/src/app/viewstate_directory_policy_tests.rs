@@ -608,7 +608,7 @@ fn metadata_reset_rotates_the_adapter_and_fences_a_late_old_worker() {
         thumb: String::new(), detail_rk: "old-rk".into(),
     }))));
     assert!(bridge.metadata_run(crate::stores::metadata::MetadataCmd::InstallPlaying(Some(crate::metadata::PlayingItem {
-        sid, rk: "old-rk".into(), audio: Vec::new(), subs: Vec::new(), video_fps: 0.0,
+        sid, rk: "old-rk".into(), audio: Vec::new(), subs: Vec::new(), subs_off: false, video_fps: 0.0,
         width: 0, height: 0, bitrate: 0, dovi: Default::default(), markers: Vec::new(), chapters: Vec::new(), blur: None,
     }))));
     bridge.metadata_run(crate::stores::metadata::MetadataCmd::AltInstall {
@@ -658,7 +658,7 @@ fn metadata_reset_rotates_the_adapter_and_fences_a_late_old_worker() {
 /// The account-menu lift is a second PAINT of this bridge's captured chrome, not a second
 /// publication. Changing the process globals after A captured must not make A draw B's chip.
 #[test]
-fn two_bridges_keep_their_own_captured_profile_and_labels_for_a_scrim_lift() {
+fn two_bridges_keep_their_own_captured_avatar_for_a_scrim_lift() {
     let _guard = nj_base::testlock::serial();
     struct Restore(std::sync::Arc<crate::catalog::session::CurrentProfile>);
     impl Drop for Restore {
@@ -669,8 +669,8 @@ fn two_bridges_keep_their_own_captured_profile_and_labels_for_a_scrim_lift() {
     let _restore = Restore(crate::catalog::session::current_snapshot());
     let mut a = Bridge::for_test(|| 0);
     let mut b = Bridge::for_test(|| 0);
-    a.seed_chrome_for_test("Owner A", "A", &["Home", "Movies", ""]);
-    b.seed_chrome_for_test("Owner B", "B", &["Home", "TV Shows", ""]);
+    a.seed_chrome_for_test("Owner A");
+    b.seed_chrome_for_test("Owner B");
     crate::catalog::session::publish_profile_for_test(Some(crate::catalog::session::UserRef {
         title: "Global B".into(),
         ..Default::default()
@@ -680,9 +680,6 @@ fn two_bridges_keep_their_own_captured_profile_and_labels_for_a_scrim_lift() {
         .expect("a bar-wearing bridge publishes lift chrome");
     let br = <Bridge as crate::ui::dispatch::Rig<AppHost>>::scrim_chrome_read(&b)
         .expect("the second bridge publishes its own lift chrome");
-    assert_eq!(ar.profile.name.to_bytes(), b"Owner A");
-    assert_eq!(ar.profile.initial.to_bytes(), b"A");
-    assert_eq!(ar.labels.labels, ["Home", "Movies", ""]);
-    assert_eq!(br.profile.name.to_bytes(), b"Owner B");
-    assert_eq!(br.labels.labels, ["Home", "TV Shows", ""]);
+    assert_eq!(ar.avatar.name.to_bytes(), b"Owner A");
+    assert_eq!(br.avatar.name.to_bytes(), b"Owner B");
 }

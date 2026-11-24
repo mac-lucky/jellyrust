@@ -1,304 +1,285 @@
-//! Shared detail hero geometry, also used by the contrast and safe-area audits.
-use super::{consts::{MARGIN_X, MARGIN_Y, SCR_H}, theme, widgets};
+//! Shared detail hero geometry: Litefin's `posterLeft` split (`docs/litefin-look.md` 5), also read
+//! by the safe-area audit.
+//!
+//! The split is padded 60 at the sides and 5% of the page width (91) at the top, so the poster's
+//! left edge is x=160 (the 100px rail plus 60). The info column runs from the poster's right edge
+//! plus 40 to the right padding, which stops at the overscan keep-out ([`MARGIN_X`]) rather than at
+//! Litefin's 60: 36px narrower than the web client, and every logo, title and control stays inside
+//! [`crate::ui::consts::SAFE`].
+use super::consts::{CONTENT_LEFT, MARGIN_X, SCR_W};
+use super::theme;
+use super::widgets::{LfPlate, PillTone, ACTION_D};
+use super::Rect;
 #[cfg(test)]
-use super::{consts::SCR_W, Rect};
+use super::consts::{MARGIN_Y, SCR_H};
 
-pub(crate) const HERO_TEXT_W: f32 = 943.0;
-pub(crate) const TITLE_BOTTOM: f32 = 566.0;
-pub(crate) const PEOPLE_W: f32 = 560.0;
-pub(crate) const PEOPLE_LEAD: f32 = 32.0;
-pub(crate) const PEOPLE_MAX_LINES: usize = 4;
-pub(crate) const PEOPLE_INK: [f32; 4] = theme::TEXT_SECONDARY;
-/// The facts row's ink, and the second time this trade has been made: at `TEXT_TERTIARY`
-/// (L=0.317) the row needed α≈0.79 of scrim for 4.5:1 — an essentially black hero corner — so
-/// `widgets_hero_scrim_tests` carried it at a lowered 2.6 floor and wrote the ink step down as
-/// deferred. Tightening the hero rhythm is what came due: every rung the row moves up sits in
-/// less of the atmospheric ramp (it is linear in `y`), and the two named rungs the owner asked
-/// for cost 0.16 of contrast, which no scrim retune buys back cheaply — the ramp's own
-/// measurement says it is 97% of the drop, and steepening it darkens the artwork the hero exists
-/// to show. One ink step costs nothing on screen and takes the row to the ordinary 3.0 floor,
-/// exactly as [`PEOPLE_INK`] did for the people column.
-pub(crate) const FACTS_INK: [f32; 4] = theme::TEXT_SECONDARY;
-pub(crate) const COMPACT_TITLE_BOT: f32 = MARGIN_Y + theme::logo::COMPACT_H_MAX;
-pub(crate) const TOP_MARGIN: f32 = COMPACT_TITLE_BOT + 26.0;
+/// The split's side padding and its left edge, x=160 (5 Split).
+pub(crate) const SPLIT_PAD: f32 = 60.0;
+pub(crate) const SPLIT_X: f32 = CONTENT_LEFT + SPLIT_PAD;
+/// The split's top padding: 5% of the page width right of the rail (5 Split, "91").
+pub(crate) const SPLIT_TOP: f32 = 0.05 * (SCR_W - CONTENT_LEFT);
+/// Air under the split before the first section (5 Split, 40 below).
+pub(crate) const SPLIT_BOTTOM: f32 = 40.0;
+/// The poster's width and its gap to the info column (5 Poster).
+pub(crate) const POSTER_W: f32 = 420.0;
+pub(crate) const POSTER_GAP: f32 = 40.0;
+/// The info column's left and right edges.
+pub(crate) const INFO_X: f32 = SPLIT_X + POSTER_W + POSTER_GAP;
+pub(crate) const INFO_R: f32 = SCR_W - MARGIN_X;
+pub(crate) const INFO_W: f32 = INFO_R - INFO_X;
+/// The clear logo's box at the column's top-right corner, `contain`ed (5 Info column).
+pub(crate) const LOGO_W: f32 = 280.0;
+pub(crate) const LOGO_H: f32 = 100.0;
+/// The title's measure: 60% of the column (5, `.details-title` max-width).
+pub(crate) const TITLE_W: f32 = INFO_W * 0.6;
+/// Line boxes: the title's 1.1, the overview's 1.5 (5, 2.2).
+pub(crate) const TITLE_LEAD: f32 = theme::size::lf::S56 as f32 * 1.1;
+pub(crate) const TITLE_LINES: usize = 2;
+pub(crate) const OVERVIEW_LEAD: f32 = theme::size::lf::S24 as f32 * 1.5;
+pub(crate) const OVERVIEW_LINES: usize = 6;
+/// Below the title (12), the episode line, the meta row (16) and the actions row (44).
+const TITLE_GAP: f32 = 12.0;
+pub(crate) const EPISODE_H: f32 = theme::size::lf::S29 as f32 * 1.5;
+/// The original title's line box, under the title when it differs (5 Info column, 28/500).
+pub(crate) const ORIGINAL_H: f32 = theme::size::lf::S28 as f32 * 1.5;
+pub(crate) const META_H: f32 = theme::size::lf::S22 as f32 * 1.5;
+const META_GAP: f32 = 16.0;
+const ACTIONS_GAP: f32 = 44.0;
+/// The focused control's name floats 18 below the row; the band under the row that keeps it, with
+/// the air Litefin leaves between that name and the tagline (about 50 from the row in the
+/// reference shot), so the floating name never touches the text under it.
+pub(crate) const ACTION_LABEL_DY: f32 = 18.0;
+const ACTION_LABEL_AIR: f32 = 16.0;
+const ACTION_LABEL_BAND: f32 = ACTION_LABEL_DY + theme::size::lf::S18 as f32 * 1.5 + ACTION_LABEL_AIR;
+/// Tagline (12 below it) and the Show more pill 12 under the overview.
+pub(crate) const TAGLINE_H: f32 = theme::size::lf::S22 as f32 * 1.5;
+const TAGLINE_GAP: f32 = 12.0;
+const MORE_GAP: f32 = 12.0;
 
+/// Where a scrolled-to section comes to rest: 40 below the top (2.4 Vertical scroll focus offset),
+/// held at the overscan keep-out.
+pub(crate) const TOP_MARGIN: f32 = if 40.0 > super::consts::MARGIN_Y { 40.0 } else { super::consts::MARGIN_Y };
 
 /// Top-left anchor for the hero logo while a trailer plays in the background — independent of
-/// scroll, unlike the pinned [`COMPACT_TITLE_BOT`] title (which answers "how far down have I
-/// scrolled", not "is a trailer playing"). Sits inside the safe-area margins.
-pub(crate) const PREVIEW_LOGO_X: f32 = MARGIN_X;
-pub(crate) const PREVIEW_LOGO_Y: f32 = MARGIN_Y;
+/// scroll. Sits inside the safe-area margins.
+pub(crate) const PREVIEW_LOGO_X: f32 = INFO_X;
+pub(crate) const PREVIEW_LOGO_Y: f32 = SPLIT_TOP;
 /// Keeps a wide wordmark from reaching toward the center of the screen once it has shrunk.
 pub(crate) const PREVIEW_LOGO_MAX_W: f32 = 480.0;
 
-#[derive(Clone, Copy)]
+/// The clear logo's band at `t` of its travel from the column's top-right box (0) to the preview's
+/// top-left spot (1), whose band is `compact_h` tall.
+pub(crate) fn logo_band(t: f32, compact_h: f32) -> Rect {
+    let lerp = |a: f32, b: f32| a + (b - a) * t;
+    Rect::new(lerp(INFO_R - LOGO_W, PREVIEW_LOGO_X), lerp(SPLIT_TOP, PREVIEW_LOGO_Y),
+        lerp(LOGO_W, PREVIEW_LOGO_MAX_W), lerp(LOGO_H, compact_h))
+}
+
+/// `band` narrowed to a logo `w` wide, at the logo's place at `t` of the travel: right-aligned in
+/// the top-right box, left-aligned in the preview spot, and the band's slack spent in step with `t`
+/// between them, so a logo narrower than the band glides rather than flipping edges halfway.
+pub(crate) fn logo_slide(band: Rect, w: f32, t: f32) -> Rect {
+    let w = w.min(band.w);
+    Rect::new(band.x + (band.w - w) * (1.0 - t.clamp(0.0, 1.0)), band.y, w, band.h)
+}
+
+/// The poster's height for an item whose art is portrait or landscape (episodes). Litefin's third
+/// shape, square, is for music and Live TV, which this app has no detail page for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PosterShape {
+    Portrait,
+    Landscape,
+}
+
+impl PosterShape {
+    pub(crate) fn h(self) -> f32 {
+        match self {
+            PosterShape::Portrait => 630.0,
+            PosterShape::Landscape => 236.0,
+        }
+    }
+}
+
+/// What the info column holds, as measured heights and presence bits — the caller measures, this
+/// stacks, so the chain stays pure.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct HeroInput {
+    /// The title's measured block height (at most [`TITLE_LINES`] of [`TITLE_LEAD`]).
+    pub(crate) title_h: f32,
+    /// The original title's line, drawn when it differs from the title.
+    pub(crate) original: bool,
+    pub(crate) episode: bool,
+    pub(crate) meta: bool,
+    pub(crate) pills: bool,
+    pub(crate) tagline: bool,
+    /// The overview's measured block height, 0 without one.
+    pub(crate) overview_h: f32,
+    /// Whether the Show more pill is drawn.
+    pub(crate) more: bool,
+    pub(crate) poster_h: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct HeroChain {
+    pub(crate) title_y: f32,
+    pub(crate) original_y: f32,
+    pub(crate) episode_y: f32,
     pub(crate) meta_y: f32,
-    pub(crate) ratings_y: f32,
-    pub(crate) syn_y: f32,
-    pub(crate) facts_y: f32,
+    pub(crate) pills_y: f32,
     pub(crate) btn_y: f32,
+    pub(crate) tagline_y: f32,
+    pub(crate) overview_y: f32,
+    pub(crate) more_y: f32,
+    /// The split's bottom edge plus its 40: where the first section starts.
+    pub(crate) content_top: f32,
 }
 
-/// Every row below the title is placed the same way: the previous row's own MEASURED bottom edge
-/// plus one named rung from [`theme::space`] — never an absolute offset picked to match a mock.
-///
-/// The rungs are not a rhythm to be kept even; they are the page's GRAMMAR, and what they say is
-/// how strongly two things belong together (owner, 2026-09-18). The closer the relation, the
-/// smaller the distance — so an even ladder of one rung all the way down would be the worst answer
-/// available, not the tidiest: it reads as one undifferentiated list and the eye stops seeing any
-/// structure at all. Three degrees are in play here, and the hero uses all three:
-///
-/// * `SM` — one group. Title, identity line and ratings are the item SAYING WHAT IT IS, and are
-///   meant to read almost as a single object.
-/// * `MD` — a change in the KIND of information. The synopsis is prose; the facts line is date,
-///   extent and how it plays. Both still belong to the hero.
-/// * `LG` — information giving way to ACTION (see [`btn_y`]'s own note), and
-/// * `XL` — the hero giving way to the next region entirely, which is `content_top`'s rung in
-///   `screens::detail`, measured off the action row's bottom rather than stated as a page offset.
-///
-/// A gap is between visual OBJECTS, never between coordinates — which is the whole reason this
-/// function adds a measured height before every rung. `+50` between two baselines of 26-tall text
-/// is a 24 gap wearing a number that belongs to neither the type nor the scale.
-/// "Measured" means the row's real bounding box, which for the identity and ratings lines is
-/// their badge/mark (`widgets::BADGE_H`, `widgets::RATING_MARK_D` — both centred on, and taller
-/// than, the caption text beside them), and for the facts line is the `CAPTION` cap band its own
-/// glyphs match. An item with a taller or shorter line at any step still lands the next one a
-/// clean gap below it, and the gaps read the same whether or not the trailer preview has faded a
-/// label's alpha (this function never looks at preview state — see `compute_hero_chain`'s caller,
-/// which only ever asks "does the item HAVE this content", never "is it currently visible").
-pub(crate) fn hero_chain(
-    syn_h: f32,
-    has_ratings: bool,
-    measure: &dyn nj_machine::machine::Measure,
-) -> HeroChain {
-    let meta_y = TITLE_BOTTOM + theme::space::SM;
-    // The identity line's own bounding box is its BADGE, not its caption: `draw_identity_line`
-    // centres the resolution/HDR/audio badges on the text's cap band, and at `BADGE_H` (34) they
-    // stand taller than the `BODY` caption (cap_h ~21) that shares their row.
-    let meta_h = widgets::BADGE_H;
-    let ratings_y = meta_y + meta_h + theme::space::SM;
-    // Same reasoning: the rating marks (`RATING_MARK_D`, 30) are centred on the caption's cap band
-    // and are the row's tallest element, not the `LABEL` text (cap_h ~19.5) beside them.
-    let ratings_h = widgets::RATING_MARK_D;
-    let syn_y = (if has_ratings { ratings_y + ratings_h } else { meta_y + meta_h }) + theme::space::SM;
-    let facts_y = syn_y + syn_h.max(34.0) + theme::space::MD;
-    // The facts row's own icons (`FACTS_GLYPH_D`/capsule) are sized to the `CAPTION` text itself,
-    // unlike the two rows above, so its measured height is the plain cap band — read through the
-    // `Measure` seam (`check-deps.sh`'s "textmeasure" gate: raw `nj_gfx::text::cap_h` is not
-    // reachable outside `text.rs`/`ui/text_view.rs`/`ui/text_buffer.rs`/a `Measure` impl body),
-    // the same capability `compute_hero_chain`'s caller already threads down for the synopsis.
-    let facts_h = measure.cap_h(theme::size::CAPTION);
-    // The one rung in this chain that is a JUDGEMENT rather than a measurement, and the one place
-    // the ladder steps twice. Everything above this line is information about the item and is
-    // spaced by how closely it belongs together — `SM` inside the identity group, `MD` where the
-    // kind of information changes. The action row is not information: it is what you can DO, so
-    // the step up to `LG` is the grammar saying so.
-    //
-    // It is also an optical correction, which is why it is not simply "the next rung". The Play
-    // pill is a filled white capsule ~72 tall against a `CAPTION` line of ~18 — at an equal
-    // mathematical gap the heavier object reads as CLOSER, because its mass crowds the air above
-    // it. Equal by eye is what the page is judged on, and that is one rung more here.
-    let btn_y = facts_y + facts_h + theme::space::LG;
-    HeroChain { meta_y, ratings_y, syn_y, facts_y, btn_y }
+impl HeroChain {
+    /// The line the meta row's runs and plates centre on.
+    pub(crate) fn meta_cy(&self) -> f32 {
+        self.meta_y + META_H * 0.5
+    }
+    /// The line the tech pills centre on.
+    pub(crate) fn pills_cy(&self) -> f32 {
+        self.pills_y + LfPlate::Tech(PillTone::Plain).h() * 0.5
+    }
 }
 
-pub(crate) fn people_top(btn_y: f32, lines: usize) -> f32 {
-    btn_y + widgets::StatusOverlay::CTRL_H - lines as f32 * PEOPLE_LEAD
-}
-
-pub(crate) fn base_scrim_a(y: f32, hero_vis: f32) -> f32 {
-    0.95 * hero_vis.clamp(0.0, 1.0)
-        * ((y - widgets::HERO_BASE_SCRIM_Y0).max(0.0) / (SCR_H - widgets::HERO_BASE_SCRIM_Y0)).min(1.0)
+/// The info column, top to bottom, each block a measured height plus Litefin's own margin, and the
+/// split's bottom under whichever is taller, the poster or the column.
+pub(crate) fn split_chain(i: HeroInput) -> HeroChain {
+    let title_y = SPLIT_TOP;
+    let mut top = title_y + i.title_h + TITLE_GAP;
+    let original_y = top;
+    if i.original {
+        top += ORIGINAL_H;
+    }
+    let episode_y = top;
+    if i.episode {
+        top += EPISODE_H;
+    }
+    let meta_y = top;
+    if i.meta {
+        top += META_H + META_GAP;
+    }
+    let pills_y = top;
+    if i.pills {
+        top += LfPlate::Tech(PillTone::Plain).h();
+    } else if i.meta {
+        top -= META_GAP; // the actions row's 44 is the only air under the meta row
+    }
+    let btn_y = top + ACTIONS_GAP;
+    top = btn_y + ACTION_D + ACTION_LABEL_BAND;
+    let tagline_y = top;
+    if i.tagline {
+        top += TAGLINE_H + TAGLINE_GAP;
+    }
+    let overview_y = top;
+    top += i.overview_h;
+    let more_y = top + MORE_GAP;
+    if i.more {
+        top = more_y + LfPlate::Chip { focused: false }.h();
+    }
+    let content_top = (SPLIT_TOP + i.poster_h).max(top) + SPLIT_BOTTOM;
+    HeroChain { title_y, original_y, episode_y, meta_y, pills_y, btn_y, tagline_y, overview_y, more_y, content_top }
 }
 
 #[cfg(test)]
 pub(crate) fn overscan_rects(out: &mut Vec<(&'static str, Rect)>) {
-    let tall = theme::logo::COMPACT_H_MAX;
-    out.push(("detail pinned compact title (tallest logo)",
-        Rect::new(MARGIN_X, COMPACT_TITLE_BOT - tall, SCR_W - 2.0 * MARGIN_X, tall)));
-    out.push(("detail hero text column", Rect::new(MARGIN_X, TITLE_BOTTOM - 200.0, HERO_TEXT_W, 200.0)));
-    out.push(("detail people column (right edge)", Rect::new(SCR_W - MARGIN_X - PEOPLE_W, 700.0, PEOPLE_W, 100.0)));
-    out.push(("detail below-hero flow, at rest", Rect::new(MARGIN_X, TOP_MARGIN, SCR_W - 2.0 * MARGIN_X, 100.0)));
+    out.push(("detail poster", Rect::new(SPLIT_X, SPLIT_TOP, POSTER_W, PosterShape::Portrait.h())));
+    out.push(("detail info column", Rect::new(INFO_X, SPLIT_TOP, INFO_W, 600.0)));
+    out.push(("detail clear logo", Rect::new(INFO_R - LOGO_W, SPLIT_TOP, LOGO_W, LOGO_H)));
+    out.push(("detail below-hero flow, at rest", Rect::new(SPLIT_X, TOP_MARGIN, INFO_R - SPLIT_X, 100.0)));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nj_machine::machine::Measure;
 
-    /// The facts row and the people column are LEVEL, so the thing that keeps them apart is a
-    /// width bound and nothing else.
-    #[test]
-    fn the_facts_row_stops_short_of_the_people_column() {
-        let facts_r = SCR_W - MARGIN_X - PEOPLE_W - theme::space::SM;
-        assert!(
-            facts_r < SCR_W - MARGIN_X - PEOPLE_W,
-            "the facts row's bound must sit LEFT of the column it is bounded against"
-        );
-        let measure = crate::ui::fixture::FixtureMeasure;
-        let ch = hero_chain(76.0, true, &measure);
-        let facts_bot = ch.facts_y + measure.cap_h(theme::size::CAPTION);
-        // The case the bound exists for is a FULL column. It is anchored on the action row's
-        // bottom and grows upward, so at `PEOPLE_MAX_LINES` its top line rises past the facts
-        // row's own band and the two share a horizontal strip — nothing but the width keeps the
-        // text apart. A short column does not reach that strip, and since the action row took its
-        // optical rung the three-line case clears it by a few pixels; grading the collision at a
-        // height the column may or may not have is what made this assertion brittle.
-        assert!(
-            people_top(ch.btn_y, PEOPLE_MAX_LINES) < facts_bot,
-            "the tallest people column rises into the facts row's band"
-        );
-        assert!(
-            people_top(ch.btn_y, 1) > facts_bot,
-            "a single line hangs below the facts row entirely"
-        );
-    }
-
-    /// The people column is anchored by its BOTTOM, so its last line sits on the action row's
-    /// bottom edge however many lines the block takes — and each extra line grows UPWARD.
-    #[test]
-    fn the_people_column_grows_upward_off_the_button_row() {
-        let btn_y = 846.0;
-        let bottom = btn_y + widgets::StatusOverlay::CTRL_H;
-        let one = people_top(btn_y, 1);
-        let four = people_top(btn_y, PEOPLE_MAX_LINES);
-        assert_eq!(one, bottom - PEOPLE_LEAD);
-        assert!(four < one, "a taller block starts higher, not lower");
-        assert!(four < bottom, "the block is measured upward from its bottom edge");
-    }
-
-    /// The crew credit takes no vertical space: the action row hangs off the facts line's own
-    /// measured height by a flat [`theme::space::MD`], whether or not PMS sent a Director[] credit
-    /// (the credit is drawn as one more `Bit` inside the same `CAPTION`-sized facts row, so it
-    /// never changes that row's height).
-    #[test]
-    fn the_crew_credit_costs_the_chain_no_vertical_space() {
-        let m = crate::ui::fixture::FixtureMeasure;
-        let facts_h = m.cap_h(theme::size::CAPTION);
-        for syn_h in [0.0_f32, 108.0] {
-            for ratings in [false, true] {
-                let ch = hero_chain(syn_h, ratings, &m);
-                assert_eq!(
-                    ch.btn_y,
-                    ch.facts_y + facts_h + theme::space::LG,
-                    "the action row hangs off the facts line's measured height, credit or no credit"
-                );
-            }
+    fn full() -> HeroInput {
+        HeroInput {
+            title_h: TITLE_LEAD,
+            original: false,
+            episode: false,
+            meta: true,
+            pills: true,
+            tagline: true,
+            overview_h: 3.0 * OVERVIEW_LEAD,
+            more: true,
+            poster_h: PosterShape::Portrait.h(),
         }
     }
 
-    /// The ratings row is the chain's conditional band: it moves everything below it and nothing
-    /// above it, by exactly its own measured height plus the ratings→synopsis rung.
+    /// The split is Litefin's: poster at (160, 91), the column 40 to its right, and the column's
+    /// right edge on the safe area rather than past it.
     #[test]
-    fn the_ratings_band_is_reserved_when_there_are_scores_and_never_otherwise() {
-        let m = crate::ui::fixture::FixtureMeasure;
-        let meta_h = widgets::BADGE_H;
-        let ratings_h = widgets::RATING_MARK_D;
-        for syn_h in [0.0_f32, 108.0] {
-            let none = hero_chain(syn_h, false, &m);
-            let some = hero_chain(syn_h, true, &m);
-
-            assert_eq!(some.meta_y, none.meta_y);
-            assert_eq!(none.syn_y, none.meta_y + meta_h + theme::space::SM);
-            assert_eq!(some.syn_y, some.ratings_y + ratings_h + theme::space::SM);
-            let shift = some.syn_y - none.syn_y;
-            assert_eq!(shift, ratings_h + theme::space::SM);
-            assert_eq!(some.facts_y - none.facts_y, shift);
-            assert_eq!(some.btn_y - none.btn_y, shift);
-        }
+    fn the_split_sits_where_litefin_puts_it_inside_the_safe_area() {
+        assert_eq!(SPLIT_X, 160.0);
+        assert_eq!(SPLIT_TOP.round(), 91.0);
+        assert_eq!(INFO_X, 620.0);
+        assert!(INFO_R <= SCR_W - MARGIN_X);
+        assert!(SPLIT_TOP >= MARGIN_Y);
+        assert!(TOP_MARGIN >= MARGIN_Y);
     }
 
-    /// Each rung in the hero chain is a gap between two MEASURED bounding boxes — the previous
-    /// row's own cap-top→baseline height plus a named [`theme::space`] rung — never a difference of
-    /// absolute Y coordinates copied off a mock. This is the systematic form the owner asked for
-    /// in place of the old `+30`/`+50`/`+54` literals, which happened to reproduce one mock's ys
-    /// for one synopsis length and nothing else.
+    /// Every block sits below the one before it, and an absent block costs nothing.
     #[test]
-    fn every_hero_row_sits_a_named_rung_below_the_previous_rows_measured_bottom() {
-        let syn_h = 72.0_f32;
-        let m = crate::ui::fixture::FixtureMeasure;
-        let meta_h = widgets::BADGE_H;
-        let ratings_h = widgets::RATING_MARK_D;
-        let facts_h = m.cap_h(theme::size::CAPTION);
-
-        let some = hero_chain(syn_h, true, &m);
-        assert_eq!(some.meta_y - TITLE_BOTTOM, theme::space::SM, "logo/title -> meta");
-        assert_eq!(some.ratings_y - (some.meta_y + meta_h), theme::space::SM, "meta -> ratings");
-        assert_eq!(some.syn_y - (some.ratings_y + ratings_h), theme::space::SM, "ratings -> synopsis");
-        assert_eq!(some.facts_y - (some.syn_y + syn_h.max(34.0)), theme::space::MD, "synopsis -> facts");
-        assert_eq!(some.btn_y - (some.facts_y + facts_h), theme::space::LG, "facts -> action row");
-
-        // No ratings: the synopsis follows the meta line directly, off ITS measured bottom.
-        let none = hero_chain(syn_h, false, &m);
-        assert_eq!(none.syn_y - (none.meta_y + meta_h), theme::space::SM, "meta -> synopsis (no ratings)");
+    fn the_column_stacks_downward_and_an_absent_block_takes_no_room() {
+        let c = split_chain(full());
+        let ys = [c.title_y, c.meta_y, c.pills_y, c.btn_y, c.tagline_y, c.overview_y, c.more_y];
+        assert!(ys.windows(2).all(|w| w[0] < w[1]), "{ys:?}");
+        let bare = split_chain(HeroInput { tagline: false, ..full() });
+        assert_eq!(bare.tagline_y, c.tagline_y);
+        assert!(bare.overview_y < c.overview_y);
+        let no_pills = split_chain(HeroInput { pills: false, ..full() });
+        assert!(no_pills.btn_y < c.btn_y);
+        let episode = split_chain(HeroInput { episode: true, ..full() });
+        assert_eq!(episode.meta_y - c.meta_y, EPISODE_H);
+        let original = split_chain(HeroInput { original: true, episode: true, ..full() });
+        assert_eq!(original.original_y, c.title_y + TITLE_LEAD + TITLE_GAP, "right under the title");
+        assert_eq!(original.episode_y - episode.episode_y, ORIGINAL_H);
+        assert_eq!(original.meta_y - episode.meta_y, ORIGINAL_H);
     }
 
-    /// The ladder only ever WIDENS on the way down the hero, and it widens where the meaning
-    /// changes — inside the identity group, then at the change of information kind, then at the
-    /// step from information to action. An even ladder would pass every other test in this file
-    /// and is exactly the answer the owner ruled out: distance is the grammar, so a chain that
-    /// says the same thing at every step says nothing.
+    /// The actions row is 44 below the pills, and the first section waits for the taller of the
+    /// poster and the column, plus the split's 40.
     #[test]
-    fn the_hero_ladder_widens_at_every_change_of_meaning_and_never_narrows() {
-        let m = crate::ui::fixture::FixtureMeasure;
-        let syn_h = 108.0_f32;
-        let ch = hero_chain(syn_h, true, &m);
-        let within_identity = ch.ratings_y - (ch.meta_y + widgets::BADGE_H);
-        let kind_change = ch.facts_y - (ch.syn_y + syn_h);
-        let to_action = ch.btn_y - (ch.facts_y + m.cap_h(theme::size::CAPTION));
+    fn the_actions_row_and_the_flow_hang_off_the_measured_blocks() {
+        let c = split_chain(full());
+        assert_eq!(c.btn_y, c.pills_y + LfPlate::Tech(PillTone::Plain).h() + ACTIONS_GAP);
+        let short = split_chain(HeroInput { overview_h: 0.0, more: false, tagline: false, ..full() });
+        assert_eq!(short.content_top, SPLIT_TOP + PosterShape::Portrait.h() + SPLIT_BOTTOM);
+        let tall = split_chain(HeroInput {
+            overview_h: 6.0 * OVERVIEW_LEAD,
+            poster_h: PosterShape::Landscape.h(),
+            ..full()
+        });
+        let more_h = LfPlate::Chip { focused: false }.h();
+        assert_eq!(tall.content_top, tall.more_y + more_h + SPLIT_BOTTOM);
+    }
 
-        assert!(within_identity < kind_change, "a group must sit tighter than a change of kind");
-        assert!(
-            kind_change < to_action,
-            "the action row is not more information: it takes the next rung up, and the pill's own \
-             mass is why the correction is optical rather than merely the next number"
-        );
-        // And the hero as a whole is further from what follows it than any two rows inside it are
-        // from each other — the region rung `screens::detail::build_layout` adds to `btn_y`.
-        assert!(to_action < theme::space::XL);
+    /// R3.6: the logo GLIDES between its top-right box and the preview's top-left spot. A logo
+    /// narrower than the band is right-aligned at the start and left-aligned at the end, and no
+    /// frame of the travel jumps it sideways (it used to flip alignment at the halfway point).
+    #[test]
+    fn the_clear_logo_glides_from_its_box_to_the_preview_spot_without_a_jump() {
+        let compact = 54.0;
+        // A square logo, contained: as wide as its band is tall.
+        let at = |t: f32| { let band = logo_band(t, compact); logo_slide(band, band.h, t) };
+        assert_eq!(at(0.0).x + at(0.0).w, INFO_R, "right-aligned in the top-right box");
+        assert_eq!(at(1.0).x, PREVIEW_LOGO_X, "left-aligned in the preview spot");
+        let steps = 100;
+        let worst = (0..steps).map(|i| (at((i + 1) as f32 / steps as f32).x - at(i as f32 / steps as f32).x).abs())
+            .fold(0.0, f32::max);
+        let travel = (at(0.0).x - at(1.0).x).abs();
+        assert!(worst <= 2.0 * travel / steps as f32, "a {worst}px step in a {travel}px glide");
     }
 
     #[test]
-    fn base_scrim_preserves_the_legacy_foot_and_clamps_inputs() {
-        assert_eq!(base_scrim_a(0.0, 1.0), 0.0);
-        assert_eq!(base_scrim_a(SCR_H, 1.0), 0.95);
-        assert_eq!(base_scrim_a(SCR_H + 100.0, 2.0), 0.95);
-        assert_eq!(base_scrim_a(SCR_H, -1.0), 0.0);
-    }
-
-    #[test]
-    fn overscan_rects_keep_the_legacy_detail_regions() {
+    fn overscan_rects_cover_the_split() {
         let mut got = Vec::new();
         overscan_rects(&mut got);
         assert_eq!(got.len(), 4);
-
-        let want = [
-            (
-                "detail pinned compact title (tallest logo)",
-                Rect::new(
-                    MARGIN_X,
-                    COMPACT_TITLE_BOT - theme::logo::COMPACT_H_MAX,
-                    SCR_W - 2.0 * MARGIN_X,
-                    theme::logo::COMPACT_H_MAX,
-                ),
-            ),
-            (
-                "detail hero text column",
-                Rect::new(MARGIN_X, TITLE_BOTTOM - 200.0, HERO_TEXT_W, 200.0),
-            ),
-            (
-                "detail people column (right edge)",
-                Rect::new(SCR_W - MARGIN_X - PEOPLE_W, 700.0, PEOPLE_W, 100.0),
-            ),
-            (
-                "detail below-hero flow, at rest",
-                Rect::new(MARGIN_X, TOP_MARGIN, SCR_W - 2.0 * MARGIN_X, 100.0),
-            ),
-        ];
-        for (got, want) in got.iter().zip(want.iter()) {
-            assert_eq!(got.0, want.0);
-            assert_eq!((got.1.x, got.1.y, got.1.w, got.1.h), (want.1.x, want.1.y, want.1.w, want.1.h));
-        }
+        assert!(got.iter().all(|(_, r)| r.y + r.h < SCR_H));
     }
 }

@@ -1,13 +1,15 @@
-# Native Jelly Privacy Policy
+# JellyRust Privacy Policy
 
-Applies to Native Jelly 0.7.0. Last updated 4 October 2026.
+JellyRust is Native Jelly modified by macluckylab. The policy that describes this build is the one in
+the app (Settings, Legal notices, Privacy policy): JellyRust compiles no reporting endpoint in and
+talks only to your Jellyfin server, so the optional crash and usage reports below cannot be sent.
+From "Your Jellyfin server" on, this file is upstream Native Jelly 0.7.0's policy, kept for
+reference.
 
-Native Jelly is based on PlxNative by Gleb Linnik. This policy covers Native Jelly only.
+## Who is responsible for JellyRust data
 
-## Who is responsible for Native Jelly data
-
-sostk is responsible only for data Native Jelly stores locally and for optional reports you choose
-to share. Contact: <https://github.com/sostk/native-jelly/issues> (issues there are public).
+macluckylab is responsible only for data JellyRust stores locally on the television. Contact:
+<https://github.com/mac-lucky/jellyrust/issues>.
 
 ## Your Jellyfin server
 
@@ -181,7 +183,7 @@ Every product analytics event also carries this bounded compatibility and connec
 
 | property | value |
 |---|---|
-| `app_version` | the Native Jelly package version |
+| `app_version` | the JellyRust package version |
 | `webos_release` | the webOS release reported by nyx |
 | `webos_api` | the webOS API version reported by nyx |
 | `webos_codename` | the webOS firmware family reported by nyx |

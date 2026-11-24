@@ -1,6 +1,6 @@
 //! `nav` — **the page transition's PRESENTATION, published once a frame**: the two cascade alphas
-//! a route change rides, the pill the shared strip must read as selected while one is in flight,
-//! and the dev blurred-dissolve prototype's ramp.
+//! a route change rides, the rail item that must read as the current page's while one is in
+//! flight, and the dev blurred-dissolve prototype's ramp.
 //!
 //! **It is no longer a fader.** It owned an [`Xfade`] and drove it (`begin`/`cancel`/`tick`), which
 //! made it the second navigation authority in the app: the loop's `nav_commit` applied its route
@@ -14,7 +14,7 @@
 //! **It is a PUBLICATION, not a mirror.** `app::bridge::frame_with_results` writes it from
 //! `NavStack::{page_alpha, chrome_alpha}` immediately after the dispatcher's frame, and nothing
 //! else writes it — so it cannot disagree with the container, and a reader that runs before the
-//! first frame sees the rest values (1.0, 1.0, no pending pill), which is exactly right.
+//! first frame sees the rest values (1.0, 1.0, no pending item), which is exactly right.
 //!
 //! The dip schedule is documented at [`PageDip`](crate::ui::containers::transition::PageDip).
 //! Its normal page pass captures once at full alpha, then fades the held texture against
@@ -24,15 +24,14 @@
 //! still cascades navigation alpha through `DrawFrame` when capture is unavailable.
 //!
 //! Two alphas, and the split is the whole design. [`page_alpha`] is for content the swap replaces;
-//! [`chrome_alpha`] is for the **shared top tab bar**, the SAME control on Home, the Library and
-//! Search, which must hold still while the pages swap under it. Its readers are the ones that draw
-//! outside a page's own `DrawFrame` — `ui::popover`'s panel and scrim, `widgets::redraw_profile_chip`,
-//! and the glass track's "am I settled enough to sample the ground" test.
+//! [`chrome_alpha`] is for the **shared rail**, the SAME control on every page that wears it, which
+//! must hold still while the pages swap under it. Its readers are the ones that draw outside a
+//! page's own `DrawFrame` — `ui::popover`'s panel and scrim and `widgets::redraw_rail_avatar`.
 //!
 //! [`view_tab`] is the other half of "the control acknowledges the press on the press frame": the
-//! capsule travels to the pressed pill immediately, while the page it names is still fading in.
-//! The pending destination is the container's (`NavStack::pending_dest`); which PILL that page is
-//! remains the application's answer, so `app::bridge` resolves it before publishing.
+//! pressed rail item reads as the current page's at once, while the page it names is still fading
+//! in. The pending destination is the container's (`NavStack::pending_dest`); which rail slot that
+//! page is remains the application's answer, so `app::bridge` resolves it before publishing.
 //!
 //! **Main-thread only**, a `thread_local!` cell rather than a `static mut` — `ci/check-statics.sh`
 //! carried this module as a migration entry ("the statics die in 12") and it is now three plain
@@ -46,7 +45,7 @@ use std::os::raw::c_int;
 struct NavPresentation {
     page: f32,
     chrome: f32,
-    /// The pill the destination selects, or -1 for "nothing in flight". -1 rather than
+    /// The rail slot the destination selects, or -1 for "nothing in flight". -1 rather than
     /// `Option<usize>` so it drops straight into the `c_int` the strip is placed from.
     tab: c_int,
 }
@@ -105,17 +104,17 @@ pub(crate) fn blur_amount() -> f32 {
     }
 }
 
-/// The cascade alpha for CONTINUOUS CHROME — the shared top band (tab row + profile chip), which is
+/// The cascade alpha for CONTINUOUS CHROME — the shared rail (and the clock beside it), which is
 /// the same object on Home and on the Library and must NOT blink when one replaces the other. Full
 /// while the bar exists on both sides of the transition; otherwise it rides the page fade, because
-/// a destination with no tab bar has nothing for it to be continuous WITH.
+/// a destination with no rail has nothing for it to be continuous WITH.
 pub(crate) fn chrome_alpha() -> f32 {
     NAV.with(Cell::get).chrome
 }
 
-/// The tab pill the shared row must read as SELECTED this frame: the queued destination's while a
+/// The rail slot that must read as the current page's this frame: the queued destination's while a
 /// route change is in flight, the caller's own otherwise. The cross-page twin of
-/// `library::view_section`, and the one thing that makes the capsule leave on the PRESS frame.
+/// `library::view_section`, and the one thing that makes the active item move on the PRESS frame.
 pub(crate) fn view_tab(own: c_int) -> c_int {
     let t = NAV.with(Cell::get).tab;
     if t >= 0 { t } else { own }

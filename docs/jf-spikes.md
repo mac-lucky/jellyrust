@@ -146,9 +146,13 @@ Skip Credits work unchanged.
 * A–Z: `NameStartsWith` filters, but there is no per-letter count endpoint. The jump bar is built
   from ONE `Fields=SortName` read grouped client-side (the live test asserts the letter counts sum
   to the library total).
-* Unwatched: `Filters=IsUnplayed`. Collections: `IncludeItemTypes=BoxSet` (server-wide, not per
+* Unwatched: `Filters=IsUnplayed`. Collections: `IncludeItemTypes=BoxSet` with `ParentId` (10.x
+  ignores it for a lone BoxSet type and lists every box set; 12.x lists those with members in the
   library).
-* Cross-server match: `AnyProviderIdEquals=Imdb.tt…` plus a client-side provider-id check.
+* Cross-server match: `/Items` has no provider-id filter (`AnyProviderIdEquals` is not a
+  parameter), so `find_by_guid` reads `HasImdbId=true&Fields=ProviderIds` ids-only, restricted to
+  the origin item's own type (TMDb and TVDB number each type separately), and checks the provider
+  id client-side.
 * `/Items/Latest` groups episodes into their series with `GroupItems=true`.
 * Ticks: 10,000,000 per second (a 2 h 16 min film reports `RunTimeTicks` 81,772,160,000).
 

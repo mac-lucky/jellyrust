@@ -1,4 +1,7 @@
-//! Owned Home page for restructure phase 8.
+//! Owned Home page for restructure phase 8, drawn as Litefin's Home (`docs/litefin-look.md` 4):
+//! the immersive hero (a masked, slowly zooming backdrop with the slide's logo, meta line and
+//! synopsis bottom-anchored on the left, dots bottom-right) and the classic rows overlapping its
+//! lower 450 px. Focusing a row lifts the page so that row rests 40 below the top.
 //!
 //! The instance owns carousel, snap and render motion. The input engine owns the only focus and
 //! every group cursor; this module reads them through `Cx::focus` and never mirrors them. Catalog
@@ -14,19 +17,17 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::sync::Arc;
 
-use crate::catalog_fetch::{HeroRef, HubIdentity, HubRef, HubsView, PmsMovie};
+use crate::catalog_fetch::{HeroRef, HubIdentity, HubRef, HubsView, PmsMovie, HUB_MY_MEDIA, HUB_NEXT_UP};
 use crate::stores::hubs::HubsCmd;
 use crate::stores::{StoreCmd, StoreId, StoreWork};
 use crate::ui::card_row::{self, CardRow, RowStyle};
 use crate::ui::consts::*;
 use crate::ui::frame::Budget;
-use crate::ui::hero_logo::{self, HeroLogo, LogoRung};
-use crate::ui::icons::Icon;
+use crate::ui::hero_logo::{HeroLogo, LogoRung};
 use crate::ui::label::{Label, VAlign};
 use crate::ui::linked_heading::{self, LinkedHeading};
 use crate::ui::landing_hero::{
-    base_scrim_ramp, stack_top as hero_stack_top, COL_W as HERO_COL_W,
-    TEXT_BOTTOM as HERO_TEXT_BOTTOM,
+    self, LOGO_GAP, LOGO_H, LOGO_W, META_GAP, META_LH, SYN_LH, SYN_LINES, SYN_W, TEXT_X,
 };
 use nj_machine::machine::{
     Canon, Cx, Delivery, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputEvent,
@@ -40,48 +41,44 @@ use crate::ui::screen::{
 };
 use crate::ui::text_view::TextView;
 use crate::ui::theme;
-use crate::ui::widgets::{
-    AmbientWash, Art, Button, CircleButton, ControlPalette, CtlPop, PageDots, PageGround,
-    StatusKind, StatusOverlay,
-};
-use crate::ui::{hero_alpha, on_axis, Env, Painter, Rect, Spring, View};
+use crate::ui::widgets::{AmbientWash, Art, HeroArt, PageDots, StatusKind, StatusOverlay};
+use crate::ui::{on_axis, Env, Painter, Rect, Spring, View};
 
 use super::clock_readout::ClockWatch;
 use super::plaintext_question::{self, AlertStep, Near, OfferWatch, PlaintextAlert};
 use super::registry::{
     Compaction, RowSeats, RowDiff, tile_facts, AppFx, AppMsg, ContentArg, ContentReq, HomeCmd, HomeGroupKey, HomeHubIdentity, HomeItemIdentity, HomeItemKey, HomeLike,
-    HomeMemory, HomeReq, HomeTab, LoopReq, PageMemory,
+    HomeMemory, HomeReq, LoopReq, PageMemory,
 };
 
 const HERO_GROUP: GroupId = GroupId(0);
 const FIRST_HUB_GROUP: u32 = 0x100;
-const HERO_PLAY_ELEM: u32 = 0;
-const HERO_INFO_ELEM: u32 = 1;
+/// The hero's one element: OK opens the slide's detail page and LEFT/RIGHT page the slides. Under
+/// a status read-out it is the read-out's action.
+const HERO_ELEM: u32 = 0;
 const FIRST_ITEM_ELEM: u32 = 0x1000;
 /// A collection shelf's linked heading (`ui::linked_heading`) is keyed off its shelf's group: the
 /// heading's group AND its one element are `HEADING_BASE | shelf group`. Both derive from the
 /// interned hub group, so they survive reorder and page memory without a registry of their own;
 /// item elements and hub groups stay below this bit.
 const HEADING_BASE: u32 = 0x8000_0000;
-const HERO_NBTN: usize = 2;
 /// "Connect without encryption?" over the failure read-out (`screens::plaintext_question`): its
 /// group sits between the hero's and the first hub's, its two answers below the first item key.
 const PLAINTEXT_GROUP: GroupId = GroupId(0xF0);
 const PLAINTEXT_CANCEL_ELEM: u32 = 0x0F00;
 const PLAINTEXT_CONNECT_ELEM: u32 = 0x0F01;
 
-/// Parent/container semantic strip keys. Positions are deliberately not encoded here.
-pub(crate) const STRIP_HOME_ELEM: u32 = crate::ui::dispatch::STRIP_BASE;
-pub(crate) const STRIP_MOVIES_ELEM: u32 = crate::ui::dispatch::STRIP_BASE + 1;
-pub(crate) const STRIP_SHOWS_ELEM: u32 = crate::ui::dispatch::STRIP_BASE + 2;
-pub(crate) const STRIP_SEARCH_ELEM: u32 = crate::ui::dispatch::STRIP_BASE + 3;
-pub(crate) const STRIP_ACCOUNT_ELEM: u32 = crate::ui::dispatch::STRIP_BASE + 4;
-
 const MAX_ITEMS: usize = crate::catalog_fetch::MAX_SHELF_ITEMS;
 const HERO_FLIP_CD: f32 = 0.35;
 const HERO_AUTO_S: f32 = 8.0;
-const K_SLIDE: f32 = 130.0;
-const HERO_SLIDE_REST_PX: f32 = 0.5;
+/// The slides' crossfade: critically damped, 99% of the way in Litefin's one second.
+const K_FADE: f32 = 45.0;
+/// A crossfade this near its end is over: half an 8-bit step of alpha.
+const HERO_FADE_REST: f32 = 1.0 / 512.0;
+/// How far a slide's text block rises as it fades in (and sinks as it fades out).
+const HERO_TEXT_RISE: f32 = 20.0;
+/// The focused hero's accent band fades in or out in Litefin's 300 ms.
+const K_BAND: f32 = 480.0;
 /// How near its target the snap dive has to be, in snap units (0 = hero, 1 = grid), before this
 /// page calls the dive over — **together with [`SNAP_REST_VEL`], never alone.** `K_SNAP` is
 /// critically damped, so the dive spends its last dozen frames inside any position threshold worth
@@ -91,27 +88,50 @@ const SNAP_REST_POS: f32 = 0.002;
 /// critically damped tail the position test is blind to.
 const SNAP_REST_VEL: f32 = 0.01;
 const HERO_PREFETCH: usize = 1;
-const HERO_ART_CULL: f32 = 0.996;
-const HERO_WASH_W: [f32; 4] = [0.55, 0.55, 0.40, 0.40];
-
-const HERO_ROW_Y: f32 = HERO_TEXT_BOTTOM + theme::space::MD;
-const HERO_CTRL_D: f32 = StatusOverlay::CTRL_H;
-const HERO_CTRL_GAP: f32 = crate::ui::widgets::CTRL_GAP;
-const HERO_PAGER_D: f32 = HERO_CTRL_D * crate::ui::widgets::DISC_ICON_RATIO;
-const HERO_PAGER_BEARING: f32 =
-    HERO_PAGER_D * crate::ui::icons::ink_x(crate::ui::icons::Icon::Chevron).0;
-const HERO_PAGER_PAD: f32 = HERO_CTRL_GAP - HERO_PAGER_BEARING;
-
-const HERO_META_R: f32 = 0.60 * SCR_W;
-const META_FLOW_W: f32 = HERO_META_R - MARGIN_X;
+/// Past this page offset the hero's art is off screen: the vertical mask's last stop.
+const HERO_ART_END: f32 = landing_hero::MASK_Y[landing_hero::MASK_Y.len() - 1].0 * landing_hero::HEIGHT;
+/// The logo box: a clearLogo is contained in 400x130 (floor and ceiling both the box's height),
+/// the title text falls back at 51 px bold.
+const HERO_LOGO: LogoRung = LogoRung::Custom {
+    area: LOGO_W * LOGO_H,
+    h_min: LOGO_H,
+    h_max: LOGO_H,
+    fallback_sz: theme::size::lf::S51,
+};
+/// The meta line: 16 between its items; the rating badge's 2x8 padding and radius 4.
+const META_ITEM_GAP: f32 = 16.0;
+const BADGE_PAD: (f32, f32) = (8.0, 2.0);
+const BADGE_RAD: f32 = 4.0;
+/// The community score's star to its number, as on the detail page's meta row.
+const META_STAR_GAP: f32 = 6.0;
+/// The hero's focus rect ([`HomeScreen::hero_rect`]): its logo box over a full synopsis.
+const HERO_SEAT: Rect = Rect::new(TEXT_X, landing_hero::logo_top(SYN_LINES), LOGO_W, LOGO_H);
+/// The pager: its right edge 80 from the screen's, its foot 430 above the hero's.
+const DOTS_RIGHT: f32 = SCR_W - 80.0;
+const DOTS_FOOT: f32 = landing_hero::HEIGHT - 430.0;
 const SOURCE_PAD: f32 = theme::space::XS;
-// The same screen-side measurement seam as `screens/detail/hero.rs`. The frame produced here is
-// handed to `Button::draw`, so focus geometry and paint share one capability-derived width. The
-// widget should eventually expose these two private terms through `Button::pill_w_with`.
-const HERO_ICON_RATIO: f32 = 1.15;
-const HERO_ICON_GAP: f32 = 12.0;
 
-pub(crate) const SHAPE: &str = "HomeScreen{snap_target:f32,snap:{pos:f32,vel:f32},hero_flip_cd:f32,hero_auto:f32,covered:bool,visible_activation:Option<u32>,cta_available:bool,strip_chosen:bool,next_group:u32,next_elem:u32,groups:[HomeGroupKey{identity:HomeHubIdentity,group:u32}],items:[HomeItemKey{identity:HomeItemIdentity,elem:u32,last_row:u32,last_col:u32}],carousel:Option<(sid:u32,rk:str)>,outgoing:Option<(sid:u32,rk:str)>,hero_slide:{pos:f32,vel:f32},hero_dir:f32,hero_pop:{sp:[Spring{pos:f32,vel:f32};2],focused:Option<u32>},projected_generation:Option<u32>,grid:{scroll_y:{pos:f32,vel:f32},scroll_target:f32,rows:[{identity:HomeHubIdentity,group:u32,elems:[u32],motion:CardRow{scale:[Spring;24],overflow:Spring,scroll_x:Spring,lift:Spring,band:Spring,focus:i32,base_y:f32}}]},restored_scroll:[(group:u32,scroll:f32)],restore_reveal:bool}";
+// ---- Litefin's classic rows (`docs/litefin-look.md` 4.2) ----
+/// Where the rows begin: they overlap the hero's lower 450.
+const ROWS_OVERLAP_TOP: f32 = landing_hero::HEIGHT - 450.0;
+/// The first row's top with the hero up: 24 of padding into the rows.
+const ROWS_TOP: f32 = ROWS_OVERLAP_TOP + 24.0;
+/// Where the focused row's top rests: 40 below the top of the screen.
+const ROW_FOCUS_TOP: f32 = 40.0;
+/// How far the page rises when the first row takes focus.
+const PAGE_LIFT: f32 = ROWS_TOP - ROW_FOCUS_TOP;
+/// The row title: the rail plus the row's 60 of side padding, in a 48 px line box (32 at 1.5).
+const ROW_TITLE_X: f32 = CONTENT_LEFT + 60.0;
+const ROW_TITLE_LH: f32 = 48.0;
+/// The pictures: 14 under the title, 24 of room above the card boxes for the focus pop, and the
+/// box's own border and ring ([`CARD_INSET`]); under their labels the box's bottom border, 38 and
+/// then 28 to the next row. A picture's x is its style's `margin_x` ([`card_x`]).
+const ROW_CARDS_DY: f32 = ROW_TITLE_LH + 14.0 + 24.0 + CARD_INSET;
+const ROW_FOOT: f32 = (CARD_INSET - theme::FOCUS_RING_W) + 38.0 + 28.0;
+/// The rows' bottom padding: how far above the screen's foot the last row may rest.
+const ROWS_PAD_BOTTOM: f32 = 60.0;
+
+pub(crate) const SHAPE: &str = "HomeScreen{snap_target:f32,snap:{pos:f32,vel:f32},hero_flip_cd:f32,hero_auto:f32,covered:bool,visible_activation:Option<u32>,cta_available:bool,strip_chosen:bool,next_group:u32,next_elem:u32,groups:[HomeGroupKey{identity:HomeHubIdentity,group:u32}],items:[HomeItemKey{identity:HomeItemIdentity,elem:u32,last_row:u32,last_col:u32}],carousel:Option<(sid:u32,rk:str)>,outgoing:Option<(sid:u32,rk:str)>,hero_slide:{pos:f32,vel:f32},hero_band:{pos:f32,vel:f32},hero_zoom:f32,projected_generation:Option<u32>,grid:{scroll_y:{pos:f32,vel:f32},scroll_target:f32,rows:[{identity:HomeHubIdentity,group:u32,elems:[u32],motion:CardRow{scale:[Spring;24],overflow:Spring,scroll_x:Spring,lift:Spring,band:Spring,focus:i32,base_y:f32}}]},restored_scroll:[(group:u32,scroll:f32)],restore_reveal:bool}";
 
 #[derive(Clone)]
 struct HubProjection {
@@ -122,6 +142,8 @@ struct HubProjection {
     /// lists, classified once per publication. Every other row is unlinked and keeps its plain
     /// heading.
     link: Option<crate::catalog::collections::CollectionRef>,
+    /// Litefin's landscape row (My Media, Continue Watching, Next Up) rather than a poster row.
+    landscape: bool,
     // Keys depend on ordered server/item identities, not changing title/resume metadata.
     // Empty rating keys carry the publication generation and are always rebuilt.
     basis: Vec<(crate::catalog::ServerId, String)>,
@@ -173,14 +195,15 @@ impl Grid {
         self.shelves.get(row).unwrap_or(&RESTING)
     }
 
-    fn eff_scroll(&self, row: usize, snap: f32) -> f32 {
-        self.shelf(row).scroll_x() * snap
+    fn scroll_x(&self, row: usize) -> f32 {
+        self.shelf(row).scroll_x()
     }
 }
 
+/// The hero's backdrop layers: the selected slide's art and, through a crossfade, the outgoing
+/// slide's, each revealed as its texture lands. Paint state: the layers are a function of the
+/// heroes the page names ([`Backdrop::bind`]).
 struct Backdrop {
-    wash: AmbientWash,
-    grid_target: [[f32; 4]; 4],
     art: Spring,
     outgoing_art: Spring,
     tex: (u32, f32, f32),
@@ -191,8 +214,6 @@ struct Backdrop {
 impl Backdrop {
     fn new() -> Self {
         Self {
-            wash: AmbientWash::flat(theme::SURFACE_APP),
-            grid_target: [theme::SURFACE_APP; 4],
             art: Spring::at(0.0),
             outgoing_art: Spring::at(0.0),
             tex: (0, 0.0, 0.0),
@@ -206,47 +227,38 @@ impl Backdrop {
     /// a second call with the same heroes changes nothing — so it runs twice a frame: from
     /// [`Self::update`] on the `Tick`, and again from `draw_page` immediately before the draw.
     ///
-    /// The second call is the correctness half. A MANUAL flip is the hero's at-edge Left/Right,
-    /// which the dispatcher re-delivers to the page only once the focus engine reports the edge —
-    /// BEHIND the frame's `Tick` (`ui::dispatch`, `Outcome::Edge(EdgeRule::Screen)`). Layers bound
-    /// only on the tick were therefore the PREVIOUS pair on the press frame, drawn at the new
-    /// pair's slide offsets: the x = 0 slot showed whatever the last tick had called outgoing —
-    /// the hero two flips back while the previous slide was still settling, nothing (the bare
-    /// wash) on a settled billboard — for exactly one frame (owner report 2026-09-30). The
-    /// auto-advance flips inside `tick`, before `update`, and never showed it. Binding at the draw
-    /// makes the layers a function of the state the draw reads, whatever event changed it.
+    /// The second call is the correctness half. A MANUAL flip is the hero's LEFT/RIGHT, which the
+    /// dispatcher delivers to the page BEHIND the frame's `Tick`. Layers bound only on the tick
+    /// were therefore the PREVIOUS pair on the press frame, drawn at the new pair's crossfade
+    /// (owner report 2026-09-30, from the sliding hero this replaced). Binding at the draw makes
+    /// the layers a function of the state the draw reads, whatever event changed it. `visible`:
+    /// the art reaches the screen at the page's offset; off screen nothing is resolved.
     fn bind(
         &mut self,
         hero: Option<HeroRef<'_>>,
         outgoing: Option<HeroRef<'_>>,
         selected: Option<&(crate::catalog::ServerId, String)>,
-        snap: f32,
+        visible: bool,
     ) {
         let resolve = |h: Option<HeroRef<'_>>| {
             h.map(|h| crate::ui::widgets::resolve_tex_wh_on(h.item.sid.raw(), &h.item.art, 1280, 720, 0))
                 .unwrap_or((0, 0.0, 0.0))
         };
-        if snap < HERO_ART_CULL {
+        if visible {
             self.tex = resolve(hero);
             self.outgoing_tex = resolve(outgoing);
         } else {
             self.tex = (0, 0.0, 0.0);
             self.outgoing_tex = (0, 0.0, 0.0);
         }
-
         let changed = match (self.keyed.as_ref(), selected) {
             (Some((a, x)), Some((b, y))) => a != b || x != y,
             (None, None) => false,
             _ => true,
         };
         if changed {
-            nj_gfx::gfx::control_ground_invalidate();
             self.outgoing_art.jump(self.art.pos);
             self.art.jump(f32::from(self.tex.0 != 0));
-            if self.keyed.is_none() {
-                self.wash
-                    .jump(wash_corners(hero.map(|h| h.item), self.grid_target, snap));
-            }
             self.keyed = selected.cloned();
         }
     }
@@ -255,13 +267,12 @@ impl Backdrop {
         &mut self,
         hero: Option<HeroRef<'_>>,
         outgoing: Option<HeroRef<'_>>,
-        grid_item: Option<&PmsMovie>,
         selected: Option<&(crate::catalog::ServerId, String)>,
-        snap: f32,
+        visible: bool,
         dt: f32,
     ) {
-        self.bind(hero, outgoing, selected, snap);
-        // decorative hero-art reveal dissolve (same reason as the wash below)
+        self.bind(hero, outgoing, selected, visible);
+        // decorative: the art fading in as its texture lands moves no layout
         nj_machine::idle::decorative(|| {
             if self.tex.0 != 0 {
                 self.art.step(1.0, AmbientWash::K, dt);
@@ -270,83 +281,19 @@ impl Backdrop {
                 self.outgoing_art.step(1.0, AmbientWash::K, dt);
             }
         });
-        if let Some(item) = grid_item.filter(|m| m.has_blur) {
-            self.grid_target = AmbientWash::keyed(item.blur, PageGround::CARD_W);
-        }
-        // decorative colour dissolve under the page — must not hold the page-freeze snapshot
-        nj_machine::idle::decorative(|| {
-            self.wash.step(
-                wash_corners(hero.map(|h| h.item), self.grid_target, snap),
-                AmbientWash::K,
-                dt,
-            )
-        });
     }
 
-    fn draw(&self, p: Painter, env: &Env, slide: Option<(f32, f32)>) {
-        let incoming_a = reveal(self.tex.0, &self.art);
-        let outgoing_a = reveal(self.outgoing_tex.0, &self.outgoing_art);
-        // THE GROUND: the wash, the one art layer dissolving over it (the snap dive, or the art
-        // fading in) and the atmospheric ramp over both, as ONE pass per pixel
-        // (`AmbientWash::draw_ground`). A hero FLIP slides two art layers, which one pass cannot
-        // carry, so there the art and the ramp stay layers of their own.
-        let wash = !wash_hidden(env.sp, incoming_a, slide.map(|_| outgoing_a))
-            && !self.wash.is_flat(theme::SURFACE_APP, AmbientWash::FLAT_EPS);
-        let art_in_ground = wash && slide.is_none() && env.sp < HERO_ART_CULL;
-        let ramp = (env.hero_a > 0.01 && slide.is_none()).then(|| hero_ramp(env.hero_a));
-        let ramp_in_ground = wash
-            && self.wash.draw_ground(
-                p,
-                Rect::FULL,
-                art_in_ground.then(|| hero_art(self.tex, env.sp, incoming_a)),
-                ramp,
-            );
-
-        let folded = !wash
-            && env.hero_a > 0.01
-            && env.sp < 0.001
-            && slide.is_none()
-            && self.tex.0 != 0
-            && incoming_a > 0.01
-            && crate::ui::widgets::hero_ground_armed();
-        if folded {
-            crate::ui::widgets::hero_ground(
-                p,
-                self.tex.0,
-                art_rect(self.tex, env.sp, 0.0),
-                incoming_a * (1.0 - env.sp),
-                base_scrim_ramp(env.hero_a),
-                env.hero_a,
-            );
-        }
-        if !folded && !art_in_ground && env.sp < HERO_ART_CULL {
-            if let Some((out_x, in_x)) = slide {
-                backdrop_art(p, self.outgoing_tex, env.sp, out_x, outgoing_a);
-                backdrop_art(p, self.tex, env.sp, in_x, incoming_a);
-            } else {
-                backdrop_art(p, self.tex, env.sp, 0.0, incoming_a);
-            }
-        }
-        if !folded && env.hero_a > 0.01 {
-            if !ramp_in_ground {
-                let [y0, knee, mid, foot] = base_scrim_ramp(env.hero_a);
-                p.rect(
-                    Rect::new(0.0, y0, SCR_W, knee - y0),
-                    0.0,
-                    theme::scrim(0.0),
-                    theme::scrim(mid),
-                    0.0,
-                );
-                p.rect(
-                    Rect::new(0.0, knee, SCR_W, SCR_H - knee),
-                    0.0,
-                    theme::scrim(mid),
-                    theme::scrim(foot),
-                    0.0,
-                );
-            }
-            crate::ui::widgets::hero_scrim(p, env.hero_a, false);
-        }
+    /// The ground: the outgoing layer under the incoming one while `crossfade` (the incoming
+    /// share) runs, each at its own Ken Burns scale, masked into the page.
+    fn draw(&self, p: Painter, crossfade: Option<f32>, zoom: (f32, f32)) {
+        let layer = |tex: (u32, f32, f32), zoom: f32, a: f32| HeroArt { tex: tex.0, size: (tex.1, tex.2), zoom, a };
+        let t = crossfade.unwrap_or(1.0);
+        let layers = [
+            layer(self.outgoing_tex, zoom.1, reveal(self.outgoing_tex.0, &self.outgoing_art) * (1.0 - t)),
+            layer(self.tex, zoom.0, reveal(self.tex.0, &self.art) * t),
+        ];
+        let layers = if crossfade.is_some() { &layers[..] } else { &layers[1..] };
+        crate::ui::widgets::hero_backdrop(p, layers);
     }
 }
 
@@ -401,8 +348,15 @@ pub(crate) struct HomeScreen {
     carousel: Option<(crate::catalog::ServerId, String)>,
     outgoing: Option<(crate::catalog::ServerId, String)>,
     hero_flip_cd: f32,
+    /// The crossfade from `outgoing` to `carousel`, 0 to 1: the incoming slide's share.
     hero_slide: Spring,
-    hero_dir: f32,
+    /// Seconds the slide on screen has been zooming (Ken Burns, `landing_hero::zoom_at`), held at
+    /// `landing_hero::ZOOM_S`. Logical state: the timer decides whether the page still moves.
+    hero_zoom: f32,
+    /// The outgoing slide's zoom, held where it stopped while it fades. Paint only.
+    outgoing_zoom: f32,
+    /// The focused hero's accent band, 0 to 1.
+    hero_band: Spring,
     /// Seconds until the carousel auto-advances, hashed as logical state (`SHAPE`'s
     /// `hero_auto:f32`). Deliberately still a raw per-frame decrement (phase 12 D4 did NOT move
     /// this onto `motion::Ramp`): it is hashed across three committed replay fixtures, and a
@@ -443,7 +397,6 @@ pub(crate) struct HomeScreen {
     clock: ClockWatch,
     /// The question, asked from the read-out's *Connect*.
     plaintext_alert: PlaintextAlert,
-    hero_pop: CtlPop<HERO_NBTN>,
     backdrop: Backdrop,
     grid: Grid,
 }
@@ -470,7 +423,9 @@ impl HomeScreen {
             outgoing: None,
             hero_flip_cd: 0.0,
             hero_slide: Spring::at(1.0),
-            hero_dir: 1.0,
+            hero_zoom: 0.0,
+            outgoing_zoom: 0.0,
+            hero_band: Spring::at(0.0),
             hero_auto: HERO_AUTO_S,
             hero_pinned: false,
             covered: false,
@@ -485,7 +440,6 @@ impl HomeScreen {
             plaintext: OfferWatch::default(),
             clock: ClockWatch::default(),
             plaintext_alert: PlaintextAlert::new(PLAINTEXT_GROUP, PLAINTEXT_CANCEL_ELEM, PLAINTEXT_CONNECT_ELEM),
-            hero_pop: CtlPop::new(),
             backdrop: Backdrop::new(),
             grid: Grid::new(),
         }
@@ -694,7 +648,8 @@ impl HomeScreen {
                 self.place_item(at, row as u32, col as u32)
             }).collect();
             seats.rebuilt(from);
-            rows.push(HubProjection { identity, group, elems, link,
+            let landscape = landscape(&identity);
+            rows.push(HubProjection { identity, group, elems, link, landscape,
                 basis: cards.iter().map(|item| (item.sid, item.rk.clone())).collect() });
         }
         let RowDiff { same_rows, matched, rebuilt, unclaimed } = seats.finish();
@@ -705,7 +660,7 @@ impl HomeScreen {
         }
         for (row, shelf) in rows.iter().zip(&mut self.grid.shelves) {
             if let Some(&(_, scroll)) = self.restored_scroll.iter().find(|(group, _)| *group == row.group.0) {
-                shelf.restore_scroll(scroll, row.elems.len(), &RowStyle::HOME);
+                shelf.restore_scroll(scroll, row.elems.len(), style(row.landscape));
             }
         }
         // Two provider rows may share identities and elements. A patch of one would otherwise
@@ -821,9 +776,13 @@ impl HomeScreen {
             .find(|h| Self::same_item(h.item, identity))
     }
 
+    /// The pool's first slide, or without a pool the first row of titles: My Media's tiles are
+    /// libraries, not something a billboard can open.
     fn first_hero(view: HubsView<'_>) -> Option<HeroRef<'_>> {
         view.hero(0).or_else(|| {
-            let hub = view.hub(0)?;
+            let hub = (0..view.hub_count()).filter_map(|i| view.hub(i)).find(|h| {
+                !matches!(h.identity, Some(HubIdentity::Identifier { id, .. }) if id == HUB_MY_MEDIA)
+            })?;
             Some(HeroRef {
                 item: hub.items.first()?,
                 source: hub.source,
@@ -842,6 +801,7 @@ impl HomeScreen {
         }
         self.outgoing = None;
         self.hero_slide.jump(1.0);
+        self.hero_zoom = 0.0;
         self.carousel = Self::first_hero(view).and_then(|h| Self::identity_of(h.item));
     }
 
@@ -883,26 +843,28 @@ impl HomeScreen {
         };
         self.outgoing = Some(current);
         self.carousel = Some(incoming);
-        self.hero_dir = dir as f32;
         self.hero_slide.jump(0.0);
+        self.outgoing_zoom = self.hero_zoom;
+        self.hero_zoom = 0.0;
         self.hero_flip_cd = HERO_FLIP_CD;
         self.hero_auto = HERO_AUTO_S;
         true
     }
 
-    fn slide_offsets(&self) -> Option<(f32, f32)> {
+    /// The incoming slide's share of a running crossfade; `None` once one slide stands alone.
+    fn crossfade(&self) -> Option<f32> {
         self.outgoing.as_ref()?;
-        Some((
-            -self.hero_dir * self.hero_slide.pos * SCR_W,
-            self.hero_dir * (1.0 - self.hero_slide.pos) * SCR_W,
-        ))
+        Some(self.hero_slide.pos.clamp(0.0, 1.0))
+    }
+
+    /// The Ken Burns scales of the incoming and the outgoing slide.
+    fn zooms(&self) -> (f32, f32) {
+        (landing_hero::zoom_at(self.hero_zoom), landing_hero::zoom_at(self.outgoing_zoom))
     }
 
     fn locate(&self, elem: u32) -> Option<Located> {
-        match elem {
-            HERO_PLAY_ELEM => return Some(Located::Hero(0)),
-            HERO_INFO_ELEM => return Some(Located::Hero(1)),
-            _ => {}
+        if elem == HERO_ELEM {
+            return Some(Located::Hero(0));
         }
         if elem & HEADING_BASE != 0 {
             return self.rows.iter().position(|row| {
@@ -935,16 +897,6 @@ impl HomeScreen {
         }
     }
 
-    /// The row whose label band is open (or opening) for `focus` — the focused card's row, `None`
-    /// on a linked heading, and `fallback` (the row a hero→grid door would open) otherwise.
-    fn band_row(&self, focus: Option<FocusKey<u32>>, fallback: usize) -> Option<usize> {
-        match self.focused_loc(focus) {
-            Some(Located::Item(row, _)) => Some(row),
-            Some(Located::Heading(_)) => None,
-            Some(Located::Hero(_)) | None => Some(fallback),
-        }
-    }
-
     /// Where a row's linked heading leads, if it has one.
     fn linked(&self, row: usize) -> Option<&crate::catalog::collections::CollectionRef> {
         self.rows.get(row)?.link.as_ref()
@@ -964,12 +916,11 @@ impl HomeScreen {
         let heading = self.heading_widget(view, row)?;
         let m = heading.measure(measure);
         let focused = self.focused_heading(focus) == Some(row);
-        let y = match at {
-            At::Drawn => heading_y(self.grid.shelf(row).base_y, self.grid.shelf(row).lift()),
-            At::SpringTarget => GRID_TOP_Y + shelf_top_banded(row, self.band_row(focus, row))
-                - self.grid.scroll_target - TITLE_DY,
+        let line = match at {
+            At::Drawn => self.grid.shelf(row).base_y,
+            At::SpringTarget => ROW_FOCUS_TOP + self.flow(row) - self.grid.scroll_target,
         };
-        Some(heading.face_rect(MARGIN_X, y, f32::from(focused), &m))
+        Some(heading.face_rect(ROW_TITLE_X, title_cap_top(line, measure), f32::from(focused), &m))
     }
 
     fn visible_focus(&self, focus: Option<FocusKey<u32>>) -> Option<FocusKey<u32>> {
@@ -991,16 +942,54 @@ impl HomeScreen {
         let mut env = Env::inert();
         env.dt = dt;
         env.sp = self.snap.pos;
-        env.hero_a = hero_alpha(self.snap.pos, 0.55);
         env
     }
 
+    /// The style row `row` draws its cards with.
+    fn style(&self, row: usize) -> &'static RowStyle {
+        style(self.rows.get(row).is_some_and(|r| r.landscape))
+    }
+
+    /// Whether row `row` is My Media, whose tiles are libraries.
+    fn my_media(&self, row: usize) -> bool {
+        self.rows.get(row).is_some_and(|r| is_my_media(&r.identity))
+    }
+
+    /// Row `row`'s height in the flow: its title, its cards, their labels (a library tile carries
+    /// only its name) and the gap to the next row.
+    fn pitch(&self, row: usize) -> f32 {
+        ROW_CARDS_DY + self.style(row).h + card_row::TileLabel::height(!self.my_media(row)) + ROW_FOOT
+    }
+
+    /// Row `row`'s top in the flow, from the first row's.
+    fn flow(&self, row: usize) -> f32 {
+        (0..row).map(|r| self.pitch(r)).sum()
+    }
+
+    /// How far the page has risen this frame: nothing with the hero up, [`PAGE_LIFT`] plus the
+    /// rows' scroll on the rows.
+    fn page_y(&self) -> f32 {
+        self.snap.pos * (PAGE_LIFT + self.grid.scroll_y.pos)
+    }
+
+    /// The furthest the rows scroll: until the last one's foot is the rows' padding above the
+    /// screen's.
+    fn grid_max_scroll(&self) -> f32 {
+        (ROW_FOCUS_TOP + self.flow(self.rows.len()) + ROWS_PAD_BOTTOM - SCR_H).max(0.0)
+    }
+
+    /// The scroll that rests row `row` [`ROW_FOCUS_TOP`] below the top, as far as the rows go.
+    fn row_scroll(&self, row: usize) -> f32 {
+        self.flow(row).min(self.grid_max_scroll())
+    }
+
     fn layout_grid(&mut self) {
-        let top = PEEK_Y + (GRID_TOP_Y - PEEK_Y) * self.snap.pos;
+        let lift = self.page_y();
         let mut flow = 0.0;
-        for shelf in &mut self.grid.shelves {
-            shelf.base_y = top + flow - self.grid.scroll_y.pos * self.snap.pos;
-            flow += card_row::ROW_PITCH_FIXED + shelf.under_band();
+        for row in 0..self.grid.shelves.len() {
+            let pitch = self.pitch(row);
+            self.grid.shelves[row].base_y = ROWS_TOP + flow - lift;
+            flow += pitch;
         }
     }
 
@@ -1014,23 +1003,17 @@ impl HomeScreen {
             let col = focused
                 .filter(|&(r, _)| grid_live && r == row)
                 .map(|(_, c)| c);
+            let sty = self.style(row);
             let Some(shelf) = self.grid.shelves.get_mut(row) else { continue };
             // A row at exact rest is a fixed point of `update`: skipping it changes no bit.
             if col.is_none() && shelf.at_exact_rest() {
                 continue;
             }
-            shelf.update(count, col, &RowStyle::HOME, dt);
+            shelf.update(count, col, sty, dt);
         }
-        let revealed = focused.map(|(row, _)| (row, Some(row)))
-            .or_else(|| self.focused_heading(cx.focus.current).map(|row| (row, None)));
-        if let Some((row, band_row)) = revealed.filter(|(r, _)| *r < self.rows.len() && !self.free) {
-            let (lo, hi) = row_reveal_band(shelf_top_banded(row, band_row));
-            self.grid.scroll_target = card_row::reveal(
-                self.grid.scroll_y.pos,
-                lo,
-                hi,
-                grid_max_scroll(self.rows.len()),
-            );
+        let revealed = focused.map(|(row, _)| row).or_else(|| self.focused_heading(cx.focus.current));
+        if let Some(row) = revealed.filter(|r| *r < self.rows.len() && !self.free) {
+            self.grid.scroll_target = self.row_scroll(row);
         }
         self.grid
             .scroll_y
@@ -1076,8 +1059,8 @@ impl HomeScreen {
             % (crate::ui::widgets::Spinner::PERIOD_MS as f32 * 1000.0);
         self.hero_flip_cd = (self.hero_flip_cd - dt).max(0.0);
         if self.outgoing.is_some() {
-            self.hero_slide.step(1.0, K_SLIDE, dt);
-            if (1.0 - self.hero_slide.pos).abs() * SCR_W < HERO_SLIDE_REST_PX {
+            self.hero_slide.step(1.0, K_FADE, dt);
+            if (1.0 - self.hero_slide.pos).abs() < HERO_FADE_REST {
                 self.hero_slide.jump(1.0);
                 self.outgoing = None;
             }
@@ -1101,13 +1084,15 @@ impl HomeScreen {
             // an animator (the `Timer` class of `docs/retui-invalidation-design.md`, not its
             // `Ramp`), and the dispatcher delivers `Tick` to the page every loop iteration whether or not the
             // frame presents (`nj_machine::idle`, "What this module does NOT do"), so the countdown runs
-            // on a closed gate while the page is uncovered and the flip it ends in is what wakes
-            // it — `outgoing` is set, and `moving` below reports the slide. Noting `Motion` on
-            // every countdown tick made a still billboard present at the full frame rate forever:
-            // every modal dismiss and every page pop came back to a Home that never went idle
-            // (~24 ms of GPU a frame on the TV), and the next transition's first frame paid that
-            // queue in its `glClear`.
-            // `a_settled_hero_counting_down_lets_the_gate_close_and_still_flips` holds both halves.
+            // whatever the gate does, and the flip it ends in reports itself — `outgoing` is set,
+            // and `moving` below reports the crossfade. What keeps a hero left alone presenting is
+            // the Ken Burns zoom below, never this timer: the flip restarts the zoom every 8 s, short
+            // of its 12, so that zoom never runs out while the hero is on screen. That is Litefin's
+            // look and costs a full-rate present (~24 ms of GPU a frame on the TV). Whatever puts the
+            // hero away (a cover, the pin, the rows, a single slide) ends the flips; the zoom then
+            // holds or runs out its 12 s, and Home goes idle.
+            // `a_hero_left_alone_zooms_every_frame_and_flips_on_time` and
+            // `the_hero_is_the_only_thing_that_keeps_home_presenting` hold the two halves.
             self.hero_auto = self.hero_auto - dt;
             if self.hero_auto <= 0.0 {
                 self.hero_flip_cd = 0.0;
@@ -1128,13 +1113,15 @@ impl HomeScreen {
             self.visible_activation = None;
         }
         let visible_focus = self.visible_focus(cx.focus.current);
-        let hero_focus = match self.focused_loc(visible_focus) {
-            Some(Located::Hero(i)) if status_read(view).is_none() => Some(i),
-            _ => None,
-        };
-        // decorative: an in-place scale of the focused control, no layout — must not hold the
-        // page-freeze snapshot (`idle::decorative`)
-        nj_machine::idle::decorative(|| self.hero_pop.step(hero_focus, dt));
+        let hero_focused = matches!(self.focused_loc(visible_focus), Some(Located::Hero(_)))
+            && status_read(view).is_none();
+        // decorative: the band tints the hero in place and moves no layout, so it must not hold
+        // the page-freeze snapshot (`idle::decorative`)
+        nj_machine::idle::decorative(|| {
+            let band = f32::from(hero_focused);
+            self.hero_band.step(band, K_BAND, dt);
+            self.hero_band.land(band, dt);
+        });
         let visible_cx: Cx<'_, H> = Cx {
             views: cx.views,
             tick: cx.tick,
@@ -1147,23 +1134,27 @@ impl HomeScreen {
         };
         self.update_grid(view, &visible_cx, dt);
 
-        let grid_item = self
-            .focused_grid(visible_focus)
-            .and_then(|(r, c)| self.item_at(view, r, c));
         let selected = self.selected_hero(view);
         let outgoing = self.outgoing_hero(view);
-        self.backdrop.update(
-            selected,
-            outgoing,
-            grid_item,
-            self.carousel.as_ref(),
-            self.snap.pos,
-            dt,
-        );
+        let art_on_screen = self.page_y() < HERO_ART_END;
+        self.backdrop.update(selected, outgoing, self.carousel.as_ref(), art_on_screen, dt);
         self.prefetch(view);
+        // Ken Burns: the slide on screen grows for its first `ZOOM_S` seconds, while the page is
+        // uncovered and its art in view; never under the screenshot pin, which wants a still frame.
+        // With several slides every flip restarts it before it is whole, so a hero left on screen
+        // presents every frame (Litefin's look) and this is the term that keeps it doing so.
+        let zooming = !self.covered
+            && !self.hero_pinned
+            && art_on_screen
+            && self.hero_zoom < landing_hero::ZOOM_S
+            && selected.is_some_and(|h| !h.item.art.is_empty());
+        if zooming {
+            self.hero_zoom = (self.hero_zoom + dt).min(landing_hero::ZOOM_S);
+        }
 
         let moving = self.outgoing.is_some()
             || snap_moving
+            || zooming
             || matches!(status_read(view), Some((_, StatusKind::Working, _)));
         if moving {
             fx.note(PresentEvent::Motion);
@@ -1176,7 +1167,7 @@ impl HomeScreen {
     /// **The billboard's neighbours are HELD, not hoped for.** Both backdrops a flip can land on
     /// (the carousel's ±[`HERO_PREFETCH`] slots, wrapping) are asked for through the DRAW path every
     /// frame the billboard is up — from the moment an index is shown, busy pipeline or not, and
-    /// through the slide, so a flip re-arms its new neighbours on the flip itself. One mechanism
+    /// through the crossfade, so a flip re-arms its new neighbours on the flip itself. One mechanism
     /// for the manual flip and the auto-advance alike: both call [`Self::flip`], and both land on
     /// whatever this made resident.
     ///
@@ -1221,17 +1212,6 @@ impl HomeScreen {
         }
     }
 
-    fn request_for_strip(elem: u32) -> Option<HomeReq> {
-        Some(match elem {
-            STRIP_HOME_ELEM => HomeReq::Tab(HomeTab::Home),
-            STRIP_MOVIES_ELEM => HomeReq::Tab(HomeTab::Movies),
-            STRIP_SHOWS_ELEM => HomeReq::Tab(HomeTab::Shows),
-            STRIP_SEARCH_ELEM => HomeReq::Tab(HomeTab::Search),
-            STRIP_ACCOUNT_ELEM => HomeReq::Account,
-            _ => return None,
-        })
-    }
-
     fn reseat<H: HomeLike>(&mut self, focus: FocusTarget<u32>, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
         // Enter is queued behind this frame's Tick. Consume the CTA availability observed by
         // this seating request now, so that Tick cannot queue an implicit initial Hero seat
@@ -1253,7 +1233,8 @@ impl HomeScreen {
         let Some(item) = self.item_at(H::hubs(cx), row, col) else {
             return Handled::No;
         };
-        if item.rk.is_empty() {
+        // a library tile is no item to act on
+        if item.rk.is_empty() || self.my_media(row) {
             return Handled::No;
         }
         fx.push(Fx::App(AppFx::Home(HomeReq::ItemMenu {
@@ -1281,23 +1262,6 @@ impl HomeScreen {
                 self.strip_chosen = false;
                 self.reseat(FocusTarget::ContainerGroup(HERO_GROUP), cx, fx);
             }
-            HomeCmd::FocusStrip(tab) => {
-                let elem = match tab {
-                    HomeTab::Home => STRIP_HOME_ELEM,
-                    HomeTab::Movies => STRIP_MOVIES_ELEM,
-                    HomeTab::Shows => STRIP_SHOWS_ELEM,
-                    HomeTab::Search => STRIP_SEARCH_ELEM,
-                };
-                self.strip_chosen = true;
-                self.reseat(
-                    FocusTarget::Elem(FocusKey {
-                        entry: self.entry,
-                        elem,
-                    }),
-                    cx,
-                    fx,
-                );
-            }
             HomeCmd::Flip(direction) => {
                 if direction == 0 || !self.flip(H::hubs(cx), direction.signum()) {
                     return Handled::No;
@@ -1319,6 +1283,7 @@ impl HomeScreen {
                 self.carousel = Some(identity);
                 self.outgoing = None;
                 self.hero_slide.jump(1.0);
+                self.hero_zoom = 0.0;
                 if matches!(command, HomeCmd::PinHero(_)) {
                     self.hero_pinned = true;
                     nj_base::eventlog::log(&format!("home: hero pinned at slot {index}"));
@@ -1331,13 +1296,9 @@ impl HomeScreen {
     }
 
     fn activate<H: HomeLike>(&mut self, elem: u32, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
-        if let Some(req) = Self::request_for_strip(elem) {
-            fx.push(Fx::App(AppFx::Home(req)));
-            return;
-        }
         let view = H::hubs(cx);
         if status_read(view).is_some_and(|(_, kind, _)| kind == StatusKind::Failed)
-            && elem == HERO_PLAY_ELEM
+            && elem == HERO_ELEM
             && plaintext_question::asks(self.plaintext.verdict())
         {
             // The server is on this network and only answers without encryption: *Connect*
@@ -1350,7 +1311,7 @@ impl HomeScreen {
             }
             return;
         }
-        if status_read(view).is_some() && elem == HERO_PLAY_ELEM {
+        if status_read(view).is_some() && elem == HERO_ELEM {
             fx.push(Fx::App(AppFx::Store(
                 StoreId::Hubs,
                 StoreCmd::Hubs(HubsCmd::Retry),
@@ -1362,21 +1323,8 @@ impl HomeScreen {
             return;
         };
         let (item, req) = match located {
-            Located::Hero(0) => {
-                let Some(item) = self.selected_hero(view).map(|h| h.item) else {
-                    return;
-                };
-                let resume_ns = crate::metadata::resume_ns(item.resume_ms, item.dur_ns / 1_000_000);
-                (
-                    item,
-                    HomeReq::Play {
-                        sid: item.sid,
-                        rk: item.rk.clone(),
-                        resume_ns,
-                    },
-                )
-            }
-            Located::Hero(1) => {
+            // OK on the hero opens the slide's detail page, as Litefin's does
+            Located::Hero(_) => {
                 let Some(item) = self.selected_hero(view).map(|h| h.item) else {
                     return;
                 };
@@ -1388,7 +1336,6 @@ impl HomeScreen {
                     },
                 )
             }
-            Located::Hero(_) => return,
             Located::Heading(row) => {
                 // OK on a linked heading opens the collection it names. BACK from that page
                 // returns here: the heading is an ordinary engine key the return state restores.
@@ -1403,7 +1350,11 @@ impl HomeScreen {
                 let Some(item) = self.item_at(view, row, col) else {
                     return;
                 };
-                if self
+                if self.my_media(row) {
+                    // a My Media tile opens THAT library, by its section identity
+                    let section = crate::screens::registry::LibrarySectionIdentity { sid: item.sid, key: item.sec };
+                    (item, HomeReq::Library(section))
+                } else if self
                     .rows
                     .get(row)
                     .is_some_and(|h| h.identity == HomeHubIdentity::ContinueWatching)
@@ -1442,28 +1393,27 @@ impl HomeScreen {
         let focus = self.focused_loc(visible_focus);
         let grid_focus = self.focused_grid(visible_focus);
         let p = f.painter.alpha(f.page_alpha);
-        let slide = self.slide_offsets();
-        // Re-bind the art to the heroes `slide` is about: an event delivered after this frame's
-        // `Tick` (a manual flip) has changed them since `update` ran (`Backdrop::bind`).
+        let page_y = self.page_y();
+        // Re-bind the art to the heroes the crossfade is about: an event delivered after this
+        // frame's `Tick` (a manual flip) has changed them since `update` ran (`Backdrop::bind`).
         self.backdrop.bind(
             self.selected_hero(view),
             self.outgoing_hero(view),
             self.carousel.as_ref(),
-            self.snap.pos,
+            page_y < HERO_ART_END,
         );
-        crate::ui::profile::phase("hm.backdrop", || self.backdrop.draw(p, &env, slide));
-        if env.hero_a > 0.01 {
-            crate::ui::profile::phase("hm.hero", || {
-                self.draw_hero(
-                    view,
-                    &env,
-                    p.alpha(env.hero_a),
-                    f.page_alpha,
-                    focus,
-                    f.measure,
-                    f.press.scale,
-                )
+        // the hero is the top of the page and rises with it
+        let hero = p.translate(0.0, -page_y);
+        if page_y < HERO_ART_END {
+            crate::ui::profile::phase("hm.backdrop", || {
+                self.backdrop.draw(hero, self.crossfade(), self.zooms())
             });
+        }
+        if page_y < DOTS_FOOT {
+            crate::ui::profile::phase("hm.hero", || self.draw_hero(view, &env, hero, f.measure));
+        }
+        if page_y < HERO_ART_END {
+            crate::ui::widgets::hero_band(hero, self.hero_band.pos);
         }
         crate::ui::profile::phase("hm.grid", || {
             let heading = self.focused_heading(visible_focus);
@@ -1479,114 +1429,44 @@ impl HomeScreen {
         self.plaintext_alert.draw(f, self.entry);
     }
 
-    fn draw_hero(
-        &self,
-        view: HubsView<'_>,
-        env: &Env,
-        p: Painter,
-        page_alpha: f32,
-        focus: Option<Located>,
-        measure: &dyn Measure,
-        press_scale: f32,
-    ) {
+    /// The slide's content block and the pager. A crossfade fades the outgoing block out as it
+    /// sinks [`HERO_TEXT_RISE`] and the incoming one in as it rises the same.
+    fn draw_hero(&self, view: HubsView<'_>, env: &Env, p: Painter, measure: &dyn Measure) {
+        if status_read(view).is_some() {
+            return;
+        }
         let Some(hero) = self.selected_hero(view) else {
             return;
         };
-        if let Some((out_x, in_x)) = self.slide_offsets() {
-            if let Some(old) = self.outgoing_hero(view) {
-                let po = p.translate(out_x, 0.0);
-                hero_content(old.item, display_source(old.source), po, out_x, measure);
-                self.draw_hero_actions(old.item, env, po, out_x, false, page_alpha, focus, measure, press_scale);
+        match (self.crossfade(), self.outgoing_hero(view)) {
+            (Some(t), Some(old)) => {
+                hero_content(old.item, display_source(old.source), p.alpha(1.0 - t).translate(0.0, HERO_TEXT_RISE * t), measure);
+                hero_content(hero.item, display_source(hero.source), p.alpha(t).translate(0.0, HERO_TEXT_RISE * (1.0 - t)), measure);
             }
-            let pi = p.translate(in_x, 0.0);
-            hero_content(hero.item, display_source(hero.source), pi, in_x, measure);
-            self.draw_hero_actions(hero.item, env, pi, in_x, true, page_alpha, focus, measure, press_scale);
-        } else {
-            hero_content(hero.item, display_source(hero.source), p, 0.0, measure);
-            self.draw_hero_actions(hero.item, env, p, 0.0, true, page_alpha, focus, measure, press_scale);
+            _ => hero_content(hero.item, display_source(hero.source), p, measure),
         }
         if view.hero_count() > 1 {
             PageDots::new(view.hero_count())
                 .active(self.carousel_index(view))
-                .centered_at(SCR_W * 0.5, HERO_ROW_Y + HERO_CTRL_D + theme::space::SM)
+                .right_at(DOTS_RIGHT, DOTS_FOOT - PageDots::DOT)
                 .draw(env, p);
         }
     }
 
-    fn draw_hero_actions(
-        &self,
-        hero: &PmsMovie,
-        env: &Env,
-        p: Painter,
-        dx: f32,
-        live: bool,
-        page_alpha: f32,
-        focus: Option<Located>,
-        measure: &dyn Measure,
-        press_scale: f32,
-    ) {
-        let resumes = crate::metadata::resume_ns(hero.resume_ms, hero.dur_ns / 1_000_000) > 0;
-        let label = if resumes { nj_platform::i18n::msg::browse_home_continue_c() } else { nj_platform::i18n::msg::browse_detail_play_c() };
-        let pill = Rect::new(
-            MARGIN_X,
-            HERO_ROW_Y,
-            hero_pill_w(measure, label),
-            HERO_CTRL_D,
-        );
-        let info = Rect::new(
-            pill.x + pill.w + HERO_CTRL_GAP,
-            HERO_ROW_Y,
-            HERO_CTRL_D,
-            HERO_CTRL_D,
-        );
-        let mark_d = HERO_PAGER_D.round();
-        let mark = Rect::new(
-            info.x + info.w + HERO_PAGER_PAD,
-            HERO_ROW_Y + (HERO_CTRL_D - mark_d) * 0.5,
-            mark_d,
-            mark_d,
-        );
-        if !on_axis(
-            MARGIN_X + dx,
-            mark.x + mark.w + HERO_PAGER_PAD - MARGIN_X,
-            SCR_W,
-            0.0,
-        ) {
-            return;
-        }
-        let may_read = live && dx.abs() < 0.5 && page_alpha >= 0.999;
-        let palette = nj_gfx::gfx::sample_control_ground(
-            [pill.x + dx, pill.y, info.x + info.w - pill.x, pill.h],
-            may_read,
-        )
-        .map(ControlPalette::ambient)
-        .unwrap_or_default();
-        let pop = |i| if live { self.hero_pop.scale_with(i, press_scale) } else { 1.0 };
-        Button::new(label.as_ptr(), theme::size::BODY, pill)
-            .icon(Icon::Play)
-            .focused(focus == Some(Located::Hero(0)))
-            .palette(palette)
-            .scale(pop(0))
-            .draw(env, p);
-        CircleButton::new(c"".as_ptr())
-            .icon(Icon::Info)
-            .at(info.x, info.y)
-            .focused(focus == Some(Located::Hero(1)))
-            .palette(palette)
-            .scale(pop(1))
-            .draw(env, p);
-        crate::ui::icons::draw(p, Icon::Chevron, mark, theme::TEXT_SECONDARY);
+    /// Whether shelf `row` overlaps the screen vertically, from its title's line box to the foot
+    /// of its labels.
+    fn shelf_on_screen(&self, row: usize) -> bool {
+        on_axis(self.grid.shelf(row).base_y, self.pitch(row), SCR_H, 0.0)
     }
 
-    /// Whether shelf `row` overlaps the screen vertically. The shelf spans from its heading's
-    /// line — ABOVE the cards — to the bottom of its label band. Culling by the card rect alone
-    /// left a heading already on screen undrawn until the first card pixel crossed the bottom
-    /// edge, so it popped in mid-scroll.
-    fn shelf_on_screen(&self, row: usize) -> bool {
-        let shelf = self.grid.shelf(row);
-        let top = heading_y(shelf.base_y, shelf.lift());
-        let bottom = shelf.base_y + CARD_H + shelf.under_band();
-        on_axis(top, bottom - top, SCR_H, 0.0)
+    /// Row `row`'s art for a card: a landscape row's still (an episode's own frame, else the
+    /// backdrop, else the poster), a poster row's poster.
+    fn art<'a>(&self, row: usize, item: &'a PmsMovie) -> Art<'a> {
+        if self.rows.get(row).is_some_and(|r| r.landscape) {
+            Art::Still(Some(tile_facts::of(item)))
+        } else {
+            Art::Poster(Some(tile_facts::of(item)))
+        }
     }
 
     fn draw_grid(
@@ -1606,46 +1486,26 @@ impl HomeScreen {
             if !self.shelf_on_screen(row) {
                 continue;
             }
-            let row_y = self.grid.shelf(row).base_y;
-            if let Some(linked) = self.heading_widget(view, row).filter(|_| env.sp > 0.02) {
+            let cap_top = title_cap_top(self.grid.shelf(row).base_y, measure);
+            if let Some(linked) = self.heading_widget(view, row) {
                 let m = linked.measure(measure);
                 let focus_t = f32::from(heading == Some(row) && env.sp > 0.5);
-                linked.draw(
-                    p.alpha(env.sp),
-                    MARGIN_X,
-                    heading_y(row_y, self.grid.shelf(row).lift()),
-                    focus_t,
-                    &m,
-                    measure,
-                );
-            } else if env.sp > 0.02 {
-                card_row::draw_heading(
-                    p.alpha(env.sp),
-                    hub.title,
-                    hub.source,
-                    MARGIN_X,
-                    heading_y(row_y, self.grid.shelf(row).lift()),
-                    f32::INFINITY,
-                    measure,
-                );
+                linked.draw(p, ROW_TITLE_X, cap_top, focus_t, &m, measure);
+            } else {
+                card_row::draw_heading(p, hub.title, hub.source, ROW_TITLE_X, cap_top, f32::INFINITY, measure);
             }
+            let sty = self.style(row);
             for (col, item) in hub.items.iter().take(MAX_ITEMS).enumerate() {
                 if focused == Some((row, col)) && env.sp > 0.5 {
                     continue;
                 }
-                let x = card_x(col, self.grid.eff_scroll(row, env.sp));
-                if !on_axis(x, CARD_W, SCR_W, GLOW_PAD) {
+                let x = card_x(sty, col, self.grid.scroll_x(row));
+                if !on_axis(x, sty.w, SCR_W, GLOW_PAD) {
                     continue;
                 }
                 let (rect, scale) = self.drawn_card_geometry(row, col, 1.0);
-                card_row::draw_tile(
-                    p,
-                    Art::Poster(Some(tile_facts::of(item))),
-                    rect,
-                    scale,
-                    &RowStyle::HOME,
-                    item.resume_frac(),
-                );
+                let label = card_row::TileLabel::default();
+                card_row::draw_cell(p, self.art(row, item), rect, scale, sty, item.resume_frac(), &label, false, measure);
             }
         }
         self.draw_focused_cell(view, env, p, press_scale, focused, measure);
@@ -1670,38 +1530,23 @@ impl HomeScreen {
             return;
         };
         let (rect, scale) = self.drawn_card_geometry(row, col, press_scale);
-        let cw = self.rows[row].identity == HomeHubIdentity::ContinueWatching;
-        let mut label = if cw {
-            card_row::TileLabel::played(&item.title)
-        } else {
-            card_row::TileLabel::title(&item.title)
-        };
-        label.caption = card_row::focused_caption(&tile_facts::of(item), cw);
         let count = hub.items.len().min(MAX_ITEMS);
-        // The grid draws at `scroll_x * snap` ([`Grid::eff_scroll`]), so the lag it still owes does too.
-        let lag = self.grid.shelf(row).settle_lag(count, col, &RowStyle::HOME) * self.snap.pos;
-        let label = label.revealed(self.grid.shelf(row).band_reveal()).settling(lag);
-        card_row::draw_focused(
-            p,
-            Art::Poster(Some(tile_facts::of(item))),
-            rect,
-            scale,
-            &RowStyle::HOME,
-            item.resume_frac(),
-            &label,
-            measure,
-        );
+        let sty = self.style(row);
+        // the card names itself from its row; its label's width is judged where the glide rests it
+        let label = card_row::TileLabel::default().settling(self.grid.shelf(row).settle_lag(count, col, sty));
+        card_row::draw_cell(p, self.art(row, item), rect, scale, sty, item.resume_frac(), &label, true, measure);
     }
 
     /// One drawn rectangle for the tile painter and the input map, including the press bounce.
     fn drawn_card_geometry(&self, row: usize, col: usize, press_scale: f32) -> (Rect, f32) {
+        let sty = self.style(row);
         let scale = self.grid.shelf(row).scale(col)
             * if press_scale > 0.0 { press_scale } else { 1.0 };
         let rect = Rect::new(
-            card_x(col, self.grid.eff_scroll(row, self.snap.pos)),
-            self.grid.shelf(row).base_y + CARD_DY,
-            CARD_W,
-            CARD_H,
+            card_x(sty, col, self.grid.scroll_x(row)),
+            self.grid.shelf(row).base_y + ROW_CARDS_DY,
+            sty.w,
+            sty.h,
         )
         .scaled(scale);
         (rect, scale)
@@ -1720,31 +1565,21 @@ impl HomeScreen {
     pub(crate) fn record_stops<H: HomeLike>(&self, f: &mut DrawFrame<'_, '_, H>, view: HubsView<'_>) {
         if !f.records_stops() { return; }
         let focus = f.focus.current;
-        let status = status_read(view);
-        let hero_len = if status.is_some() {
-            usize::from(status.is_some_and(|(_, _, a)| a.is_some()))
-        } else {
-            HERO_NBTN
-        };
-        if self.snap.pos < 0.5 {
-            for i in 0..hero_len {
-                let elem = if i == 0 {
-                    HERO_PLAY_ELEM
+        if self.snap.pos < 0.5 && hero_group_len(view) > 0 {
+            if let Some(placed) = Focusable::<H>::place(self, &HERO_ELEM, f.cx, At::Drawn) {
+                // The hero takes the pointer over its whole face above the rows; a read-out only
+                // over its action.
+                let rect = if status_read(view).is_some() {
+                    placed.rect
                 } else {
-                    HERO_INFO_ELEM
-                };
-                let Some(placed) = Focusable::<H>::place(self, &elem, f.cx, At::Drawn) else {
-                    continue;
+                    Rect::new(0.0, -self.page_y(), SCR_W, ROWS_OVERLAP_TOP)
                 };
                 f.stop(
                     f.painter,
                     Stop {
-                        key: FocusKey {
-                            entry: self.entry,
-                            elem,
-                        },
-                        rect: placed.rect,
-                        rest_rect: placed.rest_rect,
+                        key: FocusKey { entry: self.entry, elem: HERO_ELEM },
+                        rect,
+                        rest_rect: rect,
                         clip: placed.clip,
                         hover: Hover::Focus,
                         activate: Activate::Press,
@@ -1793,8 +1628,7 @@ impl HomeScreen {
                     self.heading_widget(view, row_index),
                     self.heading_rect(view, row_index, f.measure, At::Drawn, focus),
                 ) {
-                    let visible = rect.y >= crate::ui::widgets::TOP_BAR_BOTTOM
-                        && rect.y + rect.h <= SCR_H;
+                    let visible = rect.y >= 0.0 && rect.y + rect.h <= SCR_H;
                     if visible {
                         heading.stop(f, rect, FocusKey { entry: self.entry, elem: heading_elem(row.group) });
                     }
@@ -1877,8 +1711,7 @@ impl HomeScreen {
         let view = H::hubs(f.cx);
         let env = self.env(0.0);
         let p = f.painter.alpha(f.page_alpha);
-        let cut = crate::ui::widgets::TOP_BAR_BOTTOM;
-        let _clip = f.clip(p, Rect::new(0.0, cut, SCR_W, SCR_H - cut));
+        let _clip = f.clip(p, Rect::new(0.0, 0.0, SCR_W, SCR_H));
         self.draw_focused_cell(view, &env, p, f.press.scale, Some((row, col)), f.measure);
     }
 
@@ -1904,7 +1737,10 @@ impl LogicalState for HomeScreen {
             // `elem_at` is derived from `rows`, which the census already covers via its elems.
             // `item_index` / `group_index` are caches of `items` / `groups`, which are covered.
             rows: _, elem_at: _, item_index: _, group_index: _, projected_generation: _, projection_stale: _, volatile_keys: _, restored_scroll: _, restore_reveal: _, carousel: _,
-            outgoing: _, hero_flip_cd: _, hero_slide: _, hero_dir: _, hero_auto: _, hero_pinned: _, covered: _,
+            outgoing: _, hero_flip_cd: _, hero_slide: _, hero_auto: _, hero_pinned: _, covered: _,
+            hero_zoom: _, hero_band: _,
+            // Where the outgoing slide's zoom stopped: it only paints while that slide fades.
+            outgoing_zoom: _,
             snap_target: _,
             // Whether the tick pulls the scroll to the focused shelf. What it decides is
             // `grid.scroll_target`, encoded below, and it is a hand-off from the pointer's events.
@@ -1912,7 +1748,7 @@ impl LogicalState for HomeScreen {
             // A press hand-off from a click to its commit, like `free`.
             reveal_press: _,
             visible_activation: _, cta_available: _, strip_chosen: _, snap: _, status_ms: _,
-            hero_pop: _, backdrop: _, grid: _,
+            backdrop: _, grid: _,
             // The plaintext question is the grant table's (`plex::grant::offers`), which no
             // recording can raise, and its alert only paints over a failed read-out. The clock
             // fact is `net::keypin`'s, likewise unraisable by a recording.
@@ -1945,8 +1781,8 @@ impl LogicalState for HomeScreen {
         c.option(self.outgoing.as_ref(), |c, (sid, rk)| {
             c.u32(u32::from(sid.raw())).str(rk);
         });
-        c.f32(self.hero_slide.pos).f32(self.hero_slide.vel).f32(self.hero_dir);
-        self.hero_pop.write_motion(c);
+        c.f32(self.hero_slide.pos).f32(self.hero_slide.vel)
+            .f32(self.hero_band.pos).f32(self.hero_band.vel).f32(self.hero_zoom);
         c.option(self.projected_generation, |c, generation| { c.u32(generation); });
         c.f32(self.grid.scroll_y.pos).f32(self.grid.scroll_y.vel)
             .f32(self.grid.scroll_target).seq(self.rows.len());
@@ -1972,36 +1808,28 @@ impl<H: HomeLike> Focusable<H> for HomeScreen {
             return;
         }
         let view = H::hubs(cx);
-        let hero_len = hero_group_len(view);
-        let hero_end = self
-            .hero_button_rect(view, hero_len.saturating_sub(1), cx.measure)
-            .unwrap_or(Rect::new(MARGIN_X, HERO_ROW_Y, 0.0, HERO_CTRL_D));
         out.push(GroupSpec {
             id: HERO_GROUP,
             kind: GroupKind::Row { wrap: false },
             seat: Seat::First,
             // The hero is reached only through declared strip/first-shelf links. Its fixed
             // billboard extent remains on the page while folded and must never win a geometric
-            // search from a lower shelf.
+            // search from a lower shelf. RIGHT pages the slides before the engine sees it
+            // (`step`); LEFT finds no group and takes the rail's door.
             reachable: AxisMask(0),
             edge: [
                 EdgeRule::Geometric,
                 EdgeRule::Geometric,
-                EdgeRule::Screen,
-                EdgeRule::Screen,
+                EdgeRule::Stop,
+                EdgeRule::Stop,
             ],
-            extent: Rect::new(
-                MARGIN_X,
-                HERO_ROW_Y,
-                hero_end.x + hero_end.w - MARGIN_X,
-                HERO_CTRL_D,
-            ),
-            len: hero_len,
+            extent: self.hero_rect(view, cx.measure).unwrap_or(HERO_SEAT),
+            len: hero_group_len(view),
             elem: ElemKind::Control,
         });
-        let band_row = self.band_row(cx.focus.current, 0);
         for (row, projection) in self.rows.iter().enumerate() {
-            let top = GRID_TOP_Y + shelf_top_banded(row, band_row) - self.grid.scroll_target;
+            let top = ROW_FOCUS_TOP + self.flow(row) - self.grid.scroll_target;
+            let sty = self.style(row);
             let linked = self.linked(row).is_some();
             if linked {
                 if let Some(rect) =
@@ -2033,10 +1861,10 @@ impl<H: HomeLike> Focusable<H> for HomeScreen {
                     EdgeRule::Stop,
                 ],
                 extent: Rect::new(
-                    MARGIN_X,
-                    top + CARD_DY,
-                    SCR_W - 2.0 * MARGIN_X,
-                    CARD_H + card_row::UNDER_LABEL_H,
+                    sty.margin_x,
+                    top + ROW_CARDS_DY,
+                    SCR_W - sty.margin_x,
+                    sty.h + card_row::TileLabel::height(!self.my_media(row)),
                 ),
                 len: projection.elems.len(),
                 elem: ElemKind::Card,
@@ -2055,17 +1883,11 @@ impl<H: HomeLike> Focusable<H> for HomeScreen {
         }
     }
 
-    fn neighbour(&self, key: FocusKey<u32>, dir: Dir, cx: &Cx<'_, H>) -> Step<u32> {
+    fn neighbour(&self, key: FocusKey<u32>, dir: Dir, _cx: &Cx<'_, H>) -> Step<u32> {
         if let Some(step) = self.plaintext_alert.neighbour(key, dir) {
             return step;
         }
-        let hero_len = hero_group_len(H::hubs(cx));
         let next = match self.locate(key.elem) {
-            Some(Located::Hero(i)) => match dir {
-                Dir::Left if i > 0 => Some(HERO_PLAY_ELEM),
-                Dir::Right if i + 1 < hero_len => Some(HERO_INFO_ELEM),
-                _ => None,
-            },
             Some(Located::Item(row, col)) => match dir {
                 Dir::Left if col > 0 => self
                     .rows
@@ -2080,7 +1902,7 @@ impl<H: HomeLike> Focusable<H> for HomeScreen {
                 _ => None,
             },
             // One element, LEFT/RIGHT inert; UP/DOWN are the group's doors.
-            Some(Located::Heading(_)) | None => None,
+            Some(Located::Hero(_) | Located::Heading(_)) | None => None,
         };
         next.map(|elem| {
             Step::Move(FocusKey {
@@ -2098,73 +1920,36 @@ impl<H: HomeLike> Focusable<H> for HomeScreen {
         let view = H::hubs(cx);
         match self.locate(*key)? {
             Located::Hero(index) => {
-                let mut base = self.hero_button_rect(view, index, cx.measure)?;
-                if status_read(view).is_some() {
-                    // StatusOverlay's lone action has no focus pop or press scale by design.
-                    return Some(Placed { rect: base, rest_rect: base, clip: Rect::FULL,
-                        index: Some(index as u32) });
+                let mut base = self.hero_rect(view, cx.measure)?;
+                // The hero rises with the page; a read-out's action stands still. Neither pops:
+                // the hero's focus is its band.
+                if status_read(view).is_none() && matches!(at, At::Drawn) {
+                    base.y -= self.page_y();
                 }
-                if matches!(at, At::Drawn) {
-                    base.x += self.slide_offsets().map_or(0.0, |(_, incoming)| incoming);
-                }
-                let scale = match at {
-                    At::Drawn => self.hero_pop.scale_with(index, cx.press.scale),
-                    At::SpringTarget => {
-                        if self.focused_loc(cx.focus.current) == Some(Located::Hero(index)) {
-                            crate::ui::widgets::CTRL_FOCUS_SCALE
-                        } else {
-                            1.0
-                        }
-                    }
-                };
-                Some(Placed {
-                    rect: base.scaled(scale),
-                    rest_rect: base.scaled(crate::ui::widgets::CTRL_FOCUS_SCALE),
-                    clip: Rect::FULL,
-                    index: Some(index as u32),
-                })
+                Some(Placed { rect: base, rest_rect: base, clip: Rect::FULL, index: Some(index as u32) })
             }
             Located::Heading(row) => {
                 let rect = self.heading_rect(view, row, cx.measure, at, cx.focus.current)?;
                 Some(Placed {
                     rect,
                     rest_rect: rect,
-                    clip: Rect::new(
-                        0.0,
-                        crate::ui::widgets::TOP_BAR_BOTTOM,
-                        SCR_W,
-                        SCR_H - crate::ui::widgets::TOP_BAR_BOTTOM,
-                    ),
+                    clip: Rect::new(0.0, 0.0, SCR_W, SCR_H),
                     index: None,
                 })
             }
             Located::Item(row, col) => {
                 let shelf = self.grid.shelves.get(row)?;
-                let snap = match at {
-                    At::Drawn => self.snap.pos,
-                    At::SpringTarget => self.snap_target,
-                };
+                let sty = self.style(row);
                 let y = match at {
                     At::Drawn => shelf.base_y,
-                    At::SpringTarget => {
-                        let focus_row = self
-                            .focused_grid(cx.focus.current)
-                            .map(|(r, _)| r)
-                            .unwrap_or(row);
-                        GRID_TOP_Y + shelf_top_settled(row, focus_row) - self.grid.scroll_target
-                    }
+                    At::SpringTarget => ROW_FOCUS_TOP + self.flow(row) - self.grid.scroll_target,
                 };
-                let base = Rect::new(
-                    card_x(col, self.grid.eff_scroll(row, snap)),
-                    y + CARD_DY,
-                    CARD_W,
-                    CARD_H,
-                );
+                let base = Rect::new(card_x(sty, col, shelf.scroll_x()), y + ROW_CARDS_DY, sty.w, sty.h);
                 let scale = match at {
                     At::Drawn => shelf.scale(col),
                     At::SpringTarget => {
                         if self.focused_grid(cx.focus.current) == Some((row, col)) {
-                            RowStyle::HOME.focus_scale
+                            sty.focus_scale
                         } else {
                             1.0
                         }
@@ -2176,13 +1961,8 @@ impl<H: HomeLike> Focusable<H> for HomeScreen {
                             && self.focused_grid(self.visible_focus(cx.focus.current)) == Some((row, col));
                         self.drawn_card_geometry(row, col, if focused { cx.press.scale } else { 1.0 }).0
                     } else { base.scaled(scale) },
-                    rest_rect: base.scaled(RowStyle::HOME.focus_scale),
-                    clip: Rect::new(
-                        0.0,
-                        crate::ui::widgets::TOP_BAR_BOTTOM,
-                        SCR_W,
-                        SCR_H - crate::ui::widgets::TOP_BAR_BOTTOM,
-                    ),
+                    rest_rect: base.scaled(sty.focus_scale),
+                    clip: Rect::new(0.0, 0.0, SCR_W, SCR_H),
                     index: Some(col as u32),
                 })
             }
@@ -2226,7 +2006,7 @@ impl<H: HomeLike> Focusable<H> for HomeScreen {
             })
             .unwrap_or(FocusKey {
                 entry: want.entry,
-                elem: HERO_PLAY_ELEM,
+                elem: HERO_ELEM,
             })
     }
 
@@ -2237,7 +2017,7 @@ impl<H: HomeLike> Focusable<H> for HomeScreen {
         if group == HERO_GROUP {
             return FocusKey {
                 entry: self.entry,
-                elem: HERO_PLAY_ELEM,
+                elem: HERO_ELEM,
             };
         }
         if let Some(row) = self.rows.iter().find(|r| heading_group(r.group) == group) {
@@ -2250,21 +2030,22 @@ impl<H: HomeLike> Focusable<H> for HomeScreen {
         else {
             return FocusKey {
                 entry: self.entry,
-                elem: HERO_PLAY_ELEM,
+                elem: HERO_ELEM,
             };
         };
+        let sty = self.style(row_index);
         let col = card_row::column_near_x(
             from.rect.cx(),
-            MARGIN_X,
-            CARD_W + GAP,
-            CARD_W,
+            sty.margin_x,
+            sty.w + sty.gap,
+            sty.w,
             self.grid.shelf(row_index).scroll_x(),
             row.elems.len(),
             from.index.unwrap_or(0) as usize,
         );
         FocusKey {
             entry: self.entry,
-            elem: row.elems.get(col).copied().unwrap_or(HERO_PLAY_ELEM),
+            elem: row.elems.get(col).copied().unwrap_or(HERO_ELEM),
         }
     }
 }
@@ -2280,37 +2061,15 @@ impl HomeScreen {
         }
     }
 
-    fn hero_button_rect(
-        &self,
-        view: HubsView<'_>,
-        index: usize,
-        measure: &dyn Measure,
-    ) -> Option<Rect> {
+    /// The hero's focus rect: its logo box at a full synopsis (one rect for every slide), or under
+    /// a status read-out the read-out's action. Seating from it lands on a row's first column.
+    fn hero_rect(&self, view: HubsView<'_>, measure: &dyn Measure) -> Option<Rect> {
         if let Some((_, _, action)) = status_read(view) {
-            if index != 0 || action.is_none() {
-                return None;
-            }
+            action?;
             return status_overlay(view, &self.plaintext, &self.clock)?.action_frame_measured(measure);
         }
-        let hero = self.selected_hero(view)?.item;
-        let resumes = crate::metadata::resume_ns(hero.resume_ms, hero.dur_ns / 1_000_000) > 0;
-        let label = if resumes { nj_platform::i18n::msg::browse_home_continue_c() } else { nj_platform::i18n::msg::browse_detail_play_c() };
-        let pill = Rect::new(
-            MARGIN_X,
-            HERO_ROW_Y,
-            hero_pill_w(measure, label),
-            HERO_CTRL_D,
-        );
-        match index {
-            0 => Some(pill),
-            1 => Some(Rect::new(
-                pill.x + pill.w + HERO_CTRL_GAP,
-                HERO_ROW_Y,
-                HERO_CTRL_D,
-                HERO_CTRL_D,
-            )),
-            _ => None,
-        }
+        self.selected_hero(view)?;
+        Some(HERO_SEAT)
     }
 }
 
@@ -2356,13 +2115,13 @@ impl<H: HomeLike> Machine<H> for HomeScreen {
             ScreenEvent::Input(InputEvent { kind: InputKind::Pan { dx, y, .. }, .. }) => {
                 if dx.is_finite() {
                     let under = (0..self.grid.shelves.len()).find(|&row| {
-                        let shelf = self.grid.shelf(row);
-                        let top = heading_y(shelf.base_y, shelf.lift());
-                        self.shelf_on_screen(row) && *y >= top && *y < shelf.base_y + CARD_H + shelf.under_band()
+                        let top = self.grid.shelf(row).base_y;
+                        self.shelf_on_screen(row) && *y >= top && *y < top + self.pitch(row)
                     });
                     if let (Some(row), Some(n)) = (under, under.and_then(|row| self.rows.get(row)).map(|hub| hub.elems.len())) {
+                        let sty = self.style(row);
                         if let Some(shelf) = self.grid.shelves.get_mut(row) {
-                            shelf.glide(*dx, n, &RowStyle::HOME);
+                            shelf.glide(*dx, n, sty);
                             fx.invalidate(Provenance::Input);
                         }
                     }
@@ -2377,8 +2136,8 @@ impl<H: HomeLike> Machine<H> for HomeScreen {
                     return Handled::Yes;
                 }
                 self.free = true;
-                let max = grid_max_scroll(self.rows.len());
-                let to = self.grid.scroll_target - dy * card_row::ROW_PITCH_FIXED;
+                let max = self.grid_max_scroll();
+                let to = self.grid.scroll_target - dy * self.pitch(0);
                 if *dy > 0.0 {
                     if self.snap_target >= 0.5 && self.grid.scroll_target > 0.0 {
                         self.grid.scroll_target = to.max(0.0);
@@ -2463,18 +2222,17 @@ impl<H: HomeLike> Machine<H> for HomeScreen {
                     self.visible_activation = None;
                     if let Some(Located::Item(row, col)) = to_loc {
                         // The saved viewport is a preference, not an assertion about today's
-                        // catalog order. Minimally reveal the reconciled item before first draw.
+                        // catalog order. Rest the reconciled item where its row centres it before
+                        // first draw.
                         if let (Some(shelf), Some(hub)) =
                             (self.grid.shelves.get_mut(row), self.rows.get(row))
                         {
                             let count = hub.elems.len();
-                            let scroll = card_row::scroll_into_view(shelf.scroll_x(), col, count,
-                                CARD_W, GAP, SCR_W - 2.0 * MARGIN_X);
-                            shelf.restore_scroll(scroll, count, &RowStyle::HOME);
+                            let sty = style(hub.landscape);
+                            let scroll = shelf.scroll_target(col, count, sty);
+                            shelf.restore_scroll(scroll, count, sty);
                         }
-                        let (lo, hi) = row_reveal_band(shelf_top_settled(row, row));
-                        self.grid.scroll_target = card_row::reveal(self.grid.scroll_y.pos,
-                            lo, hi, grid_max_scroll(self.rows.len()));
+                        self.grid.scroll_target = self.row_scroll(row);
                         self.grid.scroll_y.jump(self.grid.scroll_target);
                     }
                     self.layout_grid();
@@ -2514,25 +2272,24 @@ impl<H: HomeLike> Machine<H> for HomeScreen {
                 self.sync_catalog(cx);
                 self.command(*command, cx, fx)
             }
+            // RIGHT on the hero pages its slides before the engine sees it; LEFT is the engine's,
+            // whose door enters the rail from the hero as from any page's left edge.
             ScreenEvent::Input(InputEvent {
                 kind:
                     InputKind::Key {
-                        key,
+                        key: Key::Right,
                         edge: Edge::Down | Edge::Repeat,
-                        at_edge,
+                        at_edge: false,
                         ..
                     },
                 ..
-            }) if *at_edge && matches!(key, Key::Left | Key::Right) => {
-                let direction = if *key == Key::Left { -1 } else { 1 };
-                if matches!(self.focused_loc(cx.focus.current), Some(Located::Hero(_)))
-                    && self.flip(H::hubs(cx), direction)
-                {
+            }) if matches!(self.focused_loc(cx.focus.current), Some(Located::Hero(_)))
+                && status_read(H::hubs(cx)).is_none() =>
+            {
+                if self.flip(H::hubs(cx), 1) {
                     fx.invalidate(Provenance::Input);
-                    Handled::Yes
-                } else {
-                    Handled::No
                 }
+                Handled::Yes
             }
             ScreenEvent::Input(InputEvent {
                 kind:
@@ -2552,7 +2309,7 @@ impl<H: HomeLike> Machine<H> for HomeScreen {
                         .focus
                         .current
                         .filter(|key| key.entry == self.entry)
-                        .map(|_| HERO_PLAY_ELEM);
+                        .map(|_| HERO_ELEM);
                     fx.push(Fx::App(AppFx::Home(HomeReq::FoldToHero)));
                     fx.invalidate(Provenance::Input);
                 } else {
@@ -2586,20 +2343,7 @@ impl<H: HomeLike> Screen<H> for HomeScreen {
     fn render(&self) -> RenderStrategy {
         RenderStrategy::Page
     }
-    fn strip_reachable(&self) -> bool {
-        self.snap.pos < 0.5
-    }
     fn links(&self, out: &mut Vec<Link>) {
-        out.push(Link {
-            from: crate::ui::containers::tabs::STRIP,
-            dir: Dir::Down,
-            to: HERO_GROUP,
-        });
-        out.push(Link {
-            from: HERO_GROUP,
-            dir: Dir::Up,
-            to: crate::ui::containers::tabs::STRIP,
-        });
         // A collection shelf's linked heading sits between the shelf above and its own cards:
         // UP from any card reaches it, DOWN returns to the remembered card, and it is the next
         // stop DOWN from the shelf above. The engine takes the FIRST matching link, so these
@@ -2761,97 +2505,61 @@ fn status_overlay<'a>(view: HubsView<'_>, plaintext: &'a OfferWatch, clock: &Clo
 fn hero_group_len(view: HubsView<'_>) -> usize {
     match status_read(view) {
         Some((_, _, action)) => usize::from(action.is_some()),
-        None => HERO_NBTN,
+        None => 1,
     }
 }
 
-fn hero_pill_w(measure: &dyn Measure, label: &std::ffi::CStr) -> f32 {
-    theme::size::BODY as f32 * HERO_ICON_RATIO
-        + HERO_ICON_GAP
-        + measure.width(label, theme::size::BODY, true)
-        + crate::ui::widgets::BTN_PILL_AIR
+/// Where a row rests its focused card's centre: the middle of the page beside the rail, x 100..1920
+/// (`docs/litefin-look.md` 4.2 Scrolling), clamped at the row's ends by its [`RowStyle`].
+const ROW_CENTRE_X: f32 = (CONTENT_LEFT + SCR_W) * 0.5;
+const POSTER_ROW: RowStyle = RowStyle { centre_x: Some(ROW_CENTRE_X), ..RowStyle::HOME };
+const LANDSCAPE_ROW: RowStyle = RowStyle { centre_x: Some(ROW_CENTRE_X), ..RowStyle::EPISODE };
+
+/// The card style of a landscape row (Litefin's 16:9 box) or a poster row.
+fn style(landscape: bool) -> &'static RowStyle {
+    if landscape { &LANDSCAPE_ROW } else { &POSTER_ROW }
 }
 
-fn card_x(col: usize, scroll: f32) -> f32 {
-    MARGIN_X + col as f32 * (CARD_W + GAP) - scroll
+fn is_my_media(identity: &HomeHubIdentity) -> bool {
+    matches!(identity, HomeHubIdentity::Identifier { id, .. } if &**id == HUB_MY_MEDIA)
+}
+
+/// Litefin's landscape rows: My Media, Continue Watching and Next Up.
+fn landscape(identity: &HomeHubIdentity) -> bool {
+    match identity {
+        HomeHubIdentity::ContinueWatching => true,
+        HomeHubIdentity::Identifier { id, .. } => &**id == HUB_MY_MEDIA || &**id == HUB_NEXT_UP,
+        HomeHubIdentity::Key { .. } | HomeHubIdentity::Ephemeral { .. } => false,
+    }
+}
+
+fn card_x(sty: &RowStyle, col: usize, scroll: f32) -> f32 {
+    sty.margin_x + col as f32 * (sty.w + sty.gap) - scroll
 }
 #[cfg(test)]
-fn col_at(x: f32, scroll: f32, count: usize) -> Option<usize> {
+fn col_at(sty: &RowStyle, x: f32, scroll: f32, count: usize) -> Option<usize> {
     (0..count).find(|&col| {
-        let left = card_x(col, scroll);
-        x >= left && x <= left + CARD_W
+        let left = card_x(sty, col, scroll);
+        x >= left && x <= left + sty.w
     })
 }
-fn heading_y(row_y: f32, lift: f32) -> f32 {
-    row_y - TITLE_DY - lift
-}
-fn row_reveal_band(top: f32) -> (f32, f32) {
-    let lo = top + GRID_TOP_Y + CARD_DY + CARD_H + 96.0 - (SCR_H - MARGIN_Y);
-    (lo, top)
-}
-fn grid_max_scroll(rows: usize) -> f32 {
-    let n = rows.max(1);
-    let h = card_row::settled_top(n, Some(n - 1), card_row::ROW_PITCH_FIXED);
-    (h - (SCR_H - CONTENT_Y) + 60.0).max(0.0)
-}
-fn shelf_top_settled(row: usize, focus_row: usize) -> f32 {
-    shelf_top_banded(row, Some(focus_row))
-}
-/// [`shelf_top_settled`] with the open label band named explicitly: `None` while a linked heading
-/// holds focus, which opens no row's band.
-fn shelf_top_banded(row: usize, band_row: Option<usize>) -> f32 {
-    card_row::settled_top(row, band_row, card_row::ROW_PITCH_FIXED)
+
+/// Where text of `sz` puts its cap top to sit in a `lh` line box at `top` the way a browser sets
+/// it: Poppins at line-height 1.5 centres its cap band in the box.
+fn line_cap_top(top: f32, lh: f32, sz: std::os::raw::c_int, measure: &dyn Measure) -> f32 {
+    top + (lh - measure.cap_h(sz)) * 0.5
 }
 
-fn wash_corners(hero: Option<&PmsMovie>, grid: [[f32; 4]; 4], snap: f32) -> [[f32; 4]; 4] {
-    let hero = hero
-        .filter(|m| m.has_blur)
-        .map(|m| AmbientWash::keyed(m.blur, HERO_WASH_W))
-        .unwrap_or([theme::SURFACE_APP; 4]);
-    let t = snap.clamp(0.0, 1.0);
-    std::array::from_fn(|i| theme::mix(hero[i], grid[i], t))
+/// A row title's cap top, its line box starting at `line_top`.
+fn title_cap_top(line_top: f32, measure: &dyn Measure) -> f32 {
+    line_cap_top(line_top, ROW_TITLE_LH, theme::size::lf::S32, measure)
 }
-fn wash_hidden(snap: f32, art: f32, outgoing: Option<f32>) -> bool {
-    snap <= 0.005 && art > 0.995 && outgoing.map(|a| a > 0.995).unwrap_or(true)
-}
+
 fn reveal(tex: u32, spring: &Spring) -> f32 {
     if tex == 0 {
         0.0
     } else {
         spring.pos
-    }
-}
-fn art_rect(tex: (u32, f32, f32), snap: f32, dx: f32) -> Rect {
-    Rect::new(dx, -snap * (SCR_H - 120.0), SCR_W, SCR_H).cover(tex.1, tex.2)
-}
-fn backdrop_art(p: Painter, tex: (u32, f32, f32), snap: f32, dx: f32, alpha: f32) {
-    if tex.0 == 0 || alpha <= 0.01 || !on_axis(dx, SCR_W, SCR_W, 0.0) {
-        return;
-    }
-    p.tex(
-        tex.0,
-        art_rect(tex, snap, dx),
-        0.0,
-        theme::with_a(theme::TINT_WHITE, alpha * (1.0 - snap)),
-    );
-}
-/// The hero's atmospheric ramp as the ground carries it — the two `rect`s the layered path draws
-/// (`base_scrim_ramp`: nothing above `y0`, `mid` at the knee, `foot` at the panel's foot).
-fn hero_ramp(hero_a: f32) -> crate::ui::widgets::WashRamp {
-    let [y0, knee, mid, foot] = base_scrim_ramp(hero_a);
-    crate::ui::widgets::WashRamp {
-        ink: theme::scrim(1.0),
-        stops: [(y0, 0.0), (knee, mid), (SCR_H, foot)],
-    }
-}
-/// The un-sliding hero art as the layer [`AmbientWash::draw_ground`] carries — exactly what
-/// [`backdrop_art`] would have drawn at `dx = 0`, down to its skip (a texture of 0 draws no art).
-fn hero_art(tex: (u32, f32, f32), snap: f32, alpha: f32) -> crate::ui::widgets::WashArt {
-    crate::ui::widgets::WashArt {
-        tex: if alpha <= 0.01 { 0 } else { tex.0 },
-        rect: art_rect(tex, snap, 0.0),
-        uv: nj_gfx::gfx::UV_FULL,
-        tint: theme::with_a(theme::TINT_WHITE, alpha * (1.0 - snap)),
     }
 }
 fn hero_logo_rk(item: &PmsMovie) -> &str {
@@ -2910,8 +2618,8 @@ fn meta_source_flow(
     dx += run(
         "\u{b7}",
         dx,
-        META_FLOW_W - dx,
-        theme::size::BODY,
+        SYN_W - dx,
+        theme::size::lf::S21,
         0,
         theme::TEXT_SEPARATOR,
     );
@@ -2919,14 +2627,15 @@ fn meta_source_flow(
     dx += run(
         &shared_by(source),
         dx,
-        META_FLOW_W - dx,
-        theme::size::BODY,
+        SYN_W - dx,
+        theme::size::lf::S21,
         0,
         theme::TEXT_TERTIARY,
     );
     dx
 }
-fn draw_meta_source(p: Painter, source: &str, x: f32, y: f32, base_w: f32, measure: &dyn Measure) {
+/// The `· shared by` run after the meta line in its line box at `top`, for a borrowed hero.
+fn draw_meta_source(p: Painter, source: &str, x: f32, top: f32, base_w: f32, measure: &dyn Measure) {
     meta_source_flow(base_w, source, |text, dx, budget, size, bold, ink| {
         let elided = nj_gfx::text::elide_by(text, budget, false, |t| {
             measure.width_str(t, size, bold != 0)
@@ -2934,86 +2643,115 @@ fn draw_meta_source(p: Painter, source: &str, x: f32, y: f32, base_w: f32, measu
         let Ok(text) = CString::new(elided) else {
             return 0.0;
         };
-        let mut label = Label::new(text.as_ptr(), size, ink).v(VAlign::CapTop);
+        let mut label = Label::new(text.as_ptr(), size, ink).v(VAlign::Middle);
         if bold == 1 {
             label = label.bold();
         }
-        label.draw(p, Rect::new(x + dx, y, budget, 0.0))
+        label.draw(p, Rect::new(x + dx, top, budget, META_LH))
     });
 }
-fn meta_drawn_w(view: &TextView<'_>, text: &str, width: f32, measure: &dyn Measure) -> f32 {
-    if view.truncates(width) {
-        return width;
-    }
-    measure.width_str(text, theme::size::BODY, false).min(width)
+/// One item of the hero's meta line.
+#[derive(Debug, PartialEq)]
+enum MetaItem {
+    Text(String),
+    /// The official rating, on its badge.
+    Badge(String),
+    /// The community score, one decimal after a gold star.
+    Star(String),
 }
-fn hero_content(hero: &PmsMovie, source: &str, p: Painter, dx: f32, measure: &dyn Measure) {
-    if !on_axis(
-        MARGIN_X + dx,
-        if source.is_empty() {
-            HERO_COL_W
-        } else {
-            META_FLOW_W
-        },
-        SCR_W,
-        0.0,
-    ) {
-        return;
+
+/// The meta line's items, Litefin's order: the year, the runtime ("1h 52m"), the rating as a
+/// badge, the community score after its star. An absent fact is no item.
+fn meta_runs(hero: &PmsMovie) -> Vec<MetaItem> {
+    let mut runs = Vec::new();
+    if hero.year > 0 {
+        runs.push(MetaItem::Text(hero.year.to_string()));
     }
+    if hero.dur_ns > 0 {
+        // to the nearest minute, as Litefin rounds `RunTimeTicks`
+        let mins = (hero.dur_ns + 30_000_000_000) / 60_000_000_000;
+        let (h, m) = (mins / 60, mins % 60);
+        let msg = if h > 0 {
+            nj_platform::i18n::msg::home_runtime_hours(h, m)
+        } else {
+            nj_platform::i18n::msg::home_runtime_minutes(m)
+        };
+        runs.push(MetaItem::Text(msg));
+    }
+    if !hero.rating.is_empty() {
+        runs.push(MetaItem::Badge(hero.rating.clone()));
+    }
+    if hero.score > 0.0 {
+        runs.push(MetaItem::Star(crate::ui::fmt::decimal(f64::from(hero.score), 1)));
+    }
+    runs
+}
+
+/// Draw the meta line in its line box at `top`; returns the width it took.
+fn draw_meta(p: Painter, hero: &PmsMovie, x: f32, top: f32, measure: &dyn Measure) -> f32 {
+    let (sz, badge_sz) = (theme::size::lf::S21, theme::size::lf::S18);
+    let text = |cs: &CString, at: f32| {
+        Label::new(cs.as_ptr(), sz, theme::home_lf::META_INK).draw(p, Rect::new(at, top, f32::INFINITY, META_LH))
+    };
+    let mut dx = 0.0;
+    for (i, run) in meta_runs(hero).iter().enumerate() {
+        if i > 0 {
+            dx += META_ITEM_GAP;
+        }
+        let (MetaItem::Text(s) | MetaItem::Badge(s) | MetaItem::Star(s)) = run;
+        let Ok(cs) = CString::new(s.as_str()) else { continue };
+        match run {
+            MetaItem::Text(_) => dx += text(&cs, x + dx),
+            MetaItem::Badge(_) => {
+                let w = measure.width(&cs, badge_sz, true) + 2.0 * BADGE_PAD.0;
+                // the badge's line box is its 1.5 lines plus its padding, centred on the meta line
+                let h = badge_sz as f32 * 1.5 + 2.0 * BADGE_PAD.1;
+                let r = Rect::new(x + dx, top + (META_LH - h) * 0.5, w, h);
+                p.rrect(r, BADGE_RAD, BADGE_RAD, theme::home_lf::BADGE_FILL);
+                Label::new(cs.as_ptr(), badge_sz, theme::TEXT_PRIMARY).bold().h(crate::ui::label::HAlign::Center).draw(p, r);
+                dx += w;
+            }
+            MetaItem::Star(_) => {
+                // the star is a glyph of the line's own size, centred on its line box
+                let d = sz as f32;
+                let mark = Rect::new(x + dx, top + (META_LH - d) * 0.5, d, d);
+                crate::ui::icons::draw(p, crate::ui::icons::Icon::Star, mark, theme::RATING_STAR);
+                dx += d + META_STAR_GAP;
+                dx += text(&cs, x + dx);
+            }
+        }
+    }
+    dx
+}
+
+/// One slide's content block, bottom-anchored at `landing_hero::TEXT_BOTTOM`: the logo box (the
+/// clearLogo, else the title), the meta line, the synopsis.
+fn hero_content(hero: &PmsMovie, source: &str, p: Painter, measure: &dyn Measure) {
     let episode = hero.kind == 3;
     let title = if episode && !hero.show_title.is_empty() {
         &hero.show_title
     } else {
         &hero.title
     };
-    let title_h = hero_logo::band_h(LogoRung::Hero);
-    let meta = if episode {
-        let mut text = crate::ui::fmt::episode_address(i64::from(hero.season_index), i64::from(hero.ep_index));
-        if !text.is_empty() && !hero.title.is_empty() {
-            text.push_str(" \u{b7} ");
-        }
-        text.push_str(&hero.title);
-        text
+    let synopsis = TextView::new(&hero.summary, theme::size::lf::S20, theme::TEXT_SECONDARY)
+        .leading(SYN_LH)
+        .max_lines(SYN_LINES);
+    let lines = if hero.summary.is_empty() {
+        0
     } else {
-        format!(
-            "{} \u{b7} {} \u{b7} {}",
-            if hero.kind == 1 { nj_platform::i18n::msg::browse_kind_show() } else { nj_platform::i18n::msg::browse_kind_movie() },
-            hero.year,
-            if hero.rating.is_empty() {
-                nj_platform::i18n::msg::browse_detail_unrated()
-            } else {
-                &hero.rating
-            }
-        )
+        (synopsis.measure_h(SYN_W) / SYN_LH).round() as usize
     };
-    let meta_view = TextView::new(&meta, theme::size::BODY, theme::TEXT_SECONDARY).max_lines(1);
-    let meta_h = meta_view.measure_h(HERO_COL_W);
-    let synopsis = (!hero.summary.is_empty()).then(|| crate::ui::hero_synopsis(&hero.summary, ""));
-    let synopsis_h = synopsis
-        .as_ref()
-        .map(|v| theme::space::SM + v.measure_h(HERO_COL_W))
-        .unwrap_or(0.0);
-    let mut y = hero_stack_top(title_h, meta_h, synopsis_h);
-    HeroLogo::new(hero.sid.raw(), hero_logo_rk(hero), title, LogoRung::Hero)
-        .draw(p, Rect::new(MARGIN_X, y, HERO_COL_W, title_h), measure);
-    y += title_h + theme::space::MD;
-    meta_view.draw(p, Rect::new(MARGIN_X, y, HERO_COL_W, 0.0));
+    let top = landing_hero::logo_top(lines);
+    HeroLogo::new(hero.sid.raw(), hero_logo_rk(hero), title, HERO_LOGO)
+        .draw(p, Rect::new(TEXT_X, top, LOGO_W, LOGO_H), measure);
+    let meta_top = top + LOGO_H + LOGO_GAP;
+    let meta_w = draw_meta(p, hero, TEXT_X, meta_top, measure);
     if !source.is_empty() {
-        draw_meta_source(
-            p,
-            source,
-            MARGIN_X,
-            y,
-            meta_drawn_w(&meta_view, &meta, HERO_COL_W, measure),
-            measure,
-        );
+        draw_meta_source(p, source, TEXT_X, meta_top, meta_w, measure);
     }
-    y += meta_h;
-    if let Some(view) = synopsis {
-        view.draw(
-            p,
-            Rect::new(MARGIN_X, y + theme::space::SM, HERO_COL_W, 0.0),
-        );
+    if lines > 0 {
+        let syn_top = meta_top + META_LH + META_GAP;
+        synopsis.draw(p, Rect::new(TEXT_X, line_cap_top(syn_top, SYN_LH, theme::size::lf::S20, measure), SYN_W, 0.0));
     }
 }
 

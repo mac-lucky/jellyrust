@@ -70,6 +70,7 @@ fn a_down_inside_a_preview_changes_the_hashed_state() {
 /// asymmetry `row_ids` can get wrong (which channel's preview a stage offers) went ungraded.
 #[test]
 fn every_row_id_has_a_row() {
+    let _reporting = super::offer_reporting_for_test(); // litefin: the upstream rows
     let _g = nj_base::testlock::serial();
     let m = FixtureMeasure;
     let c = test_cx(&m);
@@ -108,6 +109,7 @@ fn every_row_id_has_a_row() {
 /// rather than leaving a stale action nobody can reach a live control for.
 #[test]
 fn toggling_a_switch_shows_done_without_resizing_the_table_and_reversing_hides_it_again() {
+    let _reporting = super::offer_reporting_for_test(); // litefin: the upstream rows
     let _g = nj_base::testlock::serial();
     let saved = consent::current();
     consent::install(Consent::default());
@@ -269,6 +271,7 @@ fn left_off_the_bands_leading_control_is_a_wall_at_every_first_run_stage() {
 /// the spring, so the one-line re-derivation could regress silently.
 #[test]
 fn a_value_only_row_commit_preserves_in_flight_focus_motion() {
+    let _reporting = super::offer_reporting_for_test(); // litefin: the upstream rows
     let _g = nj_base::testlock::serial();
     let m = FixtureMeasure;
     let c = test_cx(&m);
@@ -297,6 +300,7 @@ fn a_value_only_row_commit_preserves_in_flight_focus_motion() {
 /// `step` to prove that call is actually REACHED, rather than only present in the source.
 #[test]
 fn a_tick_advances_the_shared_table_highlight_spring() {
+    let _reporting = super::offer_reporting_for_test(); // litefin: the upstream rows
     let _g = nj_base::testlock::serial();
     let m = FixtureMeasure;
     let c = test_cx(&m);
@@ -432,6 +436,7 @@ fn a_hover_over_the_answer_band_parks_without_answering_anything() {
 /// answer to a direction key.
 #[test]
 fn toggling_a_switch_keeps_focus_on_the_row_it_toggled() {
+    let _reporting = super::offer_reporting_for_test(); // litefin: the upstream rows
     let _g = nj_base::testlock::serial();
     let saved = consent::current();
     consent::install(Consent::default());
@@ -465,6 +470,7 @@ fn toggling_a_switch_keeps_focus_on_the_row_it_toggled() {
 /// same absence on the way back down as the test above watches for on the way up.
 #[test]
 fn toggling_a_value_back_never_leaves_focus_on_nothing() {
+    let _reporting = super::offer_reporting_for_test(); // litefin: the upstream rows
     let _g = nj_base::testlock::serial();
     let saved = consent::current();
     consent::install(Consent::default());
@@ -571,6 +577,7 @@ mod composed {
     /// exactly as a real OK on the switch would).
     #[test]
     fn left_reaches_the_action_band_and_right_comes_back_out_of_it() {
+        let _reporting = super::super::offer_reporting_for_test(); // litefin: the upstream rows
         let _g = nj_base::testlock::serial();
         let saved = consent::current();
         consent::install(Consent::default());

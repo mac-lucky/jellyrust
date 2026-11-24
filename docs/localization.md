@@ -1,12 +1,12 @@
 # Help translate PlxNative
 
 PlxNative's interface is available in English, Spanish, Belarusian (official Cyrillic
-orthography) and Russian. Help improve a translation or contribute another language through a pull request
+orthography), Russian and Polish. Help improve a translation or contribute another language through a pull request
 at https://github.com/GLinnik21/plx-native.
 
 ## Translate a message
 
-Catalogs live in `locales/en`, `locales/es`, `locales/be` and `locales/ru`, split by UI area. English is the
+Catalogs live in `locales/en`, `locales/es`, `locales/be`, `locales/ru` and `locales/pl`, split by UI area. English is the
 source: each scoped, stable key has a `value`, translator `description`, and optional typed
 `args`. The other languages contain the same keys with translated string or plural values.
 The compiler combines each language's files; file names organize ownership, not message identity.
@@ -38,7 +38,8 @@ phrase. Never translate protocol identifiers, URLs, brand names or server-return
 Double braces (`{{` and `}}`) render literal braces. A placeholder accepts `str` or `i64`;
 integers are formatted with the TV's regional settings. A plural message's `count` selects a
 CLDR cardinal category for the UI language. Other arguments must appear in every form; count
-may be omitted when the form spells it out. Belarusian and Russian need `one`, `few`, `many`, and `other`;
+may be omitted when the form spells it out. Belarusian, Russian and Polish need `one`, `few`, `many`, and `other` (Polish `few` is 2-4, 22-24,
+32-34 ...; `many` is 0, 5-21, 25-31, 101 ...; `other` is only reached by fractions);
 Spanish needs `one`, `many`, and `other`; English needs `one` and `other`.
 
 Use readable, natural wording. Belarusian switch labels use `Укл.` and `Выкл.`. Preserve the meaning of consent and privacy disclosures exactly.
@@ -61,7 +62,7 @@ the Library's TYPE menu, and the
 collection page's meta line and season marks. When one of these tests fails, shorten
 the wording; do not abbreviate it past readability.
 
-Review the affected screens with the desktop simulator. `NJ_LOCALE=es`, `be`, `ru` or `en`
+Review the affected screens with the desktop simulator. `NJ_LOCALE=es`, `be`, `ru`, `pl` or `en`
 selects a language for a simulator launch; `NJ_FORMAT_LOCALE=de-DE` exercises separate
 regional formatting. `NJ_LOCALE=qps-ploc` expands and accents text to reveal cramped
 layouts. These environment overrides do not operate in the shipping TV build.
@@ -73,21 +74,24 @@ New translations and changes remain subject to language review.
 ## Adding a language
 
 Add a catalog directory using its BCP-47 language tag, translating all source keys. This currently
-also requires a code change: extend the compiler's locale list and plural requirements, the
-runtime language and preference enums, the Settings choices, and tests. Select CLDR plural rules
+also requires a code change: add a row to `LOCALES` in `rust-modules/platform/build_support/catalog.rs`
+(directory tag, `Language` arm, required plural categories), extend the runtime language and
+preference enums (tag, native name, saved-preference code, regional default, TV-locale parsing),
+`SHIPPED`, the Settings choices, and tests. Select CLDR plural rules
 for that language, add launcher metadata, and verify every character in both bundled font faces.
-The current renderer supports the shipped Latin and Cyrillic languages; Arabic/Hebrew and other
+The current renderer supports the shipped Latin (including Polish diacritics) and Cyrillic languages; Arabic/Hebrew and other
 scripts requiring shaping or bidirectional layout need renderer work before being offered.
 
 ## Runtime behavior
 
-Settings → Language defaults to the television's UI language. Explicit English, Spanish,
+Settings → Language defaults to the television's UI language. Explicit English, Spanish, Polish,
 Belarusian and Russian choices apply the next time the app starts. The running UI and Plex request language
 remain unchanged until then; playback is not interrupted. The contribution action displays this
 guide's URL and QR code for opening on another device.
 
 At boot, the native Settings Service supplies `localeInfo.locales.UI`, `locales.FMT` and `clock`.
-UI resolution is saved override, TV UI language, process locale, then English. Unsupported UI
+UI resolution is saved override, TV UI language, process locale, then English; a TV set to
+Polish (`pl-PL`) gets the Polish catalog. Unsupported UI
 languages use English. Missing formatting settings use the resolved UI language's regional
 default. Numeric Gregorian dates and numbers use the formatting locale; playback clocks remain
 durations. Locale data and catalogs are bundled, so translating the UI requires no network.

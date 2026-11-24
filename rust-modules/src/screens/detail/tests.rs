@@ -101,7 +101,6 @@ fn bare(_guard: &nj_base::testlock::Serial, sid: ServerId, rk: &str) -> DetailSc
         preview_prose: 1.0,
         preview_synopsis: 1.0,
         preview_chrome: 1.0,
-        preview_field: 1.0,
         preview_base_scrim: 1.0,
         preview_logo: Spring::at(0.0),
         preview_played_for: None,
@@ -114,7 +113,7 @@ fn bare(_guard: &nj_base::testlock::Serial, sid: ServerId, rk: &str) -> DetailSc
         teardown_cleared: false,
         scroll: Spring::at(0.0),
         scroll_target: 0.0,
-        free: false, episode_scroll: Spring::at(0.0), episode_free: false,
+        free: false,
         tab_scroll: Spring::at(0.0),
         episode_scale: [Spring::at(1.0); EP_SCALE_MAX],
         episode_text_lift: [crate::ui::text_lift::TextLift::new(); EP_SCALE_MAX],
@@ -127,10 +126,8 @@ fn bare(_guard: &nj_base::testlock::Serial, sid: ServerId, rk: &str) -> DetailSc
         tabs: TabStrip::new(),
         season_pop: CtlPop::new(),
         ctl_pop: CtlPop::new(),
-        disc_unfurl: [Spring::at(0.0); 3],
         season_metrics: season::Metrics::new(),
         about_rows: about::Rows::new(),
-        ground: AmbientWash::flat(theme::SURFACE_APP),
         selected: {
             let pms_state = crate::catalog_fetch::PmsState::default();
             crate::catalog_fetch::movie(&pms_state, crate::catalog_fetch::index_of_rk(&pms_state, sid, rk).max(0) as usize)
@@ -851,15 +848,6 @@ fn the_tracks_pill_opens_the_chooser_and_play_carries_the_choice() {
     clear();
 }
 
-#[test]
-fn the_episode_text_highlight_fits_the_block_the_flow_already_reserves() {
-    let d = detail(ServerId::UNSET, "show");
-    for (i, ep) in d.episodes.iter().enumerate() {
-        let r = episodes::meta_rect(ep, i, 0.0, 0.0, &crate::ui::fixture::FixtureMeasure);
-        assert!(r.y + r.h <= episodes::block_h(&d, &crate::ui::fixture::FixtureMeasure) + theme::space::SM);
-    }
-}
-
 /// **The Languages column is the PAGE's answer about the PAGE's item, and no surface is involved.**
 ///
 /// Red-first, and SIMULATED rather than historical: the old spelling was
@@ -1019,6 +1007,7 @@ fn hero_focus_survives_a_control_appearing_in_the_middle_of_the_row() {
         tracks: false,
         alt: false,
         mark: PosterMark::None,
+        favorite: Some(false),
     };
     let after = hero::HeroSet {
         alt: true,
@@ -1174,43 +1163,15 @@ fn a_landed_view_state_refresh_puts_the_browsed_season_back_and_never_steers_ano
 }
 
 #[test]
-fn a_pointer_lands_on_the_capsule_the_unfurl_drew() {
-    let y = 812.0;
-    let set = hero::HeroSet {
-        restart: true,
-        trailer: false,
-        version: false,
-        tracks: false,
-        alt: false,
-        mark: PosterMark::InProgress,
-    };
-    let index = hero::watch_index(set).unwrap();
-    assert_eq!(hero::ctl_at(set, index - 1), Some(hero::HeroCtl::Restart));
-    for unfurl in [0.2, 0.6, 1.0] {
-        let disc = hero::disc_caps_at(set, 230.0, 0.0, 0.0, [0.0, 0.0, unfurl], [201.0, 0.0, 267.0]);
-        let widths = hero::HeroWidths {
-            pill: 230.0,
-            version: 0.0,
-            tracks: 0.0,
-            alt: 0.0,
-            disc,
-        };
-        let previous = hero::hero_btn_rect_at(set, index - 1, y, widths);
-        let capsule = hero::hero_btn_rect_at(set, index, y, widths);
-        assert!(capsule.w > hero::CD);
-        assert!(capsule.contains(capsule.x + capsule.w - 1.0, capsule.cy()));
-        assert!(!previous.contains(capsule.x + 1.0, capsule.cy()));
-        assert_eq!(capsule.y, y);
-    }
-}
-
-#[test]
 fn hero_action_row_hit_matches_the_drawn_controls_at_every_set_size() {
     let _guard = nj_base::testlock::serial();
     use crate::ui::hit::{HitMap, PointerKind};
     crate::catalog::reset_servers_for_test();
     let sid = crate::catalog::register_for_test("hero-hit-own", "127.0.0.1", 1, "t", "c1");
     let other = crate::catalog::register_for_test("hero-hit-other", "127.0.0.1", 2, "t", "c2");
+    // A Jellyfin server, which keeps favourites: the row carries its heart.
+    let origin = crate::catalog::client_for(sid).unwrap().origin();
+    crate::jf::seat::register_with(origin, crate::jf::seat::Seat::default());
     let measure = crate::ui::fixture::FixtureMeasure;
     let context = cx(&measure, None);
     let mut sizes = std::collections::BTreeSet::new();
@@ -1257,20 +1218,12 @@ fn hero_action_row_hit_matches_the_drawn_controls_at_every_set_size() {
                         "the preview path replaced the Trailer disc"
                     );
                     let (controls, n) = hero::hero_ctls(set);
-                    assert_eq!(n, 2 + usize::from(restart) + usize::from(alt));
+                    assert_eq!(n, 3 + usize::from(restart) + usize::from(alt));
                     sizes.insert(n);
-                    for unfurl in [
-                        [0.0, 0.0, 0.0],
-                        [0.0, 0.0, 1.0],
-                        [0.0, 1.0, 0.0],
-                        [0.3, 0.0, 0.7],
-                        [1.0, 0.0, 0.0],
-                        [0.0, 1.0, 1.0],
-                    ] {
-                        screen.disc_unfurl = unfurl.map(Spring::at);
+                    {
                         for scroll in [0.0, 48.0] {
                             screen.scroll = Spring::at(scroll);
-                            let widths = hero::hero_widths(&measure, set, restart, unfurl, false);
+                            let widths = hero::hero_pill_w(&measure, restart);
                             let mut stops = Vec::new();
                             let mut drawn = Vec::new();
                             for (i, control) in controls[..n].iter().enumerate() {
@@ -1282,7 +1235,7 @@ fn hero_action_row_hit_matches_the_drawn_controls_at_every_set_size() {
                                 painted.y -= scroll;
                                 assert_eq!((placed.rect.x, placed.rect.y, placed.rect.w, placed.rect.h),
                                     (painted.x, painted.y, painted.w, painted.h),
-                                    "set={set:?} control={control:?} unfurl={unfurl:?}");
+                                    "set={set:?} control={control:?}");
                                 assert_eq!(placed.index, Some(i as u32));
                                 drawn.push((key, painted));
                                 stops.push(Stop { key, rect: placed.rect, rest_rect: placed.rest_rect,
@@ -1311,8 +1264,9 @@ fn hero_action_row_hit_matches_the_drawn_controls_at_every_set_size() {
             }
         }
     }
-    assert_eq!(sizes.into_iter().collect::<Vec<_>>(), vec![2, 3, 4]);
-    assert_eq!(cases, 192);
+    assert_eq!(sizes.into_iter().collect::<Vec<_>>(), vec![3, 4, 5]);
+    assert_eq!(cases, 32);
+    crate::jf::seat::forget(origin);
     clear();
     crate::catalog::reset_servers_for_test();
 }
@@ -1397,6 +1351,31 @@ fn preview_chrome_drives_the_below_hero_sections_to_zero_in_full_trailer_mode_an
         screen.preview_chrome
     );
 
+    drop(sink);
+    crate::player::preview::reset_for_test();
+    clear();
+}
+
+/// R3.5: a trailer's picture coming up DISSOLVES the backdrop still into the plane. `preview_art`
+/// eases it out over the frames after the first picture, as upstream did; the still is not cut on
+/// that first frame, and it is gone once the ease has run.
+#[test]
+fn the_backdrop_still_dissolves_into_a_trailers_picture() {
+    let sid = ServerId::UNSET;
+    let _guard = install(detail(sid, "show"));
+    let mut screen = bare(&_guard, sid, "show");
+    crate::player::preview::force_playing_for_test();
+    let mut effects = Vec::new();
+    let mut present = nj_machine::present::Present::new();
+    let mut sink = Effects::new(&mut effects, nj_machine::machine::MachineId::Instance(nj_machine::machine::InstanceId(1)), &mut present);
+    let hero_focus = Some(Located::Hero(hero::HeroCtl::Play));
+    screen.preview_tick::<TestHost>(16, 0.016, hero_focus, &mut sink, test_store().view());
+    let first = screen.backdrop_still_alpha();
+    assert!(first.is_some_and(|a| a > 0.5 && a < 1.0), "the picture's first frame still shows the still, fading: {first:?}");
+    for frame in 2..120 {
+        screen.preview_tick::<TestHost>(frame * 16, 0.016, hero_focus, &mut sink, test_store().view());
+    }
+    assert_eq!(screen.backdrop_still_alpha(), None, "the still has dissolved into the picture");
     drop(sink);
     crate::player::preview::reset_for_test();
     clear();
@@ -1528,25 +1507,6 @@ fn preview_tick_does_not_read_the_session_file_every_frame() {
 }
 
 #[test]
-fn an_item_with_no_ultrablur_keeps_the_flat_app_ground() {
-    let wash = AmbientWash::flat(theme::SURFACE_APP);
-    assert!(wash.is_flat(theme::SURFACE_APP, AmbientWash::FLAT_EPS));
-}
-
-#[test]
-fn the_page_ground_is_the_items_own_corner_arrangement() {
-    let blur = [
-        [0.1, 0.2, 0.3],
-        [0.2, 0.3, 0.4],
-        [0.3, 0.4, 0.5],
-        [0.4, 0.5, 0.6],
-    ];
-    let target = AmbientWash::keyed(blur, [AmbientWash::GROUND_W; 4]);
-    assert_ne!(target[0], target[1]);
-    assert_ne!(target[1], target[2]);
-}
-
-#[test]
 fn an_episode_page_leads_with_the_episodes_own_still() {
     let sid = ServerId::UNSET;
     let _guard = install(Detail {
@@ -1580,7 +1540,7 @@ fn a_shows_hero_still_outranks_every_other_art() {
 }
 
 #[test]
-fn a_long_synopsis_keeps_the_first_section_one_region_gap_below_the_buttons() {
+fn a_long_overview_pushes_the_first_section_below_its_show_more_pill() {
     let sid = ServerId::UNSET;
     let mut d = detail(sid, "show");
     d.summary = "A long synopsis whose wrapped lines make the hero taller. ".repeat(20);
@@ -1595,11 +1555,11 @@ fn a_long_synopsis_keeps_the_first_section_one_region_gap_below_the_buttons() {
     let screen = bare(&_guard, sid, "show");
     let detail = screen.detail(test_store().view()).unwrap();
     let chain = screen.hero_chain(&crate::ui::fixture::FixtureMeasure, test_store().view());
-    assert_eq!(
-        screen.section_top(1, detail, &crate::ui::fixture::FixtureMeasure),
-        chain.btn_y + hero::CD + theme::space::XL
-    );
-    assert_eq!(screen.content_top(&crate::ui::fixture::FixtureMeasure, test_store().view()), screen.section_top(1, detail, &crate::ui::fixture::FixtureMeasure));
+    // The flow waits for the taller of the poster and the column: here the long overview's Show
+    // more pill, plus the split's 40.
+    assert_eq!(screen.section_top(5, detail, &crate::ui::fixture::FixtureMeasure), chain.content_top);
+    assert!(chain.content_top > chain.more_y + crate::ui::detail_layout::SPLIT_BOTTOM);
+    assert_eq!(screen.content_top(&crate::ui::fixture::FixtureMeasure, test_store().view()), screen.section_top(5, detail, &crate::ui::fixture::FixtureMeasure));
     clear();
 }
 
@@ -1622,14 +1582,10 @@ fn the_hero_chain_is_identical_whether_or_not_the_trailer_preview_has_faded_its_
     screen.preview_prose = 0.0;
     screen.preview_synopsis = 0.0;
     screen.preview_chrome = 0.0;
-    screen.preview_field = 0.0;
+    screen.preview_base_scrim = 0.0;
     let faded = screen.compute_hero_chain(screen.detail(test_store().view()), &crate::ui::fixture::FixtureMeasure);
 
-    assert_eq!(rest.meta_y, faded.meta_y, "meta line must not move when it fades");
-    assert_eq!(rest.ratings_y, faded.ratings_y, "ratings row must not move when it fades");
-    assert_eq!(rest.syn_y, faded.syn_y, "synopsis must not move");
-    assert_eq!(rest.facts_y, faded.facts_y, "facts/playback-note line must not move when it fades");
-    assert_eq!(rest.btn_y, faded.btn_y, "the action row must not move");
+    assert_eq!(rest, faded, "no block of the column moves when the preview fades it");
     clear();
 }
 
@@ -2175,6 +2131,56 @@ fn a_watch_disc_press_emits_an_addressed_viewstate_effect_without_global_apply()
     crate::catalog::reset_servers_for_test();
 }
 
+/// The heart is the favourite toggle (5 Actions row): its face follows the item, a press asks
+/// the item's own server through the view-state queue, and the store's optimistic flip turns the
+/// face at once.
+#[test]
+fn the_favorite_heart_asks_the_items_server_and_flips_with_the_item() {
+    let _guard = nj_base::testlock::serial();
+    crate::catalog::reset_servers_for_test();
+    let sid = crate::catalog::register_for_test("detail-favorite", "127.0.0.1", 1, "t", "c");
+    crate::metadata::set_current_for_test(test_store().state_mut(), Some(Detail {
+        sid,
+        rk: "movie".into(),
+        kind: "movie".into(),
+        ..Default::default()
+    }));
+    let mut screen = bare(&_guard, sid, "movie");
+    assert_eq!(screen.hero_set(test_store().view()).favorite, None,
+        "a server that keeps no favourites (Plex) offers no heart");
+    let origin = crate::catalog::client_for(sid).unwrap().origin();
+    crate::jf::seat::register_with(origin, crate::jf::seat::Seat::default());
+    assert_eq!(screen.hero_set(test_store().view()).favorite, Some(false));
+    let (_, effects) = step(
+        &mut screen,
+        &ScreenEvent::PressCommit(nj_machine::machine::PressId(1)),
+        Some(hero::ELEM_FAVORITE),
+    );
+    let writes: Vec<_> = effects.iter().filter_map(|effect| match &effect.fx {
+        Fx::App(AppFx::Store(StoreId::ViewState,
+            crate::stores::StoreCmd::ViewState(ViewStateCmd::Request { sid, rk, write, detail, .. }))) =>
+            Some((*sid, rk.as_str(), *write, detail.clone())),
+        _ => None,
+    }).collect();
+    // R3.2: the landing re-reads this page, so a refused write puts the server's answer back.
+    assert_eq!(writes, [(sid, "movie", crate::viewstate::Write::Favorite(true),
+        Some(crate::stores::viewstate::DetailRefresh { sid, rk: "movie".into(), keep: None }))]);
+    assert!(test_store().run(crate::stores::metadata::MetadataCmd::SetFavoriteLocal { sid, rk: "movie".into(), on: true }));
+    assert!(!test_store().run(crate::stores::metadata::MetadataCmd::SetFavoriteLocal { sid, rk: "movie".into(), on: true }),
+        "a flip to what the item already says changes nothing");
+    assert_eq!(screen.hero_set(test_store().view()).favorite, Some(true));
+    let (_, effects) = step(
+        &mut screen,
+        &ScreenEvent::PressCommit(nj_machine::machine::PressId(2)),
+        Some(hero::ELEM_UNFAVORITE),
+    );
+    assert!(effects.iter().any(|effect| matches!(&effect.fx, Fx::App(AppFx::Store(StoreId::ViewState,
+        crate::stores::StoreCmd::ViewState(ViewStateCmd::Request { write: crate::viewstate::Write::Favorite(false), .. }))))));
+    crate::jf::seat::forget(origin);
+    clear();
+    crate::catalog::reset_servers_for_test();
+}
+
 #[test]
 fn season_focus_debounces_the_load_without_storing_a_focus_cursor() {
     let sid = ServerId::UNSET;
@@ -2660,9 +2666,12 @@ fn cached_section_tops_match_the_stacking_walk() {
     // the layout as 42px out when the shelves stopped double-spacing.
     let gap = |above: i32, below: i32| DetailScreen::section_gap(above, Some(below));
     assert_eq!(gap(4, 3), crate::ui::consts::UNDER_LABEL_AIR, "a shelf brings its own band");
-    assert_eq!(gap(2, 4), super::SECTION_GAP, "a bare list does not");
+    assert_eq!(gap(2, 4), episodes::LIST_BOTTOM, "the episode list keeps Litefin's 80 below it");
 
-    assert_eq!(seasons, screen.content_top(&measure, test_store().view()));
+    // The rich-metadata table leads the flow, then the season strip.
+    assert_eq!(about, screen.content_top(&measure, test_store().view()));
+    let about_h = screen.block_h(5, detail, &measure);
+    assert_eq!(seasons, about + if about_h > 0.0 { about_h + gap(5, 1) } else { 0.0 });
     assert_eq!(episodes, seasons + season::ROW_H + super::TAB_EP_GAP);
     assert_eq!(
         cast_first,
@@ -2671,10 +2680,6 @@ fn cached_section_tops_match_the_stacking_walk() {
     assert_eq!(
         related,
         cast_first + screen.block_h(4, detail, &measure) + gap(4, 3)
-    );
-    assert_eq!(
-        about,
-        related + screen.block_h(3, detail, &measure) + gap(3, 5)
     );
     clear();
 }
@@ -2811,7 +2816,7 @@ fn ticking_the_page_allows_layout_to_remeasure() {
 }
 
 #[test]
-fn extras_sit_after_cast_and_crew_and_do_not_move_the_compact_title() {
+fn extras_sit_after_cast_and_crew_below_the_rich_metadata_table() {
     let extra = crate::metadata::Extra {
         rk: "9".into(),
         part: "/p".into(),
@@ -2836,15 +2841,9 @@ fn extras_sit_after_cast_and_crew_and_do_not_move_the_compact_title() {
     let (sections, n) = screen.sections(Some(loaded));
     assert_eq!(
         &sections[..n],
-        &[0, 1, 2, 4, 6, 3, 5],
-        "extras sits after Cast and before Related"
+        &[0, 5, 1, 2, 4, 6, 3],
+        "the rich-metadata table leads; extras sits after Cast and before Related"
     );
-    // The pinned title is no longer anchored to a NAMED section: it leaves as soon as the first
-    // block below the hero starts to travel, whichever section that is.
-    let first_top = screen.section_top_settled(sections[1], loaded, &crate::ui::fixture::FixtureMeasure);
-    let hide_at = first_top - crate::ui::detail_layout::TOP_MARGIN;
-    assert_eq!(super::compact_title_alpha(hide_at, first_top, 0.0), 1.0);
-    assert_eq!(super::compact_title_alpha(hide_at + 400.0, first_top, 0.0), 0.0);
 
     let mut spot = crate::metadata::Spot::default();
     spot.section = 6;
@@ -2886,13 +2885,7 @@ fn extras_sit_after_cast_and_crew_and_do_not_move_the_compact_title() {
         ..Default::default()
     };
     let (sections, n) = screen.sections(Some(&movie));
-    assert_eq!(&sections[..n], &[0, 4, 6, 3, 5]);
-    // Same rule on a movie, whose first below-hero section is Cast rather than the season strip:
-    // the title is out by the time that block has moved a fraction of its own height.
-    let first_top = screen.section_top_settled(sections[1], &movie, &crate::ui::fixture::FixtureMeasure);
-    let hide_at = first_top - crate::ui::detail_layout::TOP_MARGIN;
-    assert!(super::compact_title_alpha(hide_at - 1.0, first_top, 0.0) > 0.99);
-    assert!(super::compact_title_alpha(hide_at + 400.0, first_top, 0.0) < 0.01);
+    assert_eq!(&sections[..n], &[0, 5, 4, 6, 3]);
     clear();
 }
 
@@ -2927,8 +2920,8 @@ fn cast_section_top_is_keyed_by_identity_not_array_position() {
     let (sections, n) = screen.sections(Some(loaded));
     assert_eq!(
         &sections[..n],
-        &[0, 4, 3, 5],
-        "Cast sits at array position 1, three away from its own SectionId discriminant (4)"
+        &[0, 5, 4, 3],
+        "Cast sits at array position 2, two away from its own SectionId discriminant (4)"
     );
     let measure = crate::ui::fixture::FixtureMeasure;
     let cast_top = screen.section_top(section::SectionId::Cast.raw(), loaded, &measure);
@@ -3268,6 +3261,7 @@ fn collection_movie(sid: ServerId) -> Detail {
             title: "Example Trilogy".into(),
             section: 1,
             tag: 812,
+            rk: String::new(),
             members: ["m1", "m2", "m3", "m4"].iter().map(|rk| collection_member(sid, rk)).collect(),
             count: 4,
         }),
@@ -3304,7 +3298,7 @@ fn the_collection_shelf_sits_above_related_under_a_linked_heading() {
     let meta = test_store().view();
     let d = screen.detail(meta).unwrap();
     let (sections, n) = screen.sections(Some(d));
-    assert_eq!(&sections[..n], &[0, 7, 3, 5], "collection, then Related, then About");
+    assert_eq!(&sections[..n], &[0, 5, 7, 3], "the rich-metadata table, then the collection, then Related");
     let measure = crate::ui::fixture::FixtureMeasure;
     assert!(screen.section_top(7, d, &measure) < screen.section_top(3, d, &measure));
 
@@ -3369,9 +3363,16 @@ fn up_from_a_member_reaches_the_heading_and_down_returns_to_that_member() {
     assert_eq!(moved_to(collection_move(&screen, &mut engine, Dir::Down), "DOWN from the heading"),
         member(2), "DOWN returns to the member the shelf remembered");
 
-    // From the hero, DOWN stops on the heading first — the document order.
+    // From the hero, DOWN walks the document: the Show more pill, the table, the collection.
     engine.set(owner, key(hero::ELEM_PLAY), Some(hero::HERO_GROUP), By::Restore);
     assert_eq!(moved_to(collection_move(&screen, &mut engine, Dir::Down), "DOWN from the hero"),
+        about::CARD_ELEM, "the Show more pill under the overview is the next stop");
+    assert_eq!(moved_to(collection_move(&screen, &mut engine, Dir::Down), "DOWN from Show more"),
+        about::LANGUAGES_ELEM, "then the rich-metadata table of a playable item");
+    // The full-width table drops straight onto the cards below it; their heading is one UP away.
+    let down = moved_to(collection_move(&screen, &mut engine, Dir::Down), "DOWN from the table");
+    assert!(matches!(screen.locate(down, test_store().view()), Some(Located::Collection(_))));
+    assert_eq!(moved_to(collection_move(&screen, &mut engine, Dir::Up), "UP from the cards"),
         collection::HEADING_ELEM);
     // From Related, UP reaches the collection's CARDS; the heading is one more UP.
     let related = screen.engine_key(related::elem(0).unwrap()).unwrap();
@@ -3784,7 +3785,7 @@ fn a_landing_does_not_pull_a_glided_detail_page_back() {
 /// the episode strip, which then stays where the glide put it although an episode holds focus,
 /// until a key moves focus.
 #[test]
-fn the_sideways_glide_moves_the_related_shelf_and_the_episode_strip() {
+fn the_sideways_glide_moves_the_related_shelf_but_not_the_episode_list() {
     let sid = ServerId::UNSET;
     let mut page = detail(sid, "show");
     page.episodes = (1..=12).map(|i| episode(&format!("e{i}"), i)).collect();
@@ -3801,18 +3802,9 @@ fn the_sideways_glide_moves_the_related_shelf_and_the_episode_strip() {
     let y = row_y(&screen, section::SectionId::Related);
     for _ in 0..10 { step(&mut screen, &pan(y), None); }
     assert_eq!(screen.related.scroll_x(), 200.0, "the Related shelf glides");
-    assert_eq!(screen.episode_scroll.pos, 0.0, "the episode strip stays");
+    // The episode list is vertical: a sideways glide over it moves nothing.
     let y = row_y(&screen, section::SectionId::Episode);
-    let ep = screen.engine_key(episodes::elem(0, episodes::Row::Still).unwrap()).unwrap();
-    for _ in 0..10 { step(&mut screen, &pan(y), Some(ep)); }
-    assert_eq!(screen.episode_scroll.pos, 200.0, "the episode strip glides");
-    for i in 1..=60 { step(&mut screen, &ScreenEvent::Tick(Tick { ms: i * 16, dt_us: 16_667 }), Some(ep)); }
-    assert_eq!(screen.episode_scroll.pos, 200.0, "its focused episode does not pull it back");
-    let entry = screen.entry;
-    // a key's move to the first episode (off screen to the left now) brings the strip back to it
-    step(&mut screen, &ScreenEvent::FocusMoved { from: Some(FocusKey { entry, elem: ep }),
-        to: FocusKey { entry, elem: ep }, by: By::Dir }, Some(ep));
-    for i in 61..=200 { step(&mut screen, &ScreenEvent::Tick(Tick { ms: i * 16, dt_us: 16_667 }), Some(ep)); }
-    assert!(screen.episode_scroll.pos < 1.0, "a key's move brings the strip back to its focus: {}", screen.episode_scroll.pos);
+    for _ in 0..10 { step(&mut screen, &pan(y), None); }
+    assert_eq!(screen.related.scroll_x(), 200.0, "a glide over the list leaves the shelf alone");
     clear();
 }

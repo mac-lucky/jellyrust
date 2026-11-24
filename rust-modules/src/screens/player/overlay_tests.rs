@@ -1002,17 +1002,17 @@ fn the_active_groups_seat_round_trips_through_group_of() {
 #[test]
 fn the_player_panels_dim_through_the_container_from_the_playing_items_corners() {
     use crate::ui::screen::{Screen, UnderlaySource};
-    use crate::ui::theme::underlay::{DIM_PLAYER, DIM_SHEET};
+    use crate::ui::theme::underlay::DIM_SHEET;
     let ps = crate::route::PlaybackSession::IDLE;
     let corners = [[0.1, 0.5, 0.2], [0.2, 0.4, 0.1], [0.6, 0.2, 0.1], [0.1, 0.1, 0.4]];
     let mut store = crate::stores::metadata::MetadataStore::default();
     assert!(store.run(crate::stores::metadata::MetadataCmd::InstallPlaying(Some(crate::metadata::PlayingItem {
-        sid: crate::catalog::ServerId::from_raw(0), rk: "rk".into(), audio: Vec::new(), subs: Vec::new(),
+        sid: crate::catalog::ServerId::from_raw(0), rk: "rk".into(), audio: Vec::new(), subs: Vec::new(), subs_off: false,
         video_fps: 0.0, width: 0, height: 0, bitrate: 0, dovi: Default::default(),
         markers: Vec::new(), chapters: Vec::new(), blur: Some(corners),
     }))));
     for (kind, alpha) in [
-        (OverlayKind::Tracks { tab: 0 }, DIM_PLAYER),
+        (OverlayKind::Tracks { tab: 0 }, crate::ui::theme::osd::TRACK_MENU_DIM),
         (OverlayKind::More { quality: false }, DIM_SHEET),
         (OverlayKind::Info, 0.0),
         (OverlayKind::Chapters, 0.0),

@@ -251,14 +251,6 @@
     "value": "All Genres",
     "description": "browse library all_genres"
   },
-  "browse.library.libraries": {
-    "value": "Libraries",
-    "description": "browse library libraries"
-  },
-  "browse.library.check_shares": {
-    "value": "Check for new shares",
-    "description": "browse library check_shares"
-  },
   "browse.library.name": {
     "value": "Library",
     "description": "browse library name"
@@ -1989,13 +1981,6 @@
       "items": "str"
     },
     "description": "Collection page meta line; items is a localized item count such as “12 items”"
-  },
-  "browse.collection.season_mark": {
-    "value": "SEASON {number}",
-    "args": {
-      "number": "i64"
-    },
-    "description": "Upper-case mark drawn on a season poster inside a collection"
   },
   "browse.home.hub.on_deck": {
     "value": "On Deck",

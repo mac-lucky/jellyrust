@@ -1,9 +1,9 @@
 //! Jellyfin artwork addressing: which image an item draws, and the request that fetches it.
 //!
-//! An item's artwork is held as `/library/metadata/{key}/{thumb|art|clearLogo}/{guid}-{tag}`, the
-//! path shape the poster store keys its memo, disk cache and cold-open Home cache by; the GUID
+//! An item's artwork is held as `/library/metadata/{key}/{thumb|art|clearLogo|chapterN}/{guid}-{tag}`,
+//! the path shape the poster store keys its memo, disk cache and cold-open Home cache by; the GUID
 //! rides in the tag segment so a path persisted by an earlier run still resolves. [`jf_image_path`]
-//! turns one into `/Items/{id}/Images/{Primary|Backdrop|Logo}` at request time.
+//! turns one into `/Items/{id}/Images/{Primary|Backdrop|Logo|Chapter/N}` at request time.
 use super::ids;
 use super::models::BaseItemDto;
 use crate::catalog::{HexColor, UltraBlurColors};
@@ -67,6 +67,12 @@ pub fn thumb(it: &BaseItemDto) -> String {
     if own.is_empty() && it.kind == "Season" { series_primary(it) } else { own }
 }
 
+/// Chapter `index`'s picture (counted from 0, as the server numbers them), `""` when the server
+/// extracted none (`ImageTag` absent: chapter image extraction is a per-library setting).
+pub fn chapter(it: &BaseItemDto, index: usize, tag: Option<&str>) -> String {
+    art_path(&it.id, &format!("chapter{index}"), tag)
+}
+
 /// The item's backdrop, else the one it inherits from its parent (an episode's series).
 pub fn backdrop(it: &BaseItemDto) -> String {
     match it.backdrop_image_tags.first() {
@@ -103,18 +109,24 @@ pub fn jf_image_path(src: &str, w: i64, h: i64, png: bool) -> Option<String> {
         Some((g, t)) => (g.map(str::to_string), Some(t).filter(|t| !t.is_empty())),
         None => (None, None),
     };
+    let chapter;
     let image_type = match slot {
         "thumb" => "Primary",
         "art" => "Backdrop",
         "clearLogo" => "Logo",
         "thumbLand" => "Thumb",
         "banner" => "Banner",
-        _ => return None,
+        _ => {
+            chapter = format!("Chapter/{}", slot.strip_prefix("chapter")?.parse::<u32>().ok()?);
+            &chapter
+        }
     };
     let owner = if slot == "clearLogo" { logo_owner(rk) } else { None }
         .or(carried)
         .or_else(|| ids::guid_of(rk))?;
-    let mut q = format!("/Items/{owner}/Images/{image_type}?maxWidth={w}&maxHeight={h}&quality=90");
+    // fill, not max: the box is COVERED (never upscaled past the source), the contract every card's
+    // cover crop assumes (`ui::widgets::art_uv`) — a fit leaves a 2:3 portrait in a square box short.
+    let mut q = format!("/Items/{owner}/Images/{image_type}?fillWidth={w}&fillHeight={h}&quality=90");
     if let Some(tag) = tag {
         q.push_str("&tag=");
         q.push_str(&crate::catalog::urlenc_str(tag));

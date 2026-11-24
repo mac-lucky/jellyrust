@@ -1,0 +1,9 @@
+{
+  "favorites.movies": "Películas",
+  "favorites.series": "Series de TV",
+  "favorites.seasons": "Temporadas",
+  "favorites.episodes": "Episodios",
+  "favorites.people": "Gente",
+  "favorites.empty": "No se encontraron favoritos. ¡Vaya a añadir algunos!",
+  "favorites.failed": "No se pudieron cargar los favoritos"
+}

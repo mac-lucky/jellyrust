@@ -38,7 +38,7 @@ fn locale_resolution_separates_language_from_formatting() {
             .language(),
         Language::Ru
     );
-    for tag in ["fr-FR", "be-Latn", "ru-Latn", "garbage\r\nheader", "C"] {
+    for tag in ["fr-FR", "be-Latn", "ru-Latn", "pl-Cyrl", "garbage\r\nheader", "C"] {
         assert_eq!(
             LocaleContext::resolve(Preference::System, Some(tag), None, None, None).language(),
             Language::En
@@ -91,6 +91,53 @@ fn belarusian_library_count_messages_render_the_reviewed_forms() {
     }
 }
 #[test]
+fn a_polish_television_selects_polish_with_polish_formatting() {
+    let tv = LocaleContext::resolve(Preference::System, Some("pl-PL"), None, None, None);
+    assert_eq!(tv.language(), Language::Pl);
+    assert_eq!(tv.format_locale(), "pl-PL");
+    assert_eq!(tv.date(2026, 9, 27).as_deref(), Some("27.09.2026"));
+    assert_eq!(tv.decimal(45, 1), "4,5");
+    assert_eq!(
+        LocaleContext::resolve(Preference::System, None, None, None, Some("pl_PL.UTF-8")).language(),
+        Language::Pl
+    );
+    let chosen = LocaleContext::resolve(Preference::Pl, Some("en-US"), None, None, None);
+    assert_eq!((chosen.language(), chosen.format_locale()), (Language::Pl, "pl-PL"));
+    assert_eq!(Preference::from_tag(Preference::Pl.tag()), Preference::Pl);
+    assert_eq!(Preference::Pl.native_name(), "Polski");
+    let _guard = nj_base::testlock::serial();
+    let previous = saved_preference_for_test(Preference::Pl);
+    assert_eq!(saved_preference(), Preference::Pl);
+    saved_preference_for_test(previous);
+}
+#[test]
+fn polish_plurals_follow_the_cldr_one_few_many_rule() {
+    let pl = LocaleContext::resolve(Preference::Pl, None, None, None, None);
+    for (n, category) in [
+        (1, PluralCategory::One),
+        (2, PluralCategory::Few),
+        (5, PluralCategory::Many),
+        (12, PluralCategory::Many),
+        (22, PluralCategory::Few),
+        (25, PluralCategory::Many),
+        (101, PluralCategory::Many),
+        (0, PluralCategory::Many),
+    ] {
+        assert_eq!(pl.plural(n), category, "{n}");
+    }
+    for (count, expected) in [
+        (1, "1 film"),
+        (2, "2 filmy"),
+        (5, "5 filmów"),
+        (12, "12 filmów"),
+        (22, "22 filmy"),
+        (25, "25 filmów"),
+        (101, "101 filmów"),
+    ] {
+        assert_eq!(msg::browse_person_films_in(&pl, count), expected);
+    }
+}
+#[test]
 fn settings_replies_are_typed_and_refusals_do_not_look_like_success() {
     let s=parse_reply(r#"{"returnValue":true,"settings":{"localeInfo":{"locales":{"UI":"be_BY","FMT":"es-ES"},"clock":"12"}}}"#).unwrap();
     assert_eq!(s.ui.as_deref(), Some("be-BY"));
@@ -107,15 +154,17 @@ fn settings_replies_are_typed_and_refusals_do_not_look_like_success() {
     assert!(normalize("es-ES\r\nX-Test: injected").is_none());
     assert!(normalize("POSIX").is_none());
 }
+/// Each weight of the UI chain draws every catalog glyph: Poppins for Latin, Inter (the second
+/// link, `gfx/text.rs`) for the Belarusian and Russian Cyrillic Poppins lacks.
 #[test]
-fn all_catalog_glyphs_exist_in_both_shipped_text_faces() {
-    for name in ["appfont.ttf", "appfont-bold.ttf"] {
-        let cov = nj_base::fontcov::shipped(name).as_ref().unwrap();
+fn all_catalog_glyphs_exist_in_both_weights_of_the_shipped_chain() {
+    for names in [["appfont.ttf", "appfont-inter.ttf"], ["appfont-bold.ttf", "appfont-inter-bold.ttf"]] {
+        let covs = names.map(|n| nj_base::fontcov::shipped(n).as_ref().unwrap());
         for s in msg::CORPUS.iter().copied().chain(["ІіЎўЁё’"]) {
             for ch in s.chars().filter(|c| !c.is_control()) {
                 assert!(
-                    cov.contains(ch as u32),
-                    "{name}: missing {ch:?} U+{:04X}",
+                    covs.iter().any(|c| c.contains(ch as u32)),
+                    "{names:?}: missing {ch:?} U+{:04X}",
                     ch as u32
                 );
             }

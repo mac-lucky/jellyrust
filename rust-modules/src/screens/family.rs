@@ -93,7 +93,7 @@ pub(crate) enum SettingsPage {
 }
 
 /// Which preference a [`SettingsPage::Picker`] edits. The parent page (`Playback` for the local ones,
-/// `AudioSubtitles` for the four account ones) and the page's own title/options live in `screens::preferences`;
+/// `AudioSubtitles` for the six account ones and the local [`PickerKind::Voice`]) and the page's own title/options live in `screens::preferences`;
 /// the NAME of the field lives here because the parent pushes it through this vocabulary rather
 /// than through the module that implements it (the module doc's rule).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -108,18 +108,26 @@ pub(crate) enum PickerKind {
     SubtitleMode,
     SubtitleLanguage,
     DefaultAudioTrack,
+    /// Jellyfin's `RememberAudioSelections`.
+    RememberAudio,
+    /// Jellyfin's `RememberSubtitleSelections`.
+    RememberSubtitles,
     InstantDpadSeeking,
     EpisodeNavigation,
+    /// Dubbing or lektor (`route::VoicePreference`): local, though it sits on Audio & Subtitles.
+    Voice,
 }
 
 impl SettingsPage {
-    /// The pages a boot target opens the surface over, root first: `nativejelly-settings=picker-…`
-    /// is reached as root → Playback → the picker, so BACK from it lands where an interactive
-    /// visit would. Every other page is booted as the surface's root.
+    /// The pages a boot target opens the surface over, root first, so BACK from it lands where an
+    /// interactive visit would and the Settings root's category list stands beside it:
+    /// `nativejelly-settings=picker-…` is root → Playback → the picker, any other page root → the
+    /// page. The root and a first-run consent stage are booted alone.
     pub(crate) fn boot_trail(self) -> Vec<SettingsPage> {
         match self {
+            SettingsPage::Root | SettingsPage::ConsentStage(_) => vec![self],
             SettingsPage::Picker(kind) => vec![SettingsPage::Root, kind.parent(), self],
-            page => vec![page],
+            page => vec![SettingsPage::Root, page],
         }
     }
 }
@@ -129,7 +137,8 @@ impl PickerKind {
     pub(crate) fn parent(self) -> SettingsPage {
         match self {
             PickerKind::Quality | PickerKind::DirectPlay | PickerKind::SubtitleSize | PickerKind::SubtitlePosition | PickerKind::NextEpisode | PickerKind::SkipInterval | PickerKind::InstantDpadSeeking | PickerKind::EpisodeNavigation => SettingsPage::Playback,
-            PickerKind::AudioLanguage | PickerKind::SubtitleMode | PickerKind::SubtitleLanguage | PickerKind::DefaultAudioTrack => SettingsPage::AudioSubtitles,
+            PickerKind::AudioLanguage | PickerKind::SubtitleMode | PickerKind::SubtitleLanguage | PickerKind::DefaultAudioTrack
+                | PickerKind::RememberAudio | PickerKind::RememberSubtitles | PickerKind::Voice => SettingsPage::AudioSubtitles,
         }
     }
 }
@@ -267,6 +276,14 @@ pub(crate) fn inner_cx<'o, 'a: 'o, H: DirectoryLike>(cx: &Cx<'a, H>) -> Cx<'o, I
         focus: cx.focus.clone(),
         owner: cx.owner,
     }
+}
+
+/// **A Settings-family page's table, as Litefin draws it**: setting rows in the content panel of
+/// [`RouteLayout::panel`](crate::ui::route_screen::RouteLayout::panel) (`docs/litefin-look.md` 9).
+/// Every page that lists rows takes this at each rebuild, and its text-fit test grades the same.
+pub(crate) fn style_page_table(table: &mut crate::ui::table::TableView) {
+    table.compact = false;
+    table.set_style(crate::ui::table::TableStyle::Settings);
 }
 
 /// Seat a form-backed page's table on the engine's focus: a row key parks the selection on that row

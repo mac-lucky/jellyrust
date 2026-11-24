@@ -128,6 +128,8 @@ pub struct BaseItemPerson {
 pub struct ChapterInfo {
     pub start_position_ticks: i64,
     pub name: Option<String>,
+    /// Present only where the library extracts chapter images.
+    pub image_tag: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -275,6 +277,8 @@ pub struct BaseItemDto {
     pub local_trailer_count: Option<i64>,
     pub special_feature_count: Option<i64>,
     pub extra_type: Option<String>,
+    /// A box set's member order: `PremiereDate | SortName | Default` (its owner's own order).
+    pub display_order: Option<String>,
     pub width: Option<i64>,
     pub height: Option<i64>,
 }

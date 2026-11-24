@@ -240,17 +240,27 @@ pub fn probe_first(candidates: &[Origin], client_id: &str) -> Result<(Origin, Pu
     Err(worst.unwrap_or(AuthError::Unreachable))
 }
 
-/// Does the server still honour `token` (minted under `device_user`)? `GET /Users/Me`: a refusal
-/// (401/403) is [`AuthError::BadCredentials`] — the sign-in was revoked or has expired — and
-/// silence is [`AuthError::Unreachable`]. The who's-watching screen asks before switching, so a
-/// revoked user is asked to sign in again rather than shown a server that "cannot be reached".
+/// How long [`check_token`] waits: it stands in front of a boot, so a server that is off must not
+/// hold the app for a full request timeout.
+const CHECK_TIMEOUT_S: i32 = 4;
+
+/// Does the server still honour `token` (minted under `device_user`)? `GET /Users/Me`: a 401 is
+/// [`AuthError::BadCredentials`] (the sign-in was revoked or has expired), and silence is
+/// [`AuthError::Unreachable`]. A 403 is [`AuthError::Refused`], not a dead token: Jellyfin
+/// answers a VALID one so outside the user's parental access schedule, or for a remote request
+/// with remote access off (`DefaultAuthorizationHandler`). The boot and the who's-watching screen
+/// ask before installing a user, so a revoked one is asked to sign in again rather than shown a
+/// server that "cannot be reached", and a refused one is kept.
 pub fn check_token(origin: &Origin, client_id: &str, token: &str, device_user: &str) -> Result<(), AuthError> {
     credential_may_go(origin)?;
     let c = crate::catalog::unregistered_client(origin.clone(), token, client_id);
-    match Jf::for_sign_in(&c, device_user).status("/Users/Me", Method::Get, None) {
-        None => Err(AuthError::Unreachable),
-        Some(s) if (200..300).contains(&s) => Ok(()),
-        Some(s) => Err(status_error(s)),
+    let auth = Jf::for_sign_in(&c, device_user).auth_header();
+    match crate::http::request_probe(origin, "/Users/Me", Method::Get, &[crate::http::ACCEPT_JSON, auth.as_str()],
+        64 * 1024, CHECK_TIMEOUT_S, None) {
+        Err(_) => Err(AuthError::Unreachable),
+        Ok(r) if (200..300).contains(&r.status) => Ok(()),
+        Ok(r) if r.status == 401 => Err(AuthError::BadCredentials),
+        Ok(r) => Err(AuthError::Refused(r.status)),
     }
 }
 

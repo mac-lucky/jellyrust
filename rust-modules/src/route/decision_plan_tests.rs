@@ -486,6 +486,102 @@ fn subtitle_mode_always_turns_on_the_preferred_language() {
     assert_eq!(plan.sub_sid, 3, "the client renders it over direct play");
 }
 
+/// **"Dubbing, never lektor" with no Polish dub plays the original, and the Smart subtitle mode
+/// judges by that track.** The server picks the Polish lektor for a Polish user; the preference
+/// skips it for the English original, so the Polish subtitles come on, where under Any the lektor
+/// plays and they stay off. The conversion leg: nothing direct-plays and the lektor is the file's
+/// default, and the subtitle still follows the track the conversion carries.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn never_lektor_plays_the_original_and_smart_subtitles_follow_it() {
+    let lektor = |index, codec: &str, default| crate::metadata::Stream {
+        title: "Lektor".into(), selected: true, ..jf_track(index, codec, 6, "pol", default)
+    };
+    let subs = || vec![jf_track(3, "srt", 0, "pol", false)];
+    let me = || user_config(Some("pol"), true, Some("pol"), "Smart");
+    let streams = r#"{"Type":"Video","Codec":"hevc","Index":0},{"Type":"Audio","Codec":"ac3","Index":1,"Channels":6,"Language":"eng"},{"Type":"Audio","Codec":"ac3","Index":2,"Channels":6,"Language":"pol","Title":"Lektor"},{"Type":"Subtitle","Codec":"subrip","Index":3,"Language":"pol"}"#;
+    for (voice, audio_index, subtitle_index) in [(VoicePreference::DubbingNoLektor, 1, 3), (VoicePreference::Any, 2, -1)] {
+        let audio = vec![jf_track(1, "ac3", 6, "eng", true), lektor(2, "ac3", false)];
+        let (_, requests) = resolve_jf(playback_info(true, "mkv", streams, None), me(), audio, subs(), |env| env.voice = voice);
+        let body = playback_info_body(&requests);
+        assert_eq!(body["AudioStreamIndex"], audio_index, "{voice:?}: {body}");
+        assert_eq!(body["SubtitleStreamIndex"], subtitle_index, "{voice:?}: {body}");
+    }
+
+    let streams = r#"{"Type":"Video","Codec":"hevc","Index":0},{"Type":"Audio","Codec":"truehd","Index":1,"Channels":8,"Language":"pol","Title":"Lektor"},{"Type":"Audio","Codec":"truehd","Index":2,"Channels":8,"Language":"eng"},{"Type":"Subtitle","Codec":"subrip","Index":3,"Language":"pol"}"#;
+    let url = format!(
+        "/videos/{JF_GUID}/stream.mkv?VideoCodec=hevc&AudioCodec=eac3&AudioStreamIndex=2&TranscodeReasons=AudioCodecNotSupported&PlaySessionId=ps-loopback"
+    );
+    let audio = vec![lektor(1, "truehd", true), jf_track(2, "truehd", 8, "eng", false)];
+    let (_, requests) = resolve_jf(playback_info(false, "mkv", streams, Some(&url)), me(), audio, subs(), |env| {
+        env.voice = VoicePreference::DubbingNoLektor;
+    });
+    let body = playback_info_body(&requests);
+    assert_eq!(body["AudioStreamIndex"], 2, "the English original: {body}");
+    assert_eq!(body["SubtitleStreamIndex"], 3, "Polish subtitles over English audio: {body}");
+}
+
+/// **A track picked by hand plays as picked, whatever the voice preference says about it**: the
+/// viewer chose the lektor "Dubbing, never lektor" would skip.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn a_hand_picked_track_the_voice_preference_excludes_is_played() {
+    let streams = r#"{"Type":"Video","Codec":"hevc","Index":0},{"Type":"Audio","Codec":"ac3","Index":1,"Channels":6,"Language":"eng"},{"Type":"Audio","Codec":"ac3","Index":2,"Channels":6,"Language":"pol","Title":"Lektor"}"#;
+    let lektor = crate::metadata::Stream { title: "Lektor".into(), ..jf_track(2, "ac3", 6, "pol", false) };
+    let audio = vec![jf_track(1, "ac3", 6, "eng", true), lektor];
+    let (plan, requests) = resolve_jf(playback_info(true, "mkv", streams, None), default_user(), audio, Vec::new(), |env| {
+        env.voice = VoicePreference::DubbingNoLektor;
+        env.audio_sid = 3;
+        env.audio_explicit = true;
+    });
+    assert_eq!(playback_info_body(&requests)["AudioStreamIndex"], 2);
+    assert_eq!(plan.audio.as_ref().map(|a| a.sid), Some(3));
+}
+
+/// **A carried sidecar stays on the conversion that plays it.** A retry or a quality change while
+/// the AI lektor sidecar plays carries its id without the explicit flag; smart direct play would
+/// swap it for the English the file holds, so the carry is converted in again instead.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn a_carried_sidecar_audio_track_is_converted_not_swapped() {
+    let streams = r#"{"Type":"Video","Codec":"hevc","Index":0},{"Type":"Audio","Codec":"ac3","Index":1,"Channels":6,"Language":"eng"},{"Type":"Audio","Codec":"aac","Index":2,"Channels":2,"Language":"pol","Title":"Lektor AI","IsExternal":true}"#;
+    let url = format!(
+        "/videos/{JF_GUID}/stream.mkv?VideoCodec=hevc&AudioCodec=aac&AudioStreamIndex=2&TranscodeReasons=DirectPlayError&PlaySessionId=ps-loopback"
+    );
+    let sidecar = crate::metadata::Stream { title: "Lektor AI".into(), external: true, ..jf_track(2, "aac", 2, "pol", false) };
+    let audio = vec![jf_track(1, "ac3", 6, "eng", true), sidecar];
+    let (_, requests) = resolve_jf(playback_info(false, "mkv", streams, Some(&url)), default_user(), audio, Vec::new(), |env| {
+        env.audio_sid = 3;
+    });
+    let body = playback_info_body(&requests);
+    assert_eq!(body["EnableDirectPlay"], false, "{body}");
+    assert_eq!(body["AudioStreamIndex"], 2, "the sidecar it was playing: {body}");
+}
+
+/// **Smart subtitles judge by the audio a conversion carries, not by the direct-play pick it did
+/// not use.** Direct play is off, so the server converts its own pick, the English TrueHD; the
+/// direct-play ladder would have taken the Polish AC-3, under which Polish subtitles stay off.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn smart_subtitles_judge_by_the_track_a_conversion_carries() {
+    let streams = r#"{"Type":"Video","Codec":"hevc","Index":0},{"Type":"Audio","Codec":"ac3","Index":1,"Channels":6,"Language":"pol"},{"Type":"Audio","Codec":"truehd","Index":2,"Channels":8,"Language":"eng"},{"Type":"Subtitle","Codec":"subrip","Index":3,"Language":"pol"}"#;
+    let url = format!(
+        "/videos/{JF_GUID}/stream.mkv?VideoCodec=hevc&AudioCodec=eac3&AudioStreamIndex=2&TranscodeReasons=DirectPlayError&PlaySessionId=ps-loopback"
+    );
+    let english = crate::metadata::Stream { selected: true, ..jf_track(2, "truehd", 8, "eng", false) };
+    let audio = vec![jf_track(1, "ac3", 6, "pol", true), english];
+    let (_, requests) = resolve_jf(
+        playback_info(false, "mkv", streams, Some(&url)),
+        user_config(Some("pol"), true, Some("pol"), "Smart"),
+        audio,
+        vec![jf_track(3, "srt", 0, "pol", false)],
+        |env| env.direct_play_mode = DirectPlayMode::Disabled,
+    );
+    let body = playback_info_body(&requests);
+    assert_eq!(body["AudioStreamIndex"], 2, "the server's English pick: {body}");
+    assert_eq!(body["SubtitleStreamIndex"], 3, "Polish subtitles over the English it carries: {body}");
+}
+
 #[test]
 #[cfg(feature = "devtriggers")]
 fn an_unconfirmed_profile_5_withdraws_video_copy() {
@@ -768,4 +864,238 @@ fn a_conversion_that_copies_the_video_declares_the_source_rate() {
     let encode = resolve_dv("VideoCodec=hevc&AudioCodec=ac3&TranscodeReasons=VideoBitrateNotSupported%2CAudioCodecNotSupported");
     assert_eq!(encode.fps, 0.0, "a re-encode owns its rate");
     assert_eq!(encode.src_fps, copy.src_fps, "the file's rate is still the file's");
+}
+
+// ---- the server's remembered tracks ---------------------------------------------------------
+// Jellyfin fills each source's `DefaultAudioStreamIndex`/`DefaultSubtitleStreamIndex` for the
+// asking user: the film's remembered pick (`RememberAudioSelections`/`RememberSubtitleSelections`,
+// -1 = subtitles remembered Off), else its own ranking of the user's preferences.
+
+/// A 1080p HEVC film: an English E-AC-3 default and a Polish AC-3, an embedded and an external
+/// Polish SubRip.
+const REMEMBERED_STREAMS: &str = r#"{"Type":"Video","Codec":"hevc","Index":0,"Width":1920,"Height":1080},{"Type":"Audio","Codec":"eac3","Index":1,"Channels":6,"Language":"eng","IsDefault":true},{"Type":"Audio","Codec":"ac3","Index":2,"Channels":6,"Language":"pol"},{"Type":"Subtitle","Codec":"subrip","Index":3,"Language":"pol"},{"Type":"Subtitle","Codec":"subrip","Index":4,"Language":"pol","IsExternal":true}"#;
+
+/// The film's item answer; `defaults` is the source's `"Default...StreamIndex":n,` fields.
+fn remembered_item(defaults: &str) -> String {
+    format!(r#"{{"Id":"{JF_GUID}","Name":"Remembered","Type":"Movie","MediaSources":[{{"Id":"{JF_GUID}","Container":"mkv","Protocol":"File",{defaults}"MediaStreams":[{REMEMBERED_STREAMS}]}}]}}"#)
+}
+
+/// Resolve the film from the server's own item answer (no cached page: the play-from-Home path,
+/// through `jf::convert`), offered for direct play, then install the plan.
+fn resolve_item_and_apply(item: String, me: String, planned: impl FnOnce(&Plan, &[JfRequest]), applied: impl FnOnce(&PlaybackSession)) {
+    resolve_item_against(playback_info(true, "mkv", REMEMBERED_STREAMS, None), item, me, planned, applied);
+}
+
+/// [`resolve_item_and_apply`], the server answering `PlaybackInfo` with `info`.
+fn resolve_item_against(info: String, item: String, me: String, planned: impl FnOnce(&Plan, &[JfRequest]), applied: impl FnOnce(&PlaybackSession)) {
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    assert!(nj_net::net::global_init() && crate::curlio::available());
+    crate::player::reset_subtitle();
+    restore_quality(Quality::Original);
+    let lb = JfLoopback::start(info, me);
+    lb.answer_item(&item);
+    let rk = jf_rk();
+    let env = ResolveEnv::snapshot(&ps, crate::stores::metadata::MetadataStore::default().view(), lb.sid, &rk);
+    let plan = build_stream(&rk, &jf_part(), "hevc", "eac3", &env);
+    let requests = lb.finish();
+    assert!(requests.iter().any(|r| r.line.starts_with(&format!("GET /Items/{JF_GUID}?"))), "the tracks came from the item: {requests:?}");
+    planned(&plan, &requests);
+    apply_plan(&mut ps, plan, &rk);
+    applied(&ps);
+    crate::player::reset_subtitle();
+    reset_session(&mut ps);
+    install_active_encoder("");
+}
+
+/// A remembered external SubRip on a direct play is switched on as the client's own sidecar.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn a_remembered_external_subtitle_is_restored_as_a_sidecar_on_direct_play() {
+    resolve_item_and_apply(
+        remembered_item(r#""DefaultAudioStreamIndex":1,"DefaultSubtitleStreamIndex":4,"#),
+        default_user(),
+        |plan, requests| {
+            assert_eq!(plan.sub_render_ordinal, None, "not an embedded track");
+            assert_eq!(playback_info_body(requests)["SubtitleStreamIndex"], 4, "asked for, should the answer be a conversion");
+        },
+        |ps| {
+            assert_eq!(cur_sub_sid(ps), 5, "the remembered track, what the reports will name");
+            assert!(crate::player::sidecar::selected(), "drawn from the server's file");
+            assert_eq!(crate::player::desired_sub_idx(), -1, "no embedded track beside it");
+        },
+    );
+}
+
+/// **A remembered external SubRip survives a direct-play candidate the server converts.** The ask
+/// names it, so the conversion delivers it as the server's own file (not burned) and the client
+/// draws it; asked with subtitles off, the conversion carried none, and a conversion's landing
+/// never restores a sidecar.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn a_remembered_external_subtitle_rides_a_conversion_of_a_direct_play_candidate() {
+    let path = format!("/Videos/{JF_GUID}/{JF_GUID}/Subtitles/4/0/Stream.srt");
+    let external = r#""Index":4,"Language":"pol","IsExternal":true}"#;
+    let delivered = format!(r#""Index":4,"Language":"pol","IsExternal":true,"DeliveryMethod":"External","DeliveryUrl":"{path}?api_key=jf-token"}}"#);
+    let streams = REMEMBERED_STREAMS.replace(external, &delivered);
+    assert_ne!(streams, REMEMBERED_STREAMS);
+    let url = format!("/videos/{JF_GUID}/stream.mkv?VideoCodec=hevc&AudioCodec=eac3&TranscodeReasons=ContainerBitrateExceedsLimit&PlaySessionId=ps-loopback");
+    resolve_item_against(
+        playback_info(false, "mkv", &streams, Some(&url)),
+        remembered_item(r#""DefaultAudioStreamIndex":1,"DefaultSubtitleStreamIndex":4,"#),
+        default_user(),
+        |plan, requests| {
+            let body = playback_info_body(requests);
+            assert_eq!(body["EnableDirectPlay"], true, "a direct-play candidate: {body}");
+            assert_eq!(body["SubtitleStreamIndex"], 4, "the remembered sidecar is asked for");
+            assert_eq!(body["AlwaysBurnInSubtitleWhenTranscoding"], false);
+            assert!(!plan.tsession.is_empty(), "the server converts: {}", plan.url);
+            assert_eq!(plan.sub_sid, 5);
+            assert_eq!(plan.sub_delivery, Some(crate::catalog::SubtitleDelivery::External { path: path.clone(), codec: "srt".into() }));
+        },
+        |ps| {
+            assert_eq!(cur_sub_sid(ps), 5, "the menu and the reports name it");
+            assert!(client_renders_subtitle(ps));
+            assert!(crate::player::sidecar::selected(), "drawn from the server's file");
+        },
+    );
+}
+
+/// A film whose subtitles were remembered Off stays off, even under `Always` with an embedded
+/// track in the preferred language.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn a_remembered_off_keeps_subtitles_off_whatever_the_preferences() {
+    resolve_item_and_apply(
+        remembered_item(r#""DefaultAudioStreamIndex":1,"DefaultSubtitleStreamIndex":-1,"#),
+        user_config(None, true, Some("pol"), "Always"),
+        |plan, requests| {
+            assert_eq!(plan.sub_sid, 0);
+            assert_eq!(playback_info_body(requests)["SubtitleStreamIndex"], -1);
+        },
+        |ps| {
+            assert_eq!(cur_sub_sid(ps), 0);
+            assert!(!crate::player::sidecar::selected());
+            assert_eq!(crate::player::desired_sub_idx(), -1);
+        },
+    );
+}
+
+/// The server's audio pick is played even when it is not the file's default track.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn the_servers_audio_pick_beats_the_files_default_track() {
+    resolve_item_and_apply(
+        remembered_item(r#""DefaultAudioStreamIndex":2,"#),
+        default_user(),
+        |plan, requests| {
+            assert_eq!(playback_info_body(requests)["AudioStreamIndex"], 2, "the Polish track, not the English default");
+            assert_eq!(plan.acodec, "ac3");
+            assert_eq!(plan.audio.as_ref().map(|a| a.sid), Some(3));
+        },
+        |_| {},
+    );
+}
+
+/// With no pick from the server, `Always` turns on the preferred language's external SubRip ahead
+/// of the embedded one (the server ranks external tracks first), through the sidecar path.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn an_automatic_external_subtitle_is_switched_on_as_a_sidecar() {
+    resolve_item_and_apply(
+        remembered_item(""),
+        user_config(None, true, Some("pol"), "Always"),
+        |plan, _| assert_eq!(plan.sub_render_ordinal, None, "not the embedded twin"),
+        |ps| {
+            assert_eq!(cur_sub_sid(ps), 5);
+            assert!(crate::player::sidecar::selected());
+        },
+    );
+}
+
+// ---- what the reports say about subtitles -----------------------------------------------------
+// The server stores every `SubtitleStreamIndex` a report carries (`RememberSubtitleSelections`,
+// `SessionManager.UpdatePlaybackSettings`) and serves a stored -1 as the film's remembered Off on
+// every client. So -1 is sent only for an Off somebody chose; a film that simply played without a
+// subtitle says nothing.
+
+/// Resolve the cached film under `configure`, install it, report the start, one progress, the
+/// app-switch park and the stop, and return each report's `SubtitleStreamIndex` (`None`: not sent).
+fn reported_subtitles(
+    subs: Vec<crate::metadata::Stream>,
+    configure: impl FnOnce(&mut ResolveEnv),
+) -> Vec<Option<serde_json::Value>> {
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    assert!(nj_net::net::global_init() && crate::curlio::available());
+    crate::player::reset_subtitle();
+    let lb = JfLoopback::start(playback_info(true, "mkv", HEVC_EAC3, None), default_user());
+    let rk = jf_rk();
+    let mut env = ResolveEnv::snapshot(&ps, crate::stores::metadata::MetadataStore::default().view(), lb.sid, &rk);
+    env.cached_item = Some(jf_item(lb.sid, eac3_only(), subs));
+    configure(&mut env);
+    let plan = build_stream(&rk, &jf_part(), "hevc", "eac3", &env);
+    apply_plan(&mut ps, plan, &rk);
+    let lease = begin_timeline_reporting(&ps).expect("a timeline lease");
+    assert!(report_timeline(&lease, crate::catalog::TimelineState::Playing, 1_000, 7_200_000));
+    assert!(report_timeline(&lease, crate::catalog::TimelineState::Playing, 11_000, 7_200_000));
+    report_parked(&mut ps, crate::catalog::TimelineState::Paused, 12_000_000_000, 7_200_000_000_000);
+    scrobble_stop(&mut ps, Some((rk.clone(), 12_000, 7_200_000)), None, true);
+    drain_scrobble();
+    let seen = lb.finish();
+    crate::player::reset_subtitle();
+    reset_session(&mut ps);
+    install_active_encoder("");
+    let reports: Vec<_> = seen.iter().filter(|r| r.line.starts_with("POST /Sessions/Playing")).collect();
+    assert_eq!(reports.len(), 4, "start, progress, park, stop: {seen:?}");
+    reports.iter().map(|r| r.json().get("SubtitleStreamIndex").cloned()).collect()
+}
+
+/// A film with no subtitle to show, and nobody choosing Off, reports no subtitle at all: a -1
+/// would be stored as this film's Off for every client, so the subtitle added to it later would
+/// never come on by itself.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn a_film_played_without_a_subtitle_nobody_turned_off_reports_none() {
+    assert_eq!(reported_subtitles(Vec::new(), |_| {}), [None, None, None, None]);
+    // A retry of such a playback carries its "no subtitle" as `Some(0)`, which is not a choice.
+    let retried = reported_subtitles(vec![jf_track(2, "srt", 0, "eng", true)], |env| env.subtitle_override = Some(0));
+    assert_eq!(retried, [None, None, None, None]);
+}
+
+/// The server's pick is a track this TV cannot draw (an external image subtitle): nothing is shown,
+/// and nothing is reported either. A -1 would overwrite the server's pick with Off everywhere.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn an_undrawable_server_pick_is_not_reported_as_off() {
+    let sup = crate::metadata::Stream {
+        id: 6,
+        index: 5,
+        lang_code: "pol".into(),
+        codec: "pgssub".into(),
+        external: true,
+        selected: true,
+        key: format!("/Videos/{JF_GUID}/{JF_GUID}/Subtitles/5/0/Stream.sup"),
+        ..Default::default()
+    };
+    assert_eq!(reported_subtitles(vec![sup], |_| {}), [None, None, None, None]);
+}
+
+/// An Off somebody chose is reported as one: before play on the Detail page, or remembered by the
+/// server (which a film started from it must keep saying, or the next report would forget it).
+#[test]
+#[cfg(feature = "devtriggers")]
+fn a_chosen_or_remembered_off_is_reported_as_minus_one() {
+    let srt = || vec![jf_track(2, "srt", 0, "eng", true)];
+    let off = Some(serde_json::json!(-1));
+    let chosen = reported_subtitles(srt(), |env| {
+        env.sub_sid = 0;
+        env.subtitle_override = Some(0);
+        env.subtitle_off = true;
+    });
+    assert_eq!(chosen, [off.clone(), off.clone(), off.clone(), off.clone()]);
+    let remembered = reported_subtitles(srt(), |env| {
+        env.cached_item.as_mut().expect("cached").subs_off = true;
+    });
+    assert_eq!(remembered, [off.clone(), off.clone(), off.clone(), off]);
 }

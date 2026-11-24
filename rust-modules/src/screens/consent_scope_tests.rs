@@ -13,6 +13,7 @@ use super::test_support::*;
 /// harness at a screen nobody wrote an assertion for.
 #[test]
 fn an_automated_boot_never_sees_the_question() {
+    let _reporting = offer_reporting_for_test();
     assert!(!should_show(&Consent::default(), true));
     assert!(should_show(&Consent::default(), false), "…but an ordinary first boot does");
 }
@@ -20,6 +21,7 @@ fn an_automated_boot_never_sees_the_question() {
 /// An answer against the current policy is not re-asked, whichever way it went.
 #[test]
 fn a_current_policy_answer_is_not_asked_again() {
+    let _reporting = offer_reporting_for_test();
     for (e, u) in [(false, false), (true, false), (false, true), (true, true)] {
         let answered = consent::apply(&Consent::default(), e, u, || Some("id".into()));
         assert!(!should_show(&answered, false), "re-asked after errors={e} usage={u}");
@@ -30,6 +32,7 @@ fn a_current_policy_answer_is_not_asked_again() {
 /// stays fail-closed until the first-run route asks the expanded question again.
 #[test]
 fn a_policy_bump_reasks_without_reusing_the_old_answer() {
+    let _reporting = offer_reporting_for_test();
     let old = Consent {
         asked_version: consent::POLICY_VERSION - 1,
         errors: true,
@@ -41,6 +44,24 @@ fn a_policy_bump_reasks_without_reusing_the_old_answer() {
     assert!(should_show(&old, false));
     let current = consent::apply(&Consent::default(), true, false, || Some("new-id".into()));
     assert!(!should_show(&current, false));
+}
+
+/// litefin: no build of this fork can report, so an ordinary first boot is never asked either.
+#[test]
+fn litefin_never_asks_the_question() {
+    assert!(!crate::telemetry::sender::configured());
+    assert!(!should_show(&Consent::default(), false));
+}
+
+/// litefin: Privacy & data keeps only Delete all local data; no reporting switch, no preview.
+#[test]
+fn litefin_privacy_offers_no_reporting_switches() {
+    let m = FixtureMeasure;
+    let c = test_cx(&m);
+    let (mut out, mut present) = sink();
+    let page = ConsentPage::settings(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
+    assert_eq!(page.row_ids(), vec![RowId::Delete]);
+    assert!(nav_items_for_test(None).is_empty(), "no report preview is reachable");
 }
 
 /// Each channel carries its own identifier, so each is refused on its own failed mint —
@@ -143,6 +164,7 @@ fn the_product_stage_combines_both_answers_into_one_record_and_dismisses_the_sur
 /// entirely ungraded by anything that looks like a real press.
 #[test]
 fn a_settings_toggle_commits_through_the_activate_event() {
+    let _reporting = super::offer_reporting_for_test(); // litefin: the upstream rows
     let _g = nj_base::testlock::serial();
     let saved = consent::current();
     consent::install(Consent::default());

@@ -575,9 +575,12 @@ pub(crate) fn player_requests(
                     player.publish();
                 }
             }
+            // A panel's DOWN past its own bottom lands on the controls row's Chapters button (the
+            // screen's Tick moves it to the row's primary when the item has no chapters).
             PlayerReq::FocusTabs => {
                 if let Some(player) = super::bridge::player_mut(pages) {
-                    player.hud.nav.focus = 2;
+                    player.hud.nav.focus = 1;
+                    player.hud.nav.btn = crate::appkit::player_hud::BTN_CHAPTERS;
                 }
             }
             // The fall-through a surface cannot perform (`screens::player::overlay`'s module doc):
@@ -669,8 +672,10 @@ pub(super) fn return_from_player(
 
 /// The ONE leave-playback ritual (Stop key, BACK, EOS): close the overlays, stop the
 /// engine, put the page the session was LAUNCHED FROM back on screen, and arm the deferred
-/// hub refresh so Continue Watching reflects the session that just ended. A new exit path
-/// that skips this quietly re-introduces the stale-CW bug.
+/// hub refresh so Continue Watching reflects the session that just ended (it fires once the
+/// stop's reports have landed, `route::stop_reports_landed`). A new exit path that skips this
+/// quietly re-introduces the stale-CW bug. The uncovered Detail page's re-read is armed by
+/// `content::restore_played_entry`, when the container has put it back on top.
 ///
 /// The return target is [`crate::screens::player::Origin`]'s `entry` — the container entry that was on top when Play was
 /// pressed, seeded at the player's own mount by [`enter_player`] and read back off the mounted
@@ -684,7 +689,7 @@ pub(crate) fn exit_player(
     refresh_hubs_at: &mut u32,
     pages: &mut crate::ui::dispatch::Dispatcher<super::bridge::AppHost>,
 ) {
-    crate::route::cancel_play(ps); // BACK during a load: supersede, drop the landing
+    crate::route::cancel_play_for_exit(ps); // BACK during a load: supersede, drop the landing
     close_player_overlays(pages);
     crate::player::stop_bufferfeed(ps, pa);
     // `stop_bufferfeed` reports/clears a real engine through `report::ended`, but a refusal or a
@@ -703,7 +708,7 @@ pub(crate) fn exit_player(
     // through `nav_pop_to`'s Home floor; a live Content entry with no identity takes the explicit
     // Home floor in `return_from_player`, preserving `return_page`'s old anti-strand contract.
     return_from_player(pages);
-    *refresh_hubs_at = clock::now().wrapping_add(800).max(1);
+    *refresh_hubs_at = clock::now().max(1);
 }
 
 /// The episode is OVER — drained to EOS, or the user skipped a `final` credits marker.
@@ -806,7 +811,7 @@ pub(crate) fn activate_ctrl_row(
 /// the credits are still rolling) and in all three an Engine is live — `start_bufferfeed`
 /// no-ops while one is, so skipping the stop would silently fail to advance. The stop is
 /// also what posts the `state=stopped` timeline, which the server commits the watched state from
-/// only at 90 % or later; below that the stop also marks the item played
+/// only past its `MaxResumePct`; after it the stop also marks the item played
 /// (`PlaybackSession::finished`, armed here). It must happen BEFORE `request_play_up_next`: teardown
 /// reads the outgoing item's session ids and clears the URL, both of which the new plan is about to
 /// overwrite.
@@ -1021,7 +1026,10 @@ fn apply_info_action(
 /// player arm, run from the per-frame loop once the press spring-back has played.
 ///
 /// Two arms, in the order they were written in `key_ok`: a STAND-IN owns the row (Skip, Up Next) and
-/// performs its own action, or the row holds the three discs and OK opens that disc's panel. `ctrl`
+/// performs its own action, or the row holds Litefin's OSD buttons: play/pause toggles, rewind /
+/// forward take the Skip-interval jump with the OSD left up, the chapter buttons seek to a chapter
+/// start holding a pause, Chapters opens the strip, previous / next item navigate and the rest open
+/// their panel. `ctrl`
 /// is re-resolved by the caller on the committing frame rather than captured at the press, so the
 /// activation acts on the row that is DRAWN — the slot is resolved once per loop iteration for input,
 /// update and draw alike (see the `let ctrl` at the top of the loop), and an offer that arrived
@@ -1033,9 +1041,11 @@ pub(crate) unsafe fn activate_player_row(
     ctrl: crate::appkit::player_hud::ControlSlot,
     now: u32,
     refresh_hubs_at: &mut u32,
+    repause_at: &mut i64,
     pages: &mut crate::ui::dispatch::Dispatcher<super::bridge::AppHost>,
     bridge: &mut super::bridge::Bridge,
 ) {
+    use crate::appkit::player_hud::{BTN_CHAPTERS, BTN_FORWARD, BTN_NEXT_CHAPTER, BTN_PLAY, BTN_PREV_CHAPTER, BTN_REWIND};
     // The cursor is the instance's; read the one field this dispatch turns on, so the container
     // is borrowed once and the arms below are free to present a panel on it.
     let btn = super::bridge::player(pages).map_or(0, |player| player.hud.nav.btn);
@@ -1067,6 +1077,21 @@ pub(crate) unsafe fn activate_player_row(
         } else if let Some(u) = crate::route::adjacent_episode(ps, forward) {
             let _ = play_queue_episode(ps, pa, HUD_LINGER_MS, pages, bridge, u);
         }
+    } else if btn == BTN_PLAY {
+        set_transport_paused(pa, super::lifecycle::transport_target(None, super::lifecycle::viewer_paused()));
+    } else if btn == BTN_REWIND || btn == BTN_FORWARD {
+        let target = super::bridge::player_mut(pages).and_then(|player| player.jump(ps, btn == BTN_FORWARD, now, false));
+        if let Some(target) = target {
+            commit_seek(target, repause_at);
+        }
+    } else if btn == BTN_PREV_CHAPTER || btn == BTN_NEXT_CHAPTER {
+        let starts = crate::appkit::chapters_panel::chapter_starts(bridge.metadata_view());
+        let at = crate::player::intended_pos_ns(ps) / 1_000_000;
+        if let Some(ms) = crate::appkit::chapters_panel::chapter_jump(&starts, at, btn == BTN_NEXT_CHAPTER) {
+            commit_seek(ms * 1_000_000, repause_at);
+        }
+    } else if btn == BTN_CHAPTERS {
+        super::bridge::open_player_overlay(ps, bridge.metadata_view(), pages, crate::screens::player::overlay::OverlayKind::Chapters);
     } else if btn == crate::appkit::player_hud::BTN_MORE {
         // …so the discs are what row 1 holds — the complement of the arm above, and the row's only
         // other occupant. OK on a control disc PRESENTS its panel on this page's own stack.

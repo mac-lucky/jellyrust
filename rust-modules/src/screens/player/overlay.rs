@@ -989,12 +989,13 @@ impl<H: crate::screens::registry::PlayerLike + crate::screens::registry::Metadat
     /// the page under it is the video plane. The Info card and the Chapters strip deliberately ask
     /// for none: they sit in the transport's own band and dim nothing.
     fn scrim(&self) -> crate::ui::screen::Scrim {
-        use crate::ui::theme::underlay::{DIM_PLAYER, DIM_SHEET};
+        use crate::ui::theme::underlay::DIM_SHEET;
         if self.suppressed {
             return crate::ui::screen::Scrim::NONE;
         }
         match self.panel {
-            Panel::Tracks(_) => crate::ui::screen::Scrim::over_video(DIM_PLAYER, self.corners),
+            // Litefin's track menus dim the whole picture to .85 (`osdTrackMenuBgOpacity`)
+            Panel::Tracks(_) => crate::ui::screen::Scrim::over_video(crate::ui::theme::osd::TRACK_MENU_DIM, self.corners),
             Panel::More(_) => crate::ui::screen::Scrim::over_video(DIM_SHEET, self.corners),
             // The capsule sits over the video like the Info card and the Chapters strip — no dim.
             Panel::Info(_) | Panel::Chapters(_) | Panel::Timing(_) => crate::ui::screen::Scrim::NONE,

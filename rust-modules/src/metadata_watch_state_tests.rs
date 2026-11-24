@@ -266,6 +266,7 @@ fn an_optimistic_watch_flip_reaches_the_collection_shelf() {
             title: "A Pair".into(),
             section: 1,
             tag: 5,
+            rk: String::new(),
             members: vec![member("m1"), member("m2")],
             count: 2,
         }),

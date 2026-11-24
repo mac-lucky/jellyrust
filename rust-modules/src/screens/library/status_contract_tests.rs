@@ -1,4 +1,4 @@
-use super::super::{readout, LibraryScreen, Readout, FILTER, LIBRARY_GROUP, RETRY, SORT, STATUS_GROUP};
+use super::super::{readout, LibraryScreen, Readout, FILTER, RETRY, SORT, STATUS_GROUP};
 use crate::stores::browse::{SecFetch, SecKind, SrcGroup, SourceState, SrcRow};
 use crate::screens::registry::{LibraryLike, PageMemory};
 use crate::ui::fixture::FixtureMeasure;
@@ -111,7 +111,7 @@ impl Fixture {
     }
 
     fn screen(&self) -> LibraryScreen {
-        let mut page = LibraryScreen::new(ENTRY, InstanceId(29), SecKind::Movie);
+        let mut page = LibraryScreen::new(ENTRY, InstanceId(29), None);
         page.sync(&self.cx(None));
         page
     }
@@ -149,7 +149,6 @@ fn failed_status_occupies_content_and_keeps_only_navigation_and_retry() {
 
     let mut groups = Vec::<GroupSpec>::new();
     page.groups(&cx, &mut groups);
-    assert!(groups.iter().any(|group| group.id == LIBRARY_GROUP), "the library row remains the way out");
     assert!(groups.iter().any(|group| group.id == STATUS_GROUP), "failure publishes its Retry control");
     assert!(!groups.iter().any(|group| group.id == page.toolbar_group()));
     assert!(!groups.iter().any(|group| group.id == page.pair.groups_config().detail));

@@ -14,7 +14,7 @@ pub(crate) use memory::Memory;
 
 use std::borrow::Cow;
 use crate::search::{Item, Kind};
-use crate::screens::registry::{AppFx, HomeTab, PageMemory, SearchLike, SearchReq};
+use crate::screens::registry::{AppFx, PageMemory, SearchLike, SearchReq};
 use crate::stores::{StoreCmd, StoreId};
 use crate::stores::search::SearchCmd;
 use crate::ui::card_row::CardRow;
@@ -33,7 +33,6 @@ const CLEAR: u32 = 2;
 const FIELD_GROUP: GroupId = GroupId(0x5345_4100);
 const RECENTS_GROUP: GroupId = GroupId(0x5345_4101);
 const CLEAR_GROUP: GroupId = GroupId(0x5345_4102);
-const STRIP: GroupId = crate::ui::containers::tabs::STRIP;
 /// The alpha at or under which the owner annotation is invisible: the renderer draws no run
 /// below it, and the instance swaps the word it holds only there — so a handle never changes
 /// under the eye (legacy `the_owner_annotation_swaps_its_words_only_while_it_is_invisible`).
@@ -41,7 +40,7 @@ pub(super) const OWNER_FLOOR: f32 = 0.02;
 const BLINK_MS: u32 = 530;
 const BLINK_US: u32 = BLINK_MS * 1000;
 
-pub(crate) const SHAPE: &str = "SearchScreen{entry:u32,instance:u32,draft:{text:str,caret:u64,profile:u32,pending:bool},mounted:bool,editing:bool,blink_us:u32,hot:Spring,scroll:Spring,scroll_target:f32,next_elem:u32,query_gen:u32,recent_clear_pending:bool,content_dirty:bool,fade:Xfade,ground:PageGround,owner_row:Option<u64>,owner:str,owner_alpha:Spring,restored:Option<SearchMemory>,keys:[SearchKey],recents:[u32],rows:[{kind:u32,group:u32,elems:[u32],motion:CardRow}]}";
+pub(crate) const SHAPE: &str = "SearchScreen{entry:u32,instance:u32,draft:{text:str,caret:u64,profile:u32,pending:bool},mounted:bool,editing:bool,blink_us:u32,hot:Spring,scroll:Spring,scroll_target:f32,next_elem:u32,query_gen:u32,recent_clear_pending:bool,content_dirty:bool,fade:Xfade,owner_row:Option<u64>,owner:str,owner_alpha:Spring,restored:Option<SearchMemory>,keys:[SearchKey],recents:[u32],rows:[{kind:u32,group:u32,elems:[u32],motion:CardRow}]}";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Identity {
@@ -73,7 +72,6 @@ pub(crate) struct SearchScreen {
     publication: Option<crate::search::view::SearchSnapshot>,
     content_dirty: bool,
     fade: crate::ui::xfade::Xfade,
-    ground: crate::ui::widgets::PageGround,
     owner_row: Option<usize>,
     owner: String,
     owner_alpha: Spring,
@@ -93,7 +91,7 @@ impl SearchScreen {
             blink_us: 0, hot: Spring::at(1.0), scroll: Spring::at(0.0), scroll_target: 0.0,
             keys: Vec::new(), next_elem: 10, rows: Vec::new(), recents: Vec::new(), query_gen: 0,
             recent_clear_pending: false, publication: None, content_dirty: true,
-            fade: crate::ui::xfade::Xfade::new(), ground: crate::ui::widgets::PageGround::new(),
+            fade: crate::ui::xfade::Xfade::new(),
             owner_row: None, owner: String::new(), owner_alpha: Spring::at(0.0), restored: None, render: Default::default(),
             notices: 0 }
     }
@@ -233,16 +231,6 @@ impl SearchScreen {
     }
 
     fn activate<H: SearchLike>(&mut self, elem: u32, held: bool, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
-        if let Some(tab) = elem.checked_sub(crate::ui::dispatch::STRIP_BASE) {
-            let request = match tab {
-                0 => SearchReq::Tab(HomeTab::Home), 1 => SearchReq::Tab(HomeTab::Movies),
-                2 => SearchReq::Tab(HomeTab::Shows), 3 => return Handled::Yes,
-                4 => SearchReq::Account, _ => return Handled::No,
-            };
-            self.keyboard(false, true, fx);
-            fx.push(Fx::App(AppFx::Search(request)));
-            return Handled::Yes;
-        }
         if elem == FIELD {
             self.keyboard(!self.editing, true, fx);
             return Handled::Yes;
@@ -367,11 +355,6 @@ impl<H: SearchLike> Machine<H> for SearchScreen {
                             return Handled::Yes;
                         }
                     }
-                    if *key == Key::Up && cx.focus.current == Some(self.key(FIELD)) {
-                        self.keyboard(false, true, fx);
-                        self.reseat(FocusTarget::Elem(self.key(crate::ui::dispatch::STRIP_BASE + 3)), fx);
-                        return Handled::Yes;
-                    }
                     if *key == Key::Back {
                         fx.push(Fx::App(AppFx::Search(SearchReq::Back)));
                         return Handled::Yes;
@@ -414,9 +397,7 @@ impl SearchScreen {
         let Some((row, col)) = self.rows.iter().enumerate().find_map(|(row, model)|
             model.elems.iter().position(|elem| *elem == key.elem).map(|col| (row, col))) else { return };
         let painter = f.painter.alpha(f.page_alpha * self.fade.alpha());
-        // The lifted opener is painted after the strip, unlike the ordinary page flow.
-        let floor = crate::ui::widgets::TOP_BAR_BOTTOM;
-        let _clip = f.clip(painter, Rect::new(0.0, floor, SCR_W, SCR_H - floor));
+        let _clip = f.clip(painter, Rect::new(0.0, 0.0, SCR_W, SCR_H));
         render::tile(self, row, col, true, f, painter);
     }
     /// The focus fingerprint's read of this screen's own space (`app::bridge::content_probe`'s
@@ -519,13 +500,6 @@ impl SearchScreen {
             row.motion.update(row.elems.len(), focused, &layout::style(row.kind), tick.dt());
         }
         self.fade.tick(tick.dt(), !self.draft.pending() && H::search(cx).state() != crate::search::State::Searching);
-        let colours = cx.focus.current.and_then(|key| self.rows.iter().enumerate().find_map(|(row, model)|
-            model.elems.iter().position(|elem| *elem == key.elem).and_then(|col|
-                H::search(cx).shelves().get(row)?.items.get(col)).and_then(|item| match item {
-                    Item::Media(media) if media.has_blur => Some(media.blur),
-                    Item::Collection(hit) if hit.item.has_blur => Some(hit.item.blur), _ => None,
-                })));
-        self.ground.key(colours, crate::ui::widgets::PageGround::CARD_W, tick.dt());
         let target = cx.focus.current.and_then(|key| self.rows.iter().enumerate().find_map(|(row, model)|
             model.elems.iter().position(|elem| *elem == key.elem).map(|col| (row, col))));
         let view = H::search(cx);
@@ -608,10 +582,8 @@ impl<H: SearchLike> Focusable<H> for SearchScreen {
         let painted = if at == At::Drawn {
             self.rows.iter().find(|row| row.group == group).map_or(rect, |row| rect.scaled(row.motion.scale(index)))
         } else { rect };
-        // The page still paints beneath the glass, but the standing strip owns those hits.
-        let floor = crate::ui::widgets::TOP_BAR_BOTTOM;
         Some(Placed { rect: painted, rest_rect: rect,
-            clip: Rect::new(0.0, floor, SCR_W, SCR_H - floor), index: Some(index as u32) })
+            clip: Rect::new(0.0, 0.0, SCR_W, SCR_H), index: Some(index as u32) })
     }
     fn reconcile(&self, want: FocusKey<u32>, _: &Cx<'_, H>) -> FocusKey<u32> {
         if want.entry == self.entry && self.index(want.elem).is_some() { return want; }
@@ -653,8 +625,6 @@ impl<H: SearchLike> Screen<H> for SearchScreen {
     fn render(&self) -> RenderStrategy { RenderStrategy::Page }
     fn memory(&self) -> PageMemory { PageMemory::Search(self.page_memory()) }
     fn links(&self, out: &mut Vec<Link>) {
-        out.push(Link { from: STRIP, dir: Dir::Down, to: FIELD_GROUP });
-        out.push(Link { from: FIELD_GROUP, dir: Dir::Up, to: STRIP });
         if let Some(first) = self.first_content() {
             out.push(Link { from: FIELD_GROUP, dir: Dir::Down, to: first });
             out.push(Link { from: first, dir: Dir::Up, to: FIELD_GROUP });
@@ -681,7 +651,6 @@ impl LogicalState for SearchScreen {
         c.f32(self.scroll_target).u32(self.next_elem).u32(self.query_gen)
             .bool(self.recent_clear_pending).bool(self.content_dirty);
         self.fade.write(c);
-        self.ground.write_motion(c);
         c.option(self.owner_row, |c, row| { c.u64(row as u64); });
         c.str(&self.owner).f32(self.owner_alpha.pos).f32(self.owner_alpha.vel);
         c.option(self.restored.as_ref(), |c, memory| { memory.write(c); });

@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Cut the shipped Inter statics — `pkg/appfont.ttf` and `pkg/appfont-bold.ttf` — from the Inter
-variable font.
+"""Cut the shipped Inter statics - `pkg/appfont-inter.ttf` and `pkg/appfont-inter-bold.ttf` - from
+the Inter variable font.
 
     python3 tools/cut-inter.py path/to/Inter[opsz,wght].ttf
+
+The UI faces `appfont*.ttf` are Poppins now, cut by `tools/cut-poppins.py`, which imports the
+tabular-figure and music-note code from here. Inter still ships under its own names: it is the
+subtitle family (`player/ass/fonts.rs`) and the UI chain's second link, after Poppins, for the
+Cyrillic, Greek and Latin Extended letters Poppins lacks (`gfx/text.rs`).
 
 A THIRD face ships and does not come from here: `pkg/appfont-cjk.ttf` is Noto Sans CJK KR, cut by
 `tools/cut-noto-cjk.py` from a pinned upstream asset. It matches this file's old `appfont*.ttf`
@@ -281,7 +286,7 @@ def main() -> int:
         return print(__doc__) or 2
     src = Path(sys.argv[1])
     repo = Path(__file__).resolve().parent.parent
-    for wght, style, out in ((400, "Regular", "appfont.ttf"), (700, "Bold", "appfont-bold.ttf")):
+    for wght, style, out in ((400, "Regular", "appfont-inter.ttf"), (700, "Bold", "appfont-inter-bold.ttf")):
         f = TTFont(src)
         instancer.instantiateVariableFont(f, {"wght": wght, "opsz": OPSZ},
                                           inplace=True, updateFontNames=False)

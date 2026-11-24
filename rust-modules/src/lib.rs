@@ -1,4 +1,5 @@
-//! Native Jelly — an unofficial native Jellyfin client for LG webOS.
+//! JellyRust — an unofficial native Jellyfin client for LG webOS, modified by macluckylab (2026)
+//! from Native Jelly by sostk.
 //! Copyright © 2026 Gleb Linnik and Native Jelly contributors. Licensed under GPL-3.0-or-later;
 //! see LICENSE at the repository root, and THIRD-PARTY-NOTICES.md for the components this links
 //! or redistributes. Fork of PlxNative. Not affiliated with, endorsed by, or sponsored by the

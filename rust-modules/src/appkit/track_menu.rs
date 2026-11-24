@@ -269,27 +269,29 @@ type EnhState = (
     crate::route::SubtitleEffect,
 );
 
-/// **A tab root's natural panel rect** — the layout of `table` as the panel would hug it. Each
-/// tab hugs its own rows (shared menu rule); the right edge is fixed, so switching tabs moves only
-/// the left edge.
+/// Both tabs' table in Litefin's track-menu look ([`crate::ui::table::TableStyle::Track`]): at least
+/// [`theme::osd::TRACK_MENU_MIN_W`] and at most [`theme::osd::TRACK_MENU_MAX_W`] wide (10 Track menus).
+fn track_table() -> TrackTable {
+    let mut t = TrackTable::new(BAND_BASE);
+    t.table.set_style(crate::ui::table::TableStyle::Track);
+    t.table.min_panel_w = theme::osd::TRACK_MENU_MIN_W;
+    t.table.max_panel_w = theme::osd::TRACK_MENU_MAX_W;
+    t
+}
+
+/// **A tab root's natural panel rect** — the layout of `table` as the panel would hug it: Litefin's
+/// track list, centred on the screen over its full-screen dim, at least [`theme::osd::TRACK_MENU_MIN_W`]
+/// wide (the table's `min_panel_w`) and at most [`theme::osd::TRACK_MENU_MAX_H`] tall, past which a
+/// long list (an item with many audio dubs) SCROLLS inside the panel (10 Track menus).
 fn table_natural(table: &TableView, measure: &dyn nj_machine::machine::Measure) -> Rect {
+    use crate::ui::consts::{SCR_H, SCR_W};
     let pw = table.menu_panel_width(measure);
-    // the transport control row's own right edge — one number for the discs and both panels
-    let px = crate::appkit::player_hud::CTRL_RIGHT - pw;
-    // Bottom-anchored just above the control-button row (buttons top at SCR_H-288) with a clear gap.
-    // The panel grows UPWARD from this fixed bottom edge, and its height is capped so the top never
-    // crosses `top_min` — so a long list (an item with many audio dubs) SCROLLS inside the panel
-    // instead of the panel itself spilling down over the buttons. Switching Audio↔Subtitles keeps
-    // the bottom edge steady.
-    let bottom = theme::layout::PLAYER_MENU_BOTTOM; // 764 — ~28px above the buttons
     // A note row wraps, so its line count depends on the width: it is resolved HERE, against the
     // same `measure` and `pw` the panel is sized with, so no caller (`update`, hit-testing,
     // `draw`) can read the count a rebuild left stale. Idempotent and a few short strings.
     table.fit_notes(pw, measure);
-    let top_min = 60.0;
-    let ph = table.measured_height().clamp(160.0, bottom - top_min);
-    let py = bottom - ph; // ≥ top_min by construction
-    Rect::new(px, py, pw, ph)
+    let ph = table.measured_height().clamp(160.0, theme::osd::TRACK_MENU_MAX_H);
+    Rect::new((SCR_W - pw) * 0.5, (SCR_H - ph) * 0.5, pw, ph)
 }
 
 /// The renderer the ACTIVE subtitle is drawn by — what decides whether the caption's Size and
@@ -531,7 +533,7 @@ impl TrackMenuState {
             tab,
             active_audio: 0,
             active_sub: -1,
-            form: TrackTable::new(BAND_BASE),
+            form: track_table(),
             offset_ms: crate::player::subtitle_offset_ms(),
             tone: crate::player::subtitle_tone(),
             size: crate::route::subtitle_size(),
@@ -550,7 +552,6 @@ impl TrackMenuState {
             motion: PanelMotion::new(),
             background_owner: None,
         };
-        s.form.table.min_panel_w = theme::layout::PLAYER_MENU_MIN_W;
         s.sync_item(ps, meta);
         s.rebuild(ps, meta, tab, false);
         s
@@ -1633,8 +1634,7 @@ impl TrackMenuState {
             } else {
                 self.audio_form_for(meta, Self::enh_state(ps))
             };
-            let mut other = TrackTable::new(BAND_BASE);
-            other.table.min_panel_w = theme::layout::PLAYER_MENU_MIN_W;
+            let mut other = track_table();
             other.set(form, None);
             let natural = table_natural(&other.table, measure);
             PanelMotion::prewarm_background_text(natural, &other.table, measure)
@@ -1994,18 +1994,15 @@ fn table_form(model: &SubModel, active_sub: c_int, offset_ms: i64, locked: bool)
     })
 }
 
-/// The panel at its WIDEST ([`crate::ui::table::MENU_MAX_W`], the shared cap — either tab may hug
-/// up to it) and TALLEST, for the overscan audit ([`crate::ui::consts::SAFE`]) — the full
-/// `top_min`→`bottom` span, since the measured height comes from a `TableView` no host test can
-/// measure.
+/// The panel at its WIDEST ([`theme::osd::TRACK_MENU_MAX_W`], the tabs' cap — either may hug
+/// up to it) and TALLEST ([`theme::osd::TRACK_MENU_MAX_H`]), for the overscan audit
+/// ([`crate::ui::consts::SAFE`]), since the measured height comes from a `TableView` no host test
+/// can measure.
 #[cfg(test)]
 pub(crate) fn overscan_rects(out: &mut Vec<(&'static str, Rect)>) {
-    let (bottom, top_min) = (theme::layout::PLAYER_MENU_BOTTOM, 60.0);
-    let pw = crate::ui::table::MENU_MAX_W;
-    out.push((
-        "track menu panel (widest)",
-        Rect::new(crate::appkit::player_hud::CTRL_RIGHT - pw, top_min, pw, bottom - top_min),
-    ));
+    use crate::ui::consts::{SCR_H, SCR_W};
+    let (pw, ph) = (theme::osd::TRACK_MENU_MAX_W, theme::osd::TRACK_MENU_MAX_H);
+    out.push(("track menu panel (widest)", Rect::new((SCR_W - pw) * 0.5, (SCR_H - ph) * 0.5, pw, ph)));
 }
 
 #[cfg(test)]
@@ -3302,6 +3299,8 @@ mod enhancement_menu_tests {
             ..Default::default()
         });
         assert!(!menu.form.table.sections.iter().flat_map(|s| s.rows.iter()).any(|r| r.is_note()), "premise: no note yet");
+        // the note fits one line at the track menu's 750 floor: let the panel hug its rows so it wraps
+        menu.form.table.min_panel_w = crate::ui::table::MENU_MIN_W;
         let (ps_refused, _sid) = enhancement_test_session(EnhTestFixture { refused: true, ..Default::default() });
         let store = one_track_store();
         menu.update(0.0, &M, &ps_refused, store.view());
@@ -5291,8 +5290,8 @@ mod motion_tests {
         menu.focus_tab(&ps, store.view(), 0);
         let short = natural(&menu);
         assert!(short.h < tall.h, "the empty Audio tab is shorter than the Subtitles tab: {} < {}", short.h, tall.h);
-        assert_eq!(short.y + short.h, tall.y + tall.h, "the bottom edge is the anchor");
-        assert_eq!(short.x + short.w, tall.x + tall.w, "and so is the right edge");
+        assert_eq!(short.cy(), tall.cy(), "the centre is the anchor (Litefin's list is centred)");
+        assert_eq!(short.cx(), tall.cx(), "on both axes");
         assert!(frame(&mut menu, &ps, &store), "the resize is motion");
         let first = shown(&menu);
         assert!(first.h > short.h && first.h <= tall.h, "mid-resize the card is between the two heights: {first:?}");

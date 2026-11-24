@@ -13,12 +13,26 @@ use super::*;
 use nj_base::fontcov::advances::ShippedMeasure;
 use nj_platform::i18n::{language_on_this_thread_for_test, SHIPPED};
 use crate::ui::route_screen::RouteLayout;
-use crate::ui::table::TableView;
+use crate::ui::table::{TableStyle, TableView};
 
-/// The app-owned findings for `table` at the Settings column's width.
+/// The app-owned findings for `table` at the width it is drawn at: the category list's for the
+/// root, the content panel's for a page. The root's descriptions are not in its rows: they are the
+/// content panel's subtitle while their category is focused, which wraps to two lines and must
+/// not be cut there.
 fn overflowing(page: &str, table: &TableView, out: &mut Vec<String>) {
-    let frame_w = RouteLayout::screen().sectioned_table().w;
+    let layout = RouteLayout::panel();
+    let frame_w = match table.style() {
+        TableStyle::Menu => layout.menu_table().w,
+        _ => layout.sectioned_table().w,
+    };
     out.extend(table.app_fit_failures(frame_w, page));
+    if table.style() == TableStyle::Menu {
+        for row in table.sections.iter().flat_map(|s| s.rows.iter()) {
+            if RouteLayout::panel_subtitle(&row.detail).with_measure(&ShippedMeasure).truncates(layout.narrative.w) {
+                out.push(format!("{page}: description {:?} is cut at the subtitle's line cap", row.detail));
+            }
+        }
+    }
 }
 
 /// The baseline `RootInputs` each variant below changes one field of (a sum over fields, not a
@@ -35,6 +49,7 @@ fn base_root_inputs() -> RootInputs {
 fn overflowing_root(tag: &str, inputs: &RootInputs, out: &mut Vec<String>) {
     let mut form = FormTable::<RootId, Action, SettingsPage>::new(super::super::registry::BAND);
     form.table.compact = false;
+    form.table.set_style(ROOT_STYLE);
     form.set(root_form(inputs), None);
     overflowing(tag, &form.table, out);
 }

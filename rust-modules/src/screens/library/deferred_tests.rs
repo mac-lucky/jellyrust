@@ -94,7 +94,7 @@ impl Fixture {
         }
     }
     fn screen(&self) -> LibraryScreen {
-        let mut page = LibraryScreen::new(EntryId(81), InstanceId(19), SecKind::Movie);
+        let mut page = LibraryScreen::new(EntryId(81), InstanceId(19), None);
         page.sync(&self.cx());
         page
     }
@@ -129,10 +129,7 @@ impl Fixture {
         let directory = self.directory.view();
         let results = apply(&mut self.stores, directory, out);
         self.capture();
-        assert!(
-            page.pending.section().is_none() && page.pending.grid().is_none(),
-            "leaving drains both halves"
-        );
+        assert!(page.pending.grid().is_none(), "leaving drains the pending edit");
         results
     }
 }
@@ -189,75 +186,6 @@ fn back() -> ScreenEvent<TestHost> {
 }
 
 #[test]
-fn newest_section_replaces_old_grid_work_and_commits_only_the_last_section() {
-    let _guard = nj_base::testlock::serial();
-    let mut fixture = Fixture::new();
-    let mut page = fixture.screen();
-    let original = page.toolbar_chip(FILTER, &fixture.cx()).value;
-    fixture.step(
-        &mut page,
-        ScreenEvent::App(AppMsg::LibraryEdit {
-            target: fixture.address(0),
-            edit: QueryEdit::Unwatched(true),
-        }),
-    );
-    assert_ne!(page.toolbar_chip(FILTER, &fixture.cx()).value, original);
-    fixture.step(
-        &mut page,
-        ScreenEvent::App(AppMsg::LibrarySelect(fixture.address(2))),
-    );
-    assert!(
-        page.pending.grid().is_none(),
-        "the outgoing section's grid request must be discarded"
-    );
-    assert_eq!(page.toolbar_chip(FILTER, &fixture.cx()).value, original);
-    fixture.step(
-        &mut page,
-        ScreenEvent::App(AppMsg::LibrarySelect(fixture.address(1))),
-    );
-    assert_eq!(
-        page.view_section(&fixture.cx()),
-        Some(1),
-        "chrome acknowledges the newest press immediately"
-    );
-    assert!(page.page_fade.is_swapping());
-    assert_eq!(fixture.flush(&mut page), vec![true]);
-    assert_eq!(fixture.directory.view().current(), Some(1));
-    assert!(
-        !fixture.listing.view().unwatched(),
-        "discarded grid work cannot alter the arriving query"
-    );
-}
-
-#[test]
-fn reselecting_the_incoming_section_preserves_its_own_grid_transaction() {
-    let _guard = nj_base::testlock::serial();
-    let mut fixture = Fixture::new();
-    let mut page = fixture.screen();
-    let incoming = fixture.address(2);
-    fixture.step(&mut page, ScreenEvent::App(AppMsg::LibrarySelect(incoming)));
-    fixture.step(
-        &mut page,
-        ScreenEvent::App(AppMsg::LibraryEdit {
-            target: fixture.address(0),
-            edit: QueryEdit::Unwatched(true),
-        }),
-    );
-    fixture.step(&mut page, ScreenEvent::App(AppMsg::LibrarySelect(incoming)));
-    assert!(
-        page.pending.section().is_some() && page.pending.grid().is_some(),
-        "replacement only discards work belonging to a different section"
-    );
-    assert_eq!(
-        fixture.flush(&mut page),
-        vec![true],
-        "both halves commit in one addressed command"
-    );
-    assert_eq!(fixture.directory.view().current(), Some(2));
-    assert!(fixture.listing.view().unwatched());
-}
-
-#[test]
 fn a_target_that_moves_after_the_press_is_refused_at_the_store_drain() {
     let _guard = nj_base::testlock::serial();
     let mut fixture = Fixture::new();
@@ -288,38 +216,12 @@ fn a_target_that_moves_after_the_press_is_refused_at_the_store_drain() {
 }
 
 #[test]
-fn queued_section_refuses_a_renumbered_table_after_a_positive_control() {
-    let _guard = nj_base::testlock::serial();
-    let mut fixture = Fixture::new();
-    let mut page = fixture.screen();
-    fixture.step(
-        &mut page,
-        ScreenEvent::App(AppMsg::LibrarySelect(fixture.address(2))),
-    );
-    assert_eq!(fixture.flush(&mut page), vec![true]);
-    assert_eq!(fixture.directory.view().current(), Some(2));
-    fixture.rebuild();
-    let mut page = fixture.screen();
-    let old = fixture.address(2);
-    fixture.step(&mut page, ScreenEvent::App(AppMsg::LibrarySelect(old)));
-    assert!(page.pending.section().is_some());
-    fixture.rebuild();
-    assert_ne!(fixture.address(2).epoch, old.epoch);
-    assert_eq!(fixture.flush(&mut page), vec![false]);
-    assert_eq!(
-        fixture.directory.view().current(),
-        Some(0),
-        "old indices cannot select a new profile's library"
-    );
-}
-
-#[test]
 fn foreign_grid_targets_neither_relabel_chips_nor_mutate_the_current_query() {
     let _guard = nj_base::testlock::serial();
     let mut fixture = Fixture::new();
     for index in [1, 2] {
         let mut page = fixture.screen();
-        let before = page.toolbar_chip(FILTER, &fixture.cx()).value;
+        let before = page.control_pill(FILTER, &fixture.cx()).label;
         let query = fixture.listing.view().id().unwrap().query;
         fixture.step(
             &mut page,
@@ -328,7 +230,7 @@ fn foreign_grid_targets_neither_relabel_chips_nor_mutate_the_current_query() {
                 edit: QueryEdit::Unwatched(true),
             }),
         );
-        assert_eq!(page.toolbar_chip(FILTER, &fixture.cx()).value, before);
+        assert_eq!(page.control_pill(FILTER, &fixture.cx()).label, before);
         assert_eq!(fixture.flush(&mut page), vec![false]);
         assert!(!fixture.listing.view().unwatched());
         assert_eq!(fixture.listing.view().id().unwrap().query, query);
@@ -374,14 +276,10 @@ fn queued_grid_epoch_is_refused_even_when_the_section_identity_still_matches() {
 }
 
 #[test]
-fn back_before_commit_cancels_both_halves_and_their_outgoing_fades() {
+fn back_before_commit_cancels_the_edit_and_its_outgoing_fade() {
     let _guard = nj_base::testlock::serial();
     let mut fixture = Fixture::new();
     let mut page = fixture.screen();
-    fixture.step(
-        &mut page,
-        ScreenEvent::App(AppMsg::LibrarySelect(fixture.address(2))),
-    );
     fixture.step(
         &mut page,
         ScreenEvent::App(AppMsg::LibraryEdit {
@@ -389,17 +287,17 @@ fn back_before_commit_cancels_both_halves_and_their_outgoing_fades() {
             edit: QueryEdit::Unwatched(true),
         }),
     );
-    assert!(page.pending.section().is_some() && page.pending.grid().is_some());
-    assert!(page.page_fade.is_swapping() && page.grid_fade.is_swapping());
+    assert!(page.pending.grid().is_some());
+    assert!(page.grid_fade.is_swapping());
     let out = fixture.step(&mut page, back());
     assert!(
         out.is_empty(),
         "BACK cancels here, rather than requesting Home"
     );
-    assert!(page.pending.section().is_none() && page.pending.grid().is_none());
+    assert!(page.pending.grid().is_none());
     assert!(
-        !page.page_fade.cancel() && !page.grid_fade.cancel(),
-        "the outgoing phases have already reversed"
+        !page.grid_fade.cancel(),
+        "the outgoing phase has already reversed"
     );
     for frame in 1..40 {
         let out = fixture.step(

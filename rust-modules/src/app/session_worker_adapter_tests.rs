@@ -27,6 +27,7 @@ use nj_machine::machine::RequestId;
 /// before resource deletion; no network work is launched here.
 #[test]
 fn signing_out_leaves_no_consent_and_no_identifier_for_the_next_account() {
+    let _endpoint = crate::telemetry::consent::as_if_configured(); // upstream's configured-build gates
     use crate::telemetry::consent;
     /// Every crate-global redirect this test takes, handed back on drop — so a failed
     /// assertion cannot leave the next test writing into this one's directory.

@@ -57,14 +57,13 @@ fn a_ground_never_outshines_the_fine_print_that_sits_on_it() {
     }
 }
 
-/// The other end: a ground keyed to near-black key art must not sink below the value a card's
-/// drop shadow needs to read against. `SURFACE_APP`'s own doc rejects the old near-black
-/// (25,25,29)/255 for exactly that reason; `GROUND_W ≤ 0.26` is what keeps the floor above it,
-/// with no floor constant anywhere.
+/// The other end: a ground keyed to black key art is the surface scaled by `1 - GROUND_W`, and
+/// in the Litefin fork that is the page black itself (`docs/litefin-look.md` 2.1). Upstream held
+/// this floor above a near-black so a card's drop shadow had something to darken; Litefin focuses
+/// artwork with a ring and draws no shadow (2.6), so the floor it needs is the page's own.
 #[test]
-fn a_ground_stays_light_enough_for_a_card_shadow() {
+fn the_darkest_ground_is_the_page_black() {
     let floor = AmbientWash::keyed([[0.0; 3]; 4], [AmbientWash::GROUND_W; 4]);
-    let rejected = [25.0 / 255.0, 25.0 / 255.0, 29.0 / 255.0, 1.0];
     for corner in floor {
         for ch in 0..3 {
             let want = theme::SURFACE_APP[ch] * (1.0 - AmbientWash::GROUND_W);
@@ -72,11 +71,7 @@ fn a_ground_stays_light_enough_for_a_card_shadow() {
                 (corner[ch] - want).abs() < 1e-6,
                 "the darkest ground is the surface scaled by 1-GROUND_W"
             );
-            assert!(
-                corner[ch] > rejected[ch],
-                "channel {ch} sank to {} — into the near-black the palette rejects",
-                corner[ch]
-            );
+            assert!(corner[ch].abs() < 1e-6, "channel {ch} is {}, not the page black", corner[ch]);
         }
     }
 }

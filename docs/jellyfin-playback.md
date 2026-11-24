@@ -138,11 +138,33 @@ prints all of this once per process:
 jf: capabilities video=h264,hevc audio=aac,ac3,eac3 channels=- containers=mkv,mp4,m4v,mov max=3840x2176 bitrate=unbounded dv=… hdr10=yes hlg=yes hw_decode=yes passthrough=unknown table=measured
 ```
 
+## Remembered tracks
+
+Every item and PlaybackInfo read carries, per media source and for the asking user,
+`DefaultAudioStreamIndex` and `DefaultSubtitleStreamIndex` (`MediaSourceManager`): the film's
+remembered pick when `RememberAudioSelections`/`RememberSubtitleSelections` is on (subtitles
+remembered Off are -1), else the server's own ranking of the user's language preferences.
+`jf::convert::media` marks that stream `selected` and a -1 as `MediaPart::subtitles_off`.
+`build_stream` honours them first: the audio ladder's `ServerPick` (falling through, to a track in
+the same language first, when the panel cannot decode it on direct play; a conversion carries it
+whatever its codec; skipped when this television's Dubbing and voice-over preference excludes it,
+`docs/playback-settings.md`), the selected subtitle (embedded, or the sidecar restored at a
+direct-play landing), and no subtitle at all for a remembered Off. With nothing selected the client applies
+`SubtitleMode` itself over the tracks it can draw, external text tracks first as the server ranks
+them. Every progress report names the live audio track and the live subtitle, and an Off somebody
+chose (the player's menu, the pre-play choice, or the remembered Off the film started from) as
+`SubtitleStreamIndex: -1`, which is what the server remembers (`UpdatePlaybackSettings`). A
+playback with no subtitle nobody turned off (none existed yet, or the server's pick is one this TV
+cannot draw) sends no index: the server ignores a null, and a -1 would be served back as this
+film's Off on every client.
+
 ## Subtitles
 
 Direct play draws the file's own track: the embedded renderer, or the sidecar file for an
 external one. A conversion asks for the same pick in `SubtitleStreamIndex` — else the sidecar the
-server has selected, else a retry's track — and never forces a burn
+server has selected, else a retry's track — and never forces a burn. A direct-play candidate asks
+for the selected sidecar as well, so that a server answering it with a conversion delivers the
+sidecar rather than dropping it
 (`AlwaysBurnInSubtitleWhenTranscoding` stays `false`). The answer's `MediaStream.DeliveryMethod`
 for that stream (`MediaInfoHelper.SetDeviceSpecificSubtitleInfo`, filled for every play method)
 becomes `jf::playback::SubtitleDelivery`, and `route::adopt_subtitle_delivery` points the client
@@ -307,6 +329,9 @@ Automated (host, `make check`; loopback Jellyfin in `route/decision_test_support
 | Audio by language / PlayDefaultAudioTrack | `plan_tests::the_users_audio_language_preference_picks_the_track` |
 | Smart direct play sibling track | `plan_tests::smart_direct_play_asks_for_the_ac3_sibling_of_a_truehd_default` |
 | SubtitleMode Always | `plan_tests::subtitle_mode_always_turns_on_the_preferred_language` |
+| Remembered tracks: the server's audio pick, a remembered sidecar, a remembered Off | `plan_tests::the_servers_audio_pick_beats_the_files_default_track`, `a_remembered_external_subtitle_is_restored_as_a_sidecar_on_direct_play`, `a_remembered_external_subtitle_rides_a_conversion_of_a_direct_play_candidate`, `a_remembered_off_keeps_subtitles_off_whatever_the_preferences`, `jf::convert::tests::the_servers_default_streams_are_the_selected_ones` |
+| Automatic external subtitle switched on as a sidecar | `plan_tests::an_automatic_external_subtitle_is_switched_on_as_a_sidecar` |
+| Reports name the live subtitle, a chosen Off as -1, and no index when nobody chose Off | `jf_session_tests::every_progress_report_names_the_live_subtitle_and_off_as_minus_one`, `plan_tests::a_film_played_without_a_subtitle_nobody_turned_off_reports_none`, `an_undrawable_server_pick_is_not_reported_as_off`, `a_chosen_or_remembered_off_is_reported_as_minus_one` |
 | Conversion carries the preferred text subtitle as the server's file, video copied | `plan_tests::a_conversion_carries_the_preferred_subtitle_as_the_servers_external_file` |
 | Muxed subtitle drawn at the output's ordinal 0 | `plan_tests::an_embedded_subtitle_is_drawn_from_the_converted_streams_own_ordering` |
 | `Encode` is the server's burn; nothing drawn | `plan_tests::an_encoded_subtitle_is_the_servers_burn_and_the_client_draws_nothing` |

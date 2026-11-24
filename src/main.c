@@ -30,7 +30,7 @@ extern int nj_sentry_spool_external(const char *path); /* Sentry daemon's spool-
 extern void nj_crash_write_image_marker(int fd); /* identify this binary in the append-only log */
 
 /* Where this INSTALL's runtime files live — `/tmp/nativejelly-events.log` for the app users get,
- * `/tmp/com.sostk.nativejelly.debug/nativejelly-events.log` for a developer build installed beside it.
+ * `/tmp/com.macluckylab.jellyrust.debug/nativejelly-events.log` for a developer build installed beside it.
  *
  * The answer comes from Rust (`plx_runtime_path`, rust-modules/base/src/paths.rs) rather than from a
  * literal here, and that is the whole point: this file opens three logs before a single line of

@@ -39,17 +39,48 @@ use super::screen::{
 
 use super::{Painter, Rect};
 
-/// The strip's control namespace: `of_index(STRIP_BASE + stable_id)`, never display position.
-/// A removed pill therefore cannot renumber another destination or collide with a page's tile.
+/// The rail's control namespace: `of_index(STRIP_BASE + stable_id)`, never display position.
+/// A removed destination therefore cannot renumber another or collide with a page's tile.
 pub const STRIP_BASE: u32 = 0xFFFF_0000;
 
-/// The input owner's page COMPOSED with the container's strip (§6.2): the strip is a `Row`
-/// group above the page's own, contributed only while the page allows it.
+/// **The entry the rail belongs to**: the top-most open surface that wears it (Settings, which
+/// Litefin shows as a page beside its sidebar), else the top page when it wears it. The rail is
+/// drawn above that entry, takes focus while it owns input, and marks its item active.
+pub fn rail_entry<H: Host>(nav: &Navigation<H>) -> Option<EntryId> {
+    use nj_machine::machine::Chrome;
+    let surface = nav.modals.surfaces.iter().rev().find(|s|
+        matches!(s.phase, super::containers::modal::Phase::Opening | super::containers::modal::Phase::Open)
+            && s.entry.arg.chrome() == Chrome::TabBar);
+    match surface {
+        Some(s) => Some(s.entry.id),
+        None => nav.top_page().filter(|e| e.arg.chrome() == Chrome::TabBar).map(|e| e.id),
+    }
+}
+
+/// The input owner's page COMPOSED with the container's rail (§6.2): the rail is a `Column`
+/// group beside the page's own, and the open popover a second one, contributed only while the
+/// page allows it.
 struct PageWithStrip<'a, H: Host> {
     page: &'a dyn Screen<H>,
-    strip: Option<(GroupSpec, &'a [super::containers::tabs::StripMember<H::Elem>])>,
-    strip_fallback: Option<H::Elem>,
+    strip: Option<&'a super::containers::tabs::TabContainer<H>>,
     entry: EntryId,
+}
+
+impl<H: Host> PageWithStrip<'_, H>
+where
+    H::Elem: IndexElem,
+{
+    /// The chrome member `key` names, if it is one.
+    fn member(&self, key: &H::Elem) -> Option<&super::containers::tabs::StripMember<H::Elem>> {
+        match key.index() {
+            Some(i) if i >= STRIP_BASE => self.strip?.strip.iter().find(|m| m.elem == *key),
+            _ => None,
+        }
+    }
+    /// The members of one chrome group, in their published order.
+    fn group_members(&self, g: GroupId) -> impl Iterator<Item = &super::containers::tabs::StripMember<H::Elem>> {
+        self.strip.into_iter().flat_map(|t| t.strip.iter()).filter(move |m| m.group == g)
+    }
 }
 
 impl<H: Host> Focusable<H> for PageWithStrip<'_, H>
@@ -57,29 +88,28 @@ where
     H::Elem: IndexElem,
 {
     fn groups(&self, cx: &Cx<'_, H>, out: &mut Vec<GroupSpec>) {
-        if let Some((spec, _)) = &self.strip {
-            out.push(*spec);
+        if let Some(tabs) = self.strip {
+            out.push(tabs.strip_group());
+            out.extend(tabs.popover_group());
         }
         self.page.groups(cx, out);
     }
     fn group_of(&self, key: &H::Elem, cx: &Cx<'_, H>) -> Option<GroupId> {
         match key.index() {
-            Some(i) if i >= STRIP_BASE => self.strip.as_ref()
-                .filter(|(_, members)| members.iter().any(|m| m.elem == *key)).map(|(s, _)| s.id),
+            Some(i) if i >= STRIP_BASE => self.member(key).map(|m| m.group),
             _ => self.page.group_of(key, cx),
         }
     }
     fn neighbour(&self, k: FocusKey<H::Elem>, dir: Dir, cx: &Cx<'_, H>) -> Step<H::Elem> {
-        match (k.elem.index(), &self.strip) {
-            (Some(i), Some((_, members))) if i >= STRIP_BASE => {
-                let Some(i) = members.iter().position(|m| m.elem == k.elem) else { return Step::Edge };
-                let mv = |j: usize| Step::Move(FocusKey {
-                    entry: self.entry,
-                    elem: members[j].elem,
-                });
+        match k.elem.index() {
+            Some(i) if i >= STRIP_BASE => {
+                let Some(group) = self.member(&k.elem).map(|m| m.group) else { return Step::Edge };
+                let column: Vec<_> = self.group_members(group).collect();
+                let Some(i) = column.iter().position(|m| m.elem == k.elem) else { return Step::Edge };
+                let mv = |j: usize| Step::Move(FocusKey { entry: self.entry, elem: column[j].elem });
                 match dir {
-                    Dir::Left if i > 0 => mv(i - 1),
-                    Dir::Right if i + 1 < members.len() => mv(i + 1),
+                    Dir::Up if i > 0 => mv(i - 1),
+                    Dir::Down if i + 1 < column.len() => mv(i + 1),
                     _ => Step::Edge,
                 }
             }
@@ -87,47 +117,47 @@ where
         }
     }
     fn place(&self, key: &H::Elem, cx: &Cx<'_, H>, at: At) -> Option<Placed> {
-        match (key.index(), &self.strip) {
-            (Some(i), Some((_, members))) if i >= STRIP_BASE => {
-                let index = members.iter().position(|m| m.elem == *key)?;
-                let member = &members[index];
+        match key.index() {
+            Some(i) if i >= STRIP_BASE => {
+                let member = self.member(key)?;
+                let index = self.group_members(member.group).position(|m| m.elem == *key);
                 Some(Placed {
                     rect: match at { At::Drawn => member.drawn, At::SpringTarget => member.target },
                     rest_rect: member.target,
                     clip: member.clip,
-                    index: Some(index as u32),
+                    index: index.map(|i| i as u32),
                 })
             }
             _ => self.page.place(key, cx, at),
         }
     }
     fn reconcile(&self, want: FocusKey<H::Elem>, cx: &Cx<'_, H>) -> FocusKey<H::Elem> {
-        match (want.elem.index(), &self.strip) {
-            (Some(i), Some((_, members))) if i >= STRIP_BASE =>
+        match (want.elem.index(), self.strip) {
+            (Some(i), Some(tabs)) if i >= STRIP_BASE && !tabs.strip.is_empty() =>
                 FocusKey { entry: self.entry,
-                    elem: members.iter().find(|m| m.elem == want.elem)
-                        .or_else(|| self.strip_fallback.and_then(|key| members.iter().find(|m| m.elem == key)))
-                        .unwrap_or(&members[0]).elem },
+                    elem: self.member(&want.elem)
+                        .or_else(|| tabs.strip_fallback.and_then(|key| self.member(&key)))
+                        .unwrap_or(&tabs.strip[0]).elem },
             _ => self.page.reconcile(want, cx),
         }
     }
     fn seat(&self, g: GroupId, from: Placed, cx: &Cx<'_, H>) -> FocusKey<H::Elem> {
-        match &self.strip {
-            Some((spec, members)) if spec.id == g => {
-                let cx_ = from.rect.cx();
-                let mut best = (f32::MAX, 0usize);
-                for (i, member) in members.iter().enumerate() {
-                    let d = (member.target.cx() - cx_).abs();
-                    if d < best.0 {
-                        best = (d, i);
-                    }
-                }
-                FocusKey {
-                    entry: self.entry,
-                    elem: members[best.1].elem,
-                }
-            }
-            _ => self.page.seat(g, from, cx),
+        use super::containers::tabs::{POPOVER, STRIP};
+        if !(g == STRIP || g == POPOVER) || self.strip.is_none() {
+            return self.page.seat(g, from, cx);
+        }
+        // The rail is entered on the current page's own item, as Litefin's sidebar is; anything
+        // else (the popover, a rail with no current item) seats the member nearest the reader.
+        let active = (g == STRIP).then(|| self.strip.and_then(|t| t.strip_active))
+            .flatten().filter(|key| self.member(key).is_some_and(|m| m.group == g));
+        let nearest = || {
+            let cy = from.rect.cy();
+            self.group_members(g).min_by(|a, b| (a.target.cy() - cy).abs().total_cmp(&(b.target.cy() - cy).abs()))
+                .map(|m| m.elem)
+        };
+        match active.or_else(nearest) {
+            Some(elem) => FocusKey { entry: self.entry, elem },
+            None => self.page.seat(g, from, cx),
         }
     }
 }
@@ -228,14 +258,21 @@ pub trait Rig<H: Host> {
     fn navigation_presentation(&self) -> super::screen::NavPresentation {
         super::screen::NavPresentation { page_alpha: self.page_alpha(), ..Default::default() }
     }
-    /// Shared chrome draws after its page and before surfaces, using a captured vocabulary.
+    /// Shared chrome draws after its page and before surfaces, using a captured vocabulary — and
+    /// once more above a surface that wears it ([`rail_entry`]).
     fn draw_chrome(&mut self, _arg: &H::Arg, _parts: &CxParts<H::Elem>,
-        _nav: super::screen::NavPresentation, _glass: Option<&mut super::frame::glass::GlassPlan>) {}
+        _nav: super::screen::NavPresentation) {}
+    /// What a top page that wears no rail still shows of the chrome (the application's clock),
+    /// drawn where [`Rig::draw_chrome`] would be.
+    fn draw_page_clock(&mut self, _arg: &H::Arg, _nav: super::screen::NavPresentation) {}
     /// The captured shared-chrome publication this frame for a `Scrim::lift` that redraws part of
-    /// that bar over a surface's dim (spec phase 12, PX-WIDGETS; today's one caller is the account
-    /// menu's chip lift). [`scrim_lift_read`] combines this borrow with the material published by
-    /// the application-owned `GlassPlan`. `None` is correct for a rig with no such bar.
+    /// the rail over a surface's dim (spec phase 12, PX-WIDGETS; today's one caller is the account
+    /// menu's avatar lift). `None` is correct for a rig with no such rail.
     fn scrim_chrome_read(&self) -> Option<super::widgets::ChromeRead<'_>> { None }
+    /// A rail control was activated — OK on it, or a click. The rail is the application's
+    /// vocabulary, so the page under it never sees the press; `ret` is that page's bookmark,
+    /// taken at the press, for whatever navigation the application answers with.
+    fn strip_activate(&mut self, _entry: EntryId, _elem: H::Elem, _ret: ReturnState<H::Elem, H::Memory>) {}
     /// Coexistence adapter for a legacy overlay which freezes an owned host (phase 10 retirement).
     fn page_updates(&self) -> bool { true }
     /// The application lifts its legacy host-cache cull before drawing an owned surface.
@@ -257,14 +294,8 @@ pub trait Rig<H: Host> {
     fn back_at_root(&mut self) {}
 }
 
-pub(crate) fn scrim_lift_read<'a, H: Host>(
-    rig: &'a dyn Rig<H>,
-    glass: Option<&crate::ui::frame::glass::GlassPlan>,
-) -> super::screen::ScrimLiftRead<'a> {
-    super::screen::ScrimLiftRead {
-        chrome: rig.scrim_chrome_read(),
-        bar_material: glass.and_then(super::frame::glass::GlassPlan::tab_face),
-    }
+pub(crate) fn scrim_lift_read<'a, H: Host>(rig: &'a dyn Rig<H>) -> super::screen::ScrimLiftRead<'a> {
+    super::screen::ScrimLiftRead { chrome: rig.scrim_chrome_read() }
 }
 
 pub struct Split<'a, H: Host> {
@@ -373,6 +404,9 @@ pub struct Dispatcher<H: Host> {
     /// The previous frame's page-owned motion/resource verdict, retained past `Present::take` so
     /// the held transition image can wait for the destination's visual quiescence.
     page_quiescent: bool,
+    /// The page group a LEFT left for the rail from, so RIGHT (or BACK) out of the rail returns
+    /// to the seat it came from — that group's remembered element — rather than to the nearest.
+    rail_origin: Option<(EntryId, GroupId)>,
 }
 
 impl<H: Host> Default for Dispatcher<H>
@@ -416,6 +450,7 @@ where
             cold: Default::default(),
             render_breach_logged: false,
             pending_back: false,
+            rail_origin: None,
             last_tick: Tick::default(),
             prepared: false,
             page_quiescent: false,
@@ -692,10 +727,9 @@ where
         let e = nav.entry(entry)?;
         let inst = e.inst.as_ref()?;
         let page: &dyn Screen<H> = &*inst.screen;
-        let is_top_page = nav.top_page().map(|t| t.id) == Some(entry);
-        let strip = (is_top_page && page.strip_reachable() && !nav.tabs.strip.is_empty())
-            .then(|| (nav.tabs.strip_group(), nav.tabs.strip.as_slice()));
-        Some(PageWithStrip { page, strip, strip_fallback: nav.tabs.strip_fallback, entry })
+        let strip = (rail_entry(nav) == Some(entry) && page.strip_reachable() && !nav.tabs.strip.is_empty())
+            .then_some(&nav.tabs);
+        Some(PageWithStrip { page, strip, entry })
     }
 
     /// **Is this frame's picture a hardware VIDEO PLANE?** (spec §9, §16 risk 10.)
@@ -1269,7 +1303,7 @@ where
     }
 
     fn draw_with(&mut self, rig: &mut dyn Rig<H>, tick: Tick, report: &mut FrameReport, pages: bool,
-        mut glass: Option<&mut super::frame::glass::GlassPlan>, ceiling: super::frame::backdrop::Z) {
+        glass: Option<&mut super::frame::glass::GlassPlan>, ceiling: super::frame::backdrop::Z) {
         use super::frame::backdrop::{self, Z};
         let strip_owner = self.owner_entry();
         let navigation = rig.navigation_presentation();
@@ -1444,7 +1478,11 @@ where
                         chrome_parts.focus = input.engine.read(chrome_parts.owner);
                         drop(page_cx);
                         let _chrome_layer = backdrop::layer(Z::CHROME, true);
-                        backdrop::draw_span("chrome", || rig.draw_chrome(&e.arg, &chrome_parts, navigation, glass.as_deref_mut()));
+                        backdrop::draw_span("chrome", || rig.draw_chrome(&e.arg, &chrome_parts, navigation));
+                    } else if Z::CHROME < ceiling && top_entry == Some(e.id) {
+                        drop(page_cx);
+                        let _chrome_layer = backdrop::layer(Z::CHROME, true);
+                        backdrop::draw_span("chrome", || rig.draw_page_clock(&e.arg, navigation));
                     }
                 }
             }
@@ -1457,10 +1495,13 @@ where
                     let hover = if entry.inst.as_ref().is_some_and(|i| i.screen.strip_reachable()) {
                         super::screen::Hover::Focus
                     } else { super::screen::Hover::Ignore };
+                    // The open popover's opener lets the pointer cross it to the rows beside it:
+                    // hovering it would pull focus off them, which closes the popover.
                     stops.extend(nav.tabs.strip.iter().map(|member| Stop {
                         key: FocusKey { entry: entry.id, elem: member.elem },
                         rect: member.drawn, rest_rect: member.target, clip: member.clip,
-                        hover, activate: Activate::Direct,
+                        hover: if nav.tabs.popover_opener == Some(member.elem) { super::screen::Hover::Ignore } else { hover },
+                        activate: Activate::Direct,
                     }));
                 }
             }
@@ -1475,7 +1516,7 @@ where
             if Z::DIM < ceiling {
                 let _dim_layer = backdrop::layer(Z::DIM, false);
                 let _scope = rig.surface_scope();
-                let read = scrim_lift_read(rig, glass.as_deref());
+                let read = scrim_lift_read(rig);
                 backdrop::draw_span("scrims", || nav.modals.draw_scrims(navigation.page_alpha, read));
             }
         }
@@ -1497,6 +1538,8 @@ where
         // page, or the playing item's envelope, which may be the one kept from an earlier open or
         // preloaded ahead of it) — which is what a popover panel's ground is drawn from
         // (`widgets::panel_ground`). Disjoint fields of the stack: the field is only read here.
+        let rail = rail_entry(nav);
+        let strip = &nav.tabs.strip;
         let modals = &mut nav.modals;
         let field = modals.underlay.field();
         let (mut drain_surface_text, mut capture_surface) = (false, false);
@@ -1539,6 +1582,23 @@ where
                 }
                 report.drawn.push(inst.id);
                 stops.extend(f.into_stops());
+                // The rail over the surface that wears it, and its pointer targets above the
+                // surface's own (`rail_entry`).
+                if rail == Some(s.entry.id) && !held && inst.screen.focus_source() == FocusSource::Engine {
+                    let mut chrome_parts = parts.clone();
+                    chrome_parts.owner = InputOwner::Entry(s.entry.id);
+                    chrome_parts.focus = input.engine.read(chrome_parts.owner);
+                    drop(surface_cx);
+                    backdrop::draw_span("chrome", || rig.draw_chrome(&s.entry.arg, &chrome_parts, navigation));
+                    if strip_owner == Some(s.entry.id) && inst.screen.hit_source() == HitSource::Engine {
+                        let hover = if inst.screen.strip_reachable() { super::screen::Hover::Focus } else { super::screen::Hover::Ignore };
+                        stops.extend(strip.iter().map(|member| Stop {
+                            key: FocusKey { entry: s.entry.id, elem: member.elem },
+                            rect: member.drawn, rest_rect: member.target, clip: member.clip,
+                            hover, activate: Activate::Direct,
+                        }));
+                    }
+                }
                 // (b) is a count of THIS SURFACE's own backing renders, asked of the surface —
                 // not a literal `1`, which is what made "more than one render per surface"
                 // unspellable and the rule inert. A surface served from the shared FrameCache
@@ -1841,6 +1901,30 @@ where
                     addressed.owner = if self.owner_entry() == Some(entry) { self.owner() } else { entry_owner };
                     addressed.focus = self.input.engine.read(entry_owner);
                 }
+                // The rail is the container's control, not the page's: an activation of one of its
+                // members, and a key while the remote is on it, never reach the page's step.
+                if let Some(entry) = self.chrome_owner(id) {
+                    match &ev {
+                        ScreenEvent::Activate(elem) if elem.index().is_some_and(|i| i >= STRIP_BASE) => {
+                            let ret = self.return_state();
+                            rig.strip_activate(entry, *elem, ret);
+                            return;
+                        }
+                        ScreenEvent::Input(InputEvent { kind: InputKind::Key { key, edge, .. }, .. })
+                            if self.chrome_focused(entry) =>
+                        {
+                            if *key == Key::Back {
+                                if *edge == Edge::Down && self.chrome_back(rig, &addressed, entry, id, out, tap) {
+                                    return;
+                                }
+                            } else if matches!(key, Key::Up | Key::Down | Key::Left | Key::Right | Key::Ok) {
+                                self.after_step(rig, &addressed, id, &ev, Handled::No, out, tap);
+                                return;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 let Dispatcher { nav, present, .. } = self;
                 // a surface's springs report under their own scope (§4.4 MotionScope)
                 let is_surface = nav
@@ -1973,13 +2057,39 @@ where
                 };
                 if let Some(dir) = dir {
                     if *at_edge {
-                        return; // re-delivered under EdgeRule::Screen and still unhandled: dropped
+                        // Re-delivered under EdgeRule::Screen and still unhandled: dropped — except
+                        // a LEFT, which the page had no answer for, so the rail takes it.
+                        if dir == Dir::Left {
+                            let outcome = self.enter_rail(rig, parts, entry, tap);
+                            self.deliver_moved(id, outcome, out);
+                        }
+                        return;
                     }
-                    let mut links = Vec::new();
-                    let outcome = self.focus_resolution(rig, parts, entry, 1, tap, |engine, view, cx| {
-                        view.page.links(&mut links);
-                        engine.move_dir(owner, view, &links, dir, cx)
-                    });
+                    let outcome = match self.chrome_dir(rig, parts, entry, dir, tap) {
+                        Some(outcome) => outcome,
+                        None => {
+                            let mut links = Vec::new();
+                            let outcome = self.focus_resolution(rig, parts, entry, 1, tap, |engine, view, cx| {
+                                view.page.links(&mut links);
+                                engine.move_dir(owner, view, &links, dir, cx)
+                            });
+                            // LEFT at the left edge of the page's first column: the page had no
+                            // answer, so the rail takes it. One door for every page, here. A LEFT
+                            // that would walk BACK (Settings' category list) takes it too while the
+                            // rail is composed with the page, as Litefin's list leaves left to its
+                            // sidebar.
+                            let back = matches!(outcome, Outcome::Edge(EdgeRule::Nav(nj_machine::machine::NavOpKind::Back)))
+                                && Self::owner_view(&self.nav, entry).is_some_and(|view| view.strip.is_some());
+                            if (matches!(outcome, Outcome::Nothing) || back) && dir == Dir::Left {
+                                match self.enter_rail(rig, parts, entry, tap) {
+                                    Outcome::Nothing if back => outcome,
+                                    entered => entered,
+                                }
+                            } else {
+                                outcome
+                            }
+                        }
+                    };
                     if self.input.engine.take_fell_back() {
                         rig.log("focus: no current focus — seated by the first group's policy");
                     }
@@ -2101,6 +2211,130 @@ where
         let cx = parts.cx::<H>(views, measure);
         view.place(&key.elem, &cx, At::SpringTarget).is_some()
             && (!check_group || view.group_of(&key.elem, &cx) == group)
+    }
+
+    /// The entry whose page wears the rail and owns input as instance `id`: the top page, driven
+    /// by the engine, with no system keyboard up.
+    fn chrome_owner(&self, id: InstanceId) -> Option<EntryId> {
+        let entry = self.owner_entry()?;
+        (self.nav.instance_of(entry) == Some(id) && rail_entry(&self.nav) == Some(entry)
+            && self.engine_page() && !self.input.keyboard).then_some(entry)
+    }
+
+    /// Is the remote on a rail member of `entry`'s page?
+    fn chrome_focused(&self, entry: EntryId) -> bool {
+        self.input.engine.current(InputOwner::Entry(entry))
+            .is_some_and(|key| self.nav.tabs.strip.iter().any(|m| m.elem == key.elem))
+    }
+
+    fn popover_focused(&self, entry: EntryId) -> bool {
+        self.input.engine.current(InputOwner::Entry(entry)).is_some_and(|key| self.nav.tabs.strip.iter()
+            .any(|m| m.elem == key.elem && m.group == super::containers::tabs::POPOVER))
+    }
+
+    fn deliver_moved(&self, id: InstanceId, outcome: Outcome<H::Elem>, out: &mut Vec<Stamped<H>>) {
+        if let Outcome::Moved { from, to, by } = outcome {
+            out.push(Stamped {
+                from: MachineId::Input,
+                fx: Fx::Deliver(MachineId::Instance(id), Delivery::Screen(ScreenEvent::FocusMoved { from, to, by })),
+            });
+        }
+    }
+
+    /// A direction the rail answers itself, before the page's resolution: out of the popover,
+    /// and RIGHT back to the page. `None` hands the key to the ordinary resolution.
+    fn chrome_dir(&mut self, rig: &mut dyn Rig<H>, parts: &CxParts<H::Elem>, entry: EntryId, dir: Dir,
+        tap: &mut dyn Tap<H>) -> Option<Outcome<H::Elem>> {
+        let owner = InputOwner::Entry(entry);
+        if self.popover_focused(entry) {
+            // Litefin's floating list: UP on its first row, DOWN on its last and LEFT all close it
+            // back onto the item that opened it; RIGHT goes nowhere.
+            match dir {
+                Dir::Right => return Some(Outcome::Nothing),
+                Dir::Up | Dir::Down => {
+                    let moved = self.focus_resolution(rig, parts, entry, 1, tap, |engine, view, cx|
+                        engine.move_dir(owner, view, &[], dir, cx));
+                    if !matches!(moved, Outcome::Nothing) { return Some(moved); }
+                }
+                Dir::Left => {}
+            }
+            return Some(self.close_rail_popover(rig, parts, entry, tap));
+        }
+        if dir == Dir::Right && self.chrome_focused(entry) {
+            return Some(self.leave_rail(rig, parts, entry, tap));
+        }
+        None
+    }
+
+    /// BACK on the rail: closes the popover, or returns to the seat a LEFT came from. `false`
+    /// when there is neither, so the page's own BACK still runs.
+    fn chrome_back(&mut self, rig: &mut dyn Rig<H>, parts: &CxParts<H::Elem>, entry: EntryId, id: InstanceId,
+        out: &mut Vec<Stamped<H>>, tap: &mut dyn Tap<H>) -> bool {
+        let outcome = if self.popover_focused(entry) {
+            self.close_rail_popover(rig, parts, entry, tap)
+        } else if self.rail_origin.is_some_and(|(e, _)| e == entry) {
+            self.leave_rail(rig, parts, entry, tap)
+        } else {
+            return false;
+        };
+        self.deliver_moved(id, outcome, out);
+        true
+    }
+
+    /// Close the popover and put focus back on the item that opened it.
+    fn close_rail_popover(&mut self, rig: &mut dyn Rig<H>, parts: &CxParts<H::Elem>, entry: EntryId,
+        tap: &mut dyn Tap<H>) -> Outcome<H::Elem> {
+        let Some(opener) = self.nav.tabs.close_popover() else { return Outcome::Nothing };
+        let owner = InputOwner::Entry(entry);
+        self.focus_resolution(rig, parts, entry, 1, tap, |engine, _, _|
+            engine.set(owner, FocusKey { entry, elem: opener }, Some(super::containers::tabs::STRIP), super::screen::By::Dir))
+    }
+
+    /// Into the rail from the page: the current group becomes the remembered way back.
+    fn enter_rail(&mut self, rig: &mut dyn Rig<H>, parts: &CxParts<H::Elem>, entry: EntryId,
+        tap: &mut dyn Tap<H>) -> Outcome<H::Elem> {
+        use super::containers::tabs::STRIP;
+        let owner = InputOwner::Entry(entry);
+        let mut origin = None;
+        let outcome = self.focus_resolution(rig, parts, entry, 1, tap, |engine, view, cx| {
+            let Some(cur) = engine.current(owner) else { return Outcome::Nothing };
+            if view.strip.is_none() || cur.elem.index().is_some_and(|i| i >= STRIP_BASE) {
+                return Outcome::Nothing;
+            }
+            let Some(group) = view.group_of(&cur.elem, cx) else { return Outcome::Nothing };
+            origin = Some(group);
+            engine.move_dir(owner, view, &[super::screen::Link { from: group, dir: Dir::Left, to: STRIP }], Dir::Left, cx)
+        });
+        if matches!(outcome, Outcome::Moved { .. }) {
+            self.rail_origin = origin.map(|group| (entry, group));
+        }
+        outcome
+    }
+
+    /// Out of the rail to the page: the remembered seat of the group a LEFT came from, else the
+    /// nearest group to the right, else the page's first group.
+    fn leave_rail(&mut self, rig: &mut dyn Rig<H>, parts: &CxParts<H::Elem>, entry: EntryId,
+        tap: &mut dyn Tap<H>) -> Outcome<H::Elem> {
+        use super::containers::tabs::{POPOVER, STRIP};
+        let owner = InputOwner::Entry(entry);
+        let origin = self.rail_origin.take().filter(|(e, _)| *e == entry).map(|(_, group)| group);
+        self.focus_resolution(rig, parts, entry, 1, tap, |engine, view, cx| {
+            if let Some(group) = origin {
+                let seat = engine.remembered_for(entry).into_iter().find(|(g, _)| *g == group)
+                    .map(|(_, elem)| view.reconcile(FocusKey { entry, elem }, cx))
+                    .filter(|key| view.group_of(&key.elem, cx) == Some(group));
+                if let Some(key) = seat {
+                    return engine.set(owner, key, Some(group), super::screen::By::Dir);
+                }
+            }
+            let moved = engine.move_dir(owner, view, &[], Dir::Right, cx);
+            if !matches!(moved, Outcome::Nothing) { return moved; }
+            let mut groups = Vec::new();
+            view.page.groups(cx, &mut groups);
+            let Some(first) = origin.or_else(|| groups.iter().find(|g| g.len > 0 && g.id != STRIP && g.id != POPOVER).map(|g| g.id))
+                else { return Outcome::Nothing };
+            engine.move_dir(owner, view, &[super::screen::Link { from: STRIP, dir: Dir::Right, to: first }], Dir::Right, cx)
+        })
     }
 
     /// Resolve on a scratch scope during replay. An experimental algorithm cannot pollute

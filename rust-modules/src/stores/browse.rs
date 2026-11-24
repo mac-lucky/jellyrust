@@ -58,10 +58,9 @@ pub(crate) enum BrowseCmd {
         target: SectionAddress,
         work: LibraryWork,
     },
-    /// Point the listing at section `i` (a pill or library-row press, committed at the fade floor).
+    /// Point the listing at section `i`: a test fixture's current library.
     #[cfg(test)]
     SetCur(usize),
-    RecheckShares,
     /// The Home editor's draft commit: one record for the whole session, carrying **the rows the
     /// viewer ANSWERED** — `(section index, the value they left it at)` — and not the rows the
     /// editor happened to be showing.
@@ -133,15 +132,10 @@ impl BrowseStore {
         let quiet = matches!(&cmd, BrowseCmd::Addressed {
             work: LibraryWork::Want { .. } | LibraryWork::Letters | LibraryWork::Genres, ..
         });
-        let roster_changed = if matches!(&cmd, BrowseCmd::RecheckShares) {
-            self.sync_roster()
-        } else {
-            false
-        };
         if matches!(&cmd, BrowseCmd::Reset) {
             self.adapter = Arc::new(Default::default());
         }
-        let changed = self.state.run_owned(&self.adapter, cmd) || roster_changed;
+        let changed = self.state.run_owned(&self.adapter, cmd);
         if !quiet && (!change_sensitive || changed) {
             self.bump();
         }
@@ -424,6 +418,9 @@ pub(crate) enum QueryEdit {
     Sort { key: String, desc: bool },
     Unwatched(bool),
     Genre(Option<String>),
+    /// The Library page's Genres-tab drill-in: the same genre filter, marked as the page's view
+    /// (`ListingView::drilled`). `None` clears it only while it is still the drill's.
+    Drill(Option<String>),
     LibraryType(LibraryType),
 }
 

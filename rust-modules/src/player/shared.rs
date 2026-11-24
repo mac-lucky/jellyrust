@@ -586,6 +586,12 @@ pub(crate) struct Shared {
     /// Unlike `demux_failed`, this is not gated on a zero-frame start: a truncated live transfer
     /// is an error rather than a successful early EOF.
     pub demux_io_failed: AtomicBool,
+    /// The demuxer's curl source asked for a byte range on a reconnect and the server answered
+    /// from somewhere else (`curlio::OpenErr::RangeIgnored`). The server is up and answering, so
+    /// a transcode whose transfer died this way can be restarted at once
+    /// (`pump::recover_failed_source_route`); any other transport failure may be a server that is
+    /// gone, where a synchronous rebuild would hang the frame.
+    pub demux_range_ignored: AtomicBool,
     /// WHY the demuxer found nothing to feed, when the answer is "the stream itself": the server
     /// delivered audio streams and no video stream. Issue #22's whole shape — a transcode target
     /// the server cannot honour makes PMS drop the video track, and `ff: no video stream` alone
@@ -971,6 +977,7 @@ impl Shared {
             pb_state: AtomicU8::new(PlaybackState::Idle as u8),
             demux_failed: AtomicBool::new(false),
             demux_io_failed: AtomicBool::new(false),
+            demux_range_ignored: AtomicBool::new(false),
             demux_no_video: AtomicBool::new(false),
             load_failed: AtomicBool::new(false),
             load_timed_out: AtomicBool::new(false),
@@ -1648,6 +1655,7 @@ impl Shared {
             .store(PlaybackState::Idle as u8, Ordering::Relaxed);
         self.demux_failed.store(false, Ordering::Relaxed);
         self.demux_io_failed.store(false, Ordering::Relaxed);
+        self.demux_range_ignored.store(false, Ordering::Relaxed);
         self.demux_no_video.store(false, Ordering::Relaxed);
         self.load_failed.store(false, Ordering::Relaxed);
         self.load_timed_out.store(false, Ordering::Relaxed);

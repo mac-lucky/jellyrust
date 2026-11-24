@@ -66,6 +66,10 @@ pub(crate) enum AppFx {
     ItemMenu(ItemMenuReq),
     /// The Jellyfin sign-in screen's network steps and its handoff — see [`JfAuthCmd`].
     JfAuth(JfAuthCmd),
+    /// The Favorites page's lists, read on a worker from the browsed server (`app::bridge`) and
+    /// answered on `reply`, which the page polls each tick; a refused spawn drops the sender.
+    Favorites { reply: std::sync::mpsc::Sender<Option<(crate::catalog::ServerId,
+        Vec<(crate::jf::favorites::Favorite, Vec<crate::jf::models::BaseItemDto>)>)>> },
 }
 
 /// **What the Jellyfin sign-in screen asks for.** Every network step runs on a worker
@@ -137,6 +141,7 @@ pub(crate) enum PreferenceCmd {
     NextEpisode { mode: crate::catalog::session::NextEpisodeMode, reply: std::sync::mpsc::Sender<bool> },
     InstantDpadSeeking { value: crate::catalog::session::InstantDpadSeeking, reply: std::sync::mpsc::Sender<bool> },
     EpisodeNavigation { value: crate::catalog::session::EpisodeNavigation, reply: std::sync::mpsc::Sender<bool> },
+    VoicePreference { value: crate::catalog::session::VoicePreference, reply: std::sync::mpsc::Sender<bool> },
     SkipInterval { interval: crate::catalog::session::SkipInterval, reply: std::sync::mpsc::Sender<bool> },
     RootBack { choice: crate::catalog::session::RootBack, reply: std::sync::mpsc::Sender<bool> },
     SubtitleSize { size: crate::catalog::session::SubtitleSize, reply: std::sync::mpsc::Sender<bool> },
@@ -164,11 +169,12 @@ pub(crate) enum PreferenceCmd {
 ///   `route::request_play_movie` needs the part id, duration, resume offset and media flags, and
 ///   the only way back from a bare key used to be `pms::index_of_rk`, which walks the HOME hub
 ///   catalog alone — so on a Library, Search or person tile the press silently did nothing.
-///   `None` for the detail page's filmstrip and season menus, which play through the loaded season.
+///   `None` for the detail page's filmstrip and season menus, which play through the loaded season;
+///   a watch write from either re-reads that page.
 /// * `loaded_episode` — `MenuHost::is_loaded_episode`, the one bit that changed what an action
 ///   means: only the filmstrip's rk is a leaf of the season the mounted page has loaded, so its
-///   Play from Start goes through that page's own episode path and its scrobble makes the page
-///   re-read itself. Every other entry point — including the detail page's own RELATED shelf,
+///   Play from Start goes through that page's own episode path, and its re-read keeps its place in
+///   the filmstrip. Every other entry point — including the detail page's own RELATED shelf,
 ///   which stands on that page while its tiles are OTHER items — is a card row.
 /// * `from_home` — `menu_leave`'s only question (`matches!(host, MenuHost::Home)`): a navigation
 ///   out of a menu opened on a HOME shelf resets the trail, because Home is the trail's root and
@@ -262,8 +268,6 @@ pub(crate) enum SearchReq {
     /// hit from a server that ignored `includeCollections`), `tag` its tag id; both are checked
     /// against the retained selection before the route is built from it.
     Collection { sid: crate::catalog::ServerId, rk: String, tag: i64 },
-    Tab(HomeTab),
-    Account,
 }
 
 /// Bounded actions emitted by the owned Home page. Item identity is always server-scoped.
@@ -272,19 +276,10 @@ pub(crate) enum HomeReq {
     Play { sid: crate::catalog::ServerId, rk: String, resume_ns: i64 },
     Detail { sid: crate::catalog::ServerId, rk: String },
     ItemMenu { sid: crate::catalog::ServerId, rk: String },
+    /// OK on a My Media tile: open that library (`app::bridge::open_library`).
+    Library(LibrarySectionIdentity),
     /// BACK from the shelves: fold to the hero and seat the engine in its remembered hero group.
     FoldToHero,
-    Account,
-    Tab(HomeTab),
-}
-
-/// Stable top-strip destinations; availability changes presentation, never identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum HomeTab {
-    Home,
-    Movies,
-    Shows,
-    Search,
 }
 
 /// Addressed bootstrap/diagnostic intentions. They use the same owned step and focus engine as
@@ -293,7 +288,6 @@ pub(crate) enum HomeTab {
 pub(crate) enum HomeCmd {
     FocusGrid { row: usize, col: usize },
     Hero,
-    FocusStrip(HomeTab),
     Flip(i32),
     SelectHero(i32),
     /// [`SelectHero`](Self::SelectHero), then HOLD that slot: the auto-advance stops for the
@@ -312,13 +306,13 @@ pub(crate) enum LibraryReq {
     Play { sid: crate::catalog::ServerId, rk: String, resume_ns: i64 },
     Detail { sid: crate::catalog::ServerId, rk: String },
     ItemMenu { sid: crate::catalog::ServerId, rk: String, from_deck: bool },
-    Account,
-    Tab(HomeTab),
-    BackToHome { kind: crate::stores::browse::SecKind },
+    /// Litefin's library Shuffle: open a random title of library `section`, picked by its server.
+    Shuffle { sid: crate::catalog::ServerId, section: i64 },
+    BackToHome,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LibraryMenuKind { Sort, Filter, Genre, Sources, Type }
+pub(crate) enum LibraryMenuKind { Sort, Filter, Genre, Type }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LibraryMenuArg {
@@ -334,7 +328,7 @@ impl nj_machine::machine::LogicalState for LibraryMenuArg {
         c.u32(self.host.0).u32(self.target.epoch).u32(u32::from(self.target.sid.raw()))
             .u64(self.target.section as u64).u32(match self.kind {
                 LibraryMenuKind::Sort => 0, LibraryMenuKind::Filter => 1,
-                LibraryMenuKind::Genre => 2, LibraryMenuKind::Sources => 3, LibraryMenuKind::Type => 4,
+                LibraryMenuKind::Genre => 2, LibraryMenuKind::Type => 4,
             });
         for value in self.anchor { c.u32(value); }
     }
@@ -442,9 +436,10 @@ impl nj_machine::machine::LogicalState for ItemMenuArg {
 }
 
 /// Addressed simulator/harness intentions. They are resolved by the mounted instance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LibraryCmd {
-    Enter(crate::stores::browse::SecKind),
+    /// Show this library: the rail's Libraries popover, and the dev `library=<n>` trigger.
+    Enter(LibrarySectionIdentity),
     /// Seat focus on one grid card (tests, and the screenshot pipeline's `nativejelly-libgrid`).
     FocusGrid { row: usize, col: usize },
     /// Seat focus on one card of a hub shelf above the grid, `shelf` counted from the top (the
@@ -473,7 +468,6 @@ pub(crate) struct LibrarySectionIdentity {
 /// instance registry as tombstones so `KeyRegion` never guesses ownership from live membership.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum LibraryIdentity {
-    Library(LibrarySectionIdentity),
     Shelf {
         section: LibrarySectionIdentity,
         hub: String,
@@ -522,6 +516,8 @@ pub(crate) struct LibraryMemory {
     pub(crate) section: Option<LibrarySectionIdentity>,
     pub(crate) scroll: f32,
     pub(crate) shelf_scroll: Vec<(String, f32)>,
+    /// Litefin's Genres view (its rows, or one genre's grid) survives an eviction and remount.
+    pub(crate) genres: crate::screens::library::GenreView,
 }
 
 /// Section-owned document geometry, deliberately without any current or remembered item.
@@ -846,6 +842,7 @@ impl nj_machine::machine::LogicalState for PageMemory {
                 c.bool(memory.grid_reset_pending);
                 c.seq(memory.viewports.len());
                 for viewport in &memory.viewports { viewport.write(c); }
+                memory.genres.write(c);
             }
             Self::Search(memory) => { c.u32(6); memory.write(c); }
         }
@@ -859,7 +856,6 @@ fn write_library_section(section: &LibrarySectionIdentity, c: &mut nj_machine::m
 
 fn write_library_identity(identity: &LibraryIdentity, c: &mut nj_machine::machine::Canon) {
     match identity {
-        LibraryIdentity::Library(section) => { c.u32(0); write_library_section(section, c); }
         LibraryIdentity::Shelf { section, hub, sid, rk } => {
             c.u32(1); write_library_section(section, c); c.str(hub).u32(u32::from(sid.raw())).str(rk);
         }
@@ -892,7 +888,7 @@ fn write_home_hub(hub: &HomeHubIdentity, c: &mut nj_machine::machine::Canon) {
     }
 }
 
-pub(crate) const PAGE_MEMORY_SHAPE: &str = "PageMemory{None,Detail:{spot:Spot{section:i32,col:i32,ep_text:bool,saved_col:[i32;8],season:Option<i64>},next_elem:u32,keys:[{identity:DetailIdentity{Season(sid:u32,show:str,rk:str),Episode(sid:u32,rk:str,text:bool),Related(sid:u32,rk:str),Cast(sid:u32,key:str,guid:str,name:str,role:str),Extra(sid:u32,rk:str),CollectionMember(sid:u32,rk:str),Slot(u32)},elem:u32}]},Person:{next_card_elem:u32,header_marked:bool,card_keys:[{sid:ServerId,rk:String,elem:u32}]},Collection:{next_elem:u32,header_marked:bool,card_keys:[{sid:ServerId,rk:String,elem:u32}]},Filmography:{next_elem:u32,department:String,keys:[{department:String,catalog_id:Option<String>,elem:u32}],preview:Option<(String,String)>},Home:{next_group:u32,next_elem:u32,groups:[{identity:HomeHubIdentity{ContinueWatching,Identifier{sid:ServerId,id:String,key:String},Key{sid:ServerId,key:String},Ephemeral{generation:u32,ordinal:u32}},group:u32}],items:[{identity:HomeItemIdentity{Item{hub:HomeHubIdentity,sid:ServerId,rk:String},Slot{hub:HomeHubIdentity,generation:u32,ordinal:u32}},elem:u32,last_row:u32,last_col:u32}],carousel:Option<(ServerId,String)>,strip_chosen:bool,scroll_y:f32,row_scroll:[(group:u32,scroll:f32)]},Library:{next_elem:u32,section:Option<{sid:ServerId,key:i64}>,scroll:f32,keys:[{identity:LibraryIdentity,elem:u32,last_group:u32,last_index:u32}],shelf_scroll:[(hub:String,scroll:f32)],epoch:Option<u32>,query:Option<u32>,grid_reset_pending:bool,viewports:[LibraryViewport{epoch:u32,section:{sid:u32,key:u64},scroll:f32,shelves:[(id:str,x:f32)]}]}}";
+pub(crate) const PAGE_MEMORY_SHAPE: &str = "PageMemory{None,Detail:{spot:Spot{section:i32,col:i32,ep_text:bool,saved_col:[i32;8],season:Option<i64>},next_elem:u32,keys:[{identity:DetailIdentity{Season(sid:u32,show:str,rk:str),Episode(sid:u32,rk:str,text:bool),Related(sid:u32,rk:str),Cast(sid:u32,key:str,guid:str,name:str,role:str),Extra(sid:u32,rk:str),CollectionMember(sid:u32,rk:str),Slot(u32)},elem:u32}]},Person:{next_card_elem:u32,header_marked:bool,card_keys:[{sid:ServerId,rk:String,elem:u32}]},Collection:{next_elem:u32,header_marked:bool,card_keys:[{sid:ServerId,rk:String,elem:u32}]},Filmography:{next_elem:u32,department:String,keys:[{department:String,catalog_id:Option<String>,elem:u32}],preview:Option<(String,String)>},Home:{next_group:u32,next_elem:u32,groups:[{identity:HomeHubIdentity{ContinueWatching,Identifier{sid:ServerId,id:String,key:String},Key{sid:ServerId,key:String},Ephemeral{generation:u32,ordinal:u32}},group:u32}],items:[{identity:HomeItemIdentity{Item{hub:HomeHubIdentity,sid:ServerId,rk:String},Slot{hub:HomeHubIdentity,generation:u32,ordinal:u32}},elem:u32,last_row:u32,last_col:u32}],carousel:Option<(ServerId,String)>,strip_chosen:bool,scroll_y:f32,row_scroll:[(group:u32,scroll:f32)]},Library:{next_elem:u32,section:Option<{sid:ServerId,key:i64}>,scroll:f32,keys:[{identity:LibraryIdentity,elem:u32,last_group:u32,last_index:u32}],shelf_scroll:[(hub:String,scroll:f32)],epoch:Option<u32>,query:Option<u32>,grid_reset_pending:bool,viewports:[LibraryViewport{epoch:u32,section:{sid:u32,key:u64},scroll:f32,shelves:[(id:str,x:f32)]}],genres:Off|Rows|Drill{id:str}}}";
 
 /// Effects cross the screen/loop boundary; screens do not poll one another's pending latches.
 pub(crate) enum ContentReq {
@@ -1145,7 +1141,6 @@ pub(crate) enum AppMsg {
     Home(HomeCmd),
     Library(LibraryCmd),
     LibraryEdit { target: crate::stores::browse::SectionAddress, edit: crate::stores::browse::QueryEdit },
-    LibrarySelect(crate::stores::browse::SectionAddress),
     DetailRestore {
         spot: crate::metadata::Spot,
         episode: Option<String>,
@@ -1154,7 +1149,7 @@ pub(crate) enum AppMsg {
         refresh: DetailRefreshPhase,
     },
     /// The *Also available* surface committed a row: open that copy's own page. The SURFACE names
-    /// the destination and the PAGE navigates, which is `LibraryMenu`'s shape (`LibrarySelect`) and
+    /// the destination and the PAGE navigates, which is `LibraryMenu`'s shape (`LibraryEdit`) and
     /// what keeps "what a press means on the Detail page" in one place instead of two.
     AltSourceOpen(ContentArg),
     /// The *Version* surface committed a row: make the version whose part is `part` the one the
@@ -1258,6 +1253,7 @@ pub(crate) mod word {
     /// tool that greps for it are unchanged too.
     pub(crate) const ITEM_MENU: &str = "itemmenu";
     pub(crate) const PERSON: &str = "person";
+    pub(crate) const FAVORITES: &str = "favorites";
     pub(crate) const COLLECTION: &str = "collection";
     pub(crate) const SETTINGS: &str = "settings";
     pub(crate) const PRIVACY: &str = "privacy";
@@ -1583,13 +1579,19 @@ pub(crate) enum AppArg {
     Onboard,
     /// The Home shelves — the app's ROOT page, and the one page that is always there.
     Home,
-    /// The Library browse grid. Its sort/filter/source panels are [`Self::LibraryMenu`] entries;
-    /// WHICH library is the `browse` store's business, not this argument's, which is why it
-    /// carries nothing (the grid is re-ENTERED, never re-queried).
+    /// The Library browse grid, of ONE library at a time. Its sort/filter/source panels are
+    /// [`Self::LibraryMenu`] entries. Which library it opens with is the mount's seed
+    /// ([`AppMounter::library_section`], set by the rail's Libraries popover) and from then on the
+    /// `browse` store's business, which is why the argument carries nothing: the page is one
+    /// instance whichever library it shows, and a second library is a teleport inside it, never a
+    /// second page.
     Library,
     /// The Search screen. A PEER of Home and the Library, not a stacking page: it is reached from
-    /// the strip's last pill and BACK from it returns to Home. What it OPENS stacks; it does not.
+    /// the rail and BACK from it returns to Home. What it OPENS stacks; it does not.
     Search,
+    /// The Favorites page (`screens::favorites`), the rail's second item: a peer of Home like
+    /// Search, its rows the user's favourites as the browsed server lists them.
+    Favorites,
     /// Playback. Its panels are NOT here — they are entries on the player page's own
     /// `ModalStack` ([`Self::PlayerOverlay`]), and the container owns which one is up.
     Player,
@@ -1604,7 +1606,7 @@ pub(crate) enum AppArg {
     FirstRunConsent(u8),
 }
 
-pub(crate) const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,Search,Player,Content:{Detail{sid:u32,rk:str},Person{sid:u32,key:str,guid:str,name:str,thumb:str},Filmography{sid:u32,key:str},Collection{sid:u32,rk:str,sec:i64,tag:i64,name:str}},Settings:SettingsPage{Root,Playback,AudioSubtitles,Favourites,Privacy,Legal,About,Document(u8),Preview(u8),ConsentStage(u8),Language,Contribute},FirstRunConsent(u8),LibraryMenu{host:u32,target:{epoch:u32,sid:u32,section:u64},kind:u32,anchor:[u32;4]},\
+pub(crate) const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,Search,Favorites,Player,Content:{Detail{sid:u32,rk:str},Person{sid:u32,key:str,guid:str,name:str,thumb:str},Filmography{sid:u32,key:str},Collection{sid:u32,rk:str,sec:i64,tag:i64,name:str}},Settings:SettingsPage{Root,Playback,AudioSubtitles,Favourites,Privacy,Legal,About,Document(u8),Preview(u8),ConsentStage(u8),Language,Contribute},FirstRunConsent(u8),LibraryMenu{host:u32,target:{epoch:u32,sid:u32,section:u64},kind:u32,anchor:[u32;4]},\
      PlayerOverlay{Tracks(tab:i32),Info,Chapters,More(quality:bool)},\
      AltSources{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
      TracksPanel{page:i32},AboutPanel,PersonBio,CollectionAbout,AccountMenu,\
@@ -1644,6 +1646,8 @@ impl LogicalState for AppArg {
             Self::Home => { c.u32(0).u32(3); }
             Self::Library => { c.u32(0).u32(6); }
             Self::Search => { c.u32(0).u32(9); }
+            // 11, after the player's 10: page canon bytes are allocated forward like `ScreenId`.
+            Self::Favorites => { c.u32(0).u32(11); }
             Self::Player => { c.u32(0).u32(10); }
             Self::Content(arg) => { c.u32(1); arg.write(c); }
             Self::Settings(page) => { c.u32(2); page.write(c); }
@@ -1654,20 +1658,23 @@ impl LogicalState for AppArg {
 }
 
 impl crate::ui::screen::ScreenArg for AppArg {
-    /// **Which pages draw the shared top tab bar** — `route_wears_tab_bar`'s body, in the one
-    /// place that ever asked it. Exhaustive on purpose: a new screen must not be able to answer
-    /// this by accident, because the page each surface stands on is what answers for the chrome
-    /// under it. Detail and Person have no bar, which is what makes every transition to or from
-    /// them fade the bar with the page.
+    /// **Which pages wear the shared rail** (Litefin's sidebar, `docs/litefin-look.md` 0:
+    /// shown on every page, details included). Exhaustive on purpose: a new screen must not be
+    /// able to answer this by accident, because the page each surface stands on is what answers
+    /// for the chrome under it. The player, sign-in and onboarding have none, so a transition to
+    /// or from them fades the rail with the page; between two rail pages it holds still.
+    ///
+    /// **Settings is the one surface that wears it.** Litefin's Settings is a page beside its
+    /// sidebar, so the dispatcher draws the rail above the Settings surface and lets it take
+    /// focus there, with Settings as the current item (`ui::dispatch::rail_entry`).
     fn chrome(&self) -> Chrome {
         match self {
-            AppArg::Home | AppArg::Library | AppArg::Search => Chrome::TabBar,
+            AppArg::Home | AppArg::Library | AppArg::Search | AppArg::Favorites | AppArg::Content(_)
+            | AppArg::Settings(_) => Chrome::TabBar,
             AppArg::Login
             | AppArg::Profiles
             | AppArg::Onboard
             | AppArg::Player
-            | AppArg::Content(_)
-            | AppArg::Settings(_)
             | AppArg::FirstRunConsent(_)
             | AppArg::LibraryMenu(_)
             | AppArg::AccountMenu
@@ -1698,6 +1705,7 @@ impl crate::ui::screen::ScreenArg for AppArg {
             AppArg::CollectionAbout => 24,
             AppArg::Versions(_) => 25,
             AppArg::TrackChoice(_) => 26,
+            AppArg::Favorites => 27,
             // 19 and 20, not the 5 and 6 `Route::Account`/`Route::ItemMenu` vacated when this
             // phase deleted them, and not the 17/18 these two carried on their own branch: ids
             // are allocated forward here so a retired identity is never handed to the screen
@@ -1788,7 +1796,9 @@ pub(crate) struct AppMounter {
     /// many episodes the chain runs for. That was `Origin::Unchanged` and a `set_origin` call;
     /// it is now the absence of a write.
     pub(crate) player_origin: Option<crate::screens::player::Origin>,
-    pub(crate) library_kind: Option<crate::stores::browse::SecKind>,
+    /// The library the NEXT Library instance opens on (the rail's popover, the dev trigger);
+    /// unset, it adopts the store's current library.
+    pub(crate) library_section: Option<LibrarySectionIdentity>,
     /// How long the NEXT player instance pins its transport for, in ms — `HUD_LINGER_MS` for an
     /// ordinary start and `HUD_HEADLESS_MS` for a capture run. It is a seed rather than a constant
     /// because `start_playback` is what knows which, and because the deadline must be stamped from
@@ -1915,9 +1925,7 @@ where
                 Box::new(page)
             }
             AppArg::Library => {
-                let kind = self.library_kind.or_else(|| H::directory(cx).current().map(|i| H::directory(cx).sections()[i].kind))
-                    .unwrap_or(crate::stores::browse::SecKind::Movie);
-                let mut page = crate::screens::library::LibraryScreen::new(entry, id, kind);
+                let mut page = crate::screens::library::LibraryScreen::new(entry, id, self.library_section.take());
                 if let PageMemory::Library(memory) = &ret.memory { page.restore(memory); }
                 Box::new(page)
             }
@@ -1926,6 +1934,7 @@ where
                 if let PageMemory::Search(memory) = &ret.memory { page.restore(memory); }
                 Box::new(page)
             }
+            AppArg::Favorites => Box::new(crate::screens::favorites::FavoritesScreen::new(entry, id)),
             // Phase 9: the player is an OWNED screen — the instance that holds the HUD, the scrub
             // gesture, the held-key timer, the control row's springs and the Up Next countdown,
             // and that answers `RenderStrategy::VideoPlane`. Its transport is pinned from the
@@ -2054,6 +2063,7 @@ pub(crate) fn every_surface_arg() -> Vec<AppArg> {
             | AppArg::Home
             | AppArg::Library
             | AppArg::Search
+            | AppArg::Favorites
             | AppArg::Player
             | AppArg::Content(_) => {
                 panic!("a page argument is not a surface: its word is `route=`")
@@ -2092,7 +2102,6 @@ pub(crate) const SCREEN_SHAPES: &[&str] = &[
     crate::screens::library::SHAPE[4],
     crate::screens::library::SHAPE[5],
     crate::screens::library::SHAPE[6],
-    crate::screens::library::SHAPE[7],
     crate::screens::library::menu::SHAPE[0],
     crate::screens::library::menu::SHAPE[1],
     crate::screens::account_menu::SHAPE,
@@ -2117,6 +2126,7 @@ pub(crate) const SCREEN_SHAPES: &[&str] = &[
     crate::screens::track_choice::SHAPE[0],
     crate::screens::track_choice::SHAPE[1],
     crate::screens::jf_users::SHAPE,
+    crate::screens::favorites::SHAPE,
 ];
 
 /// The pin over [`SCREEN_SHAPES`] — bump it in the same edit that adds an entry, and say why.
@@ -2235,7 +2245,14 @@ pub(crate) const SCREEN_SHAPES: &[&str] = &[
 // Previous pin: 0x25225533d7b73f9f. Synthetic anchors are rerecorded.
 // Rapid taps also record their latest deferred jump while a previous seek lands.
 // Previous pin: 0xc64a75618ef316c8. Synthetic anchors are rerecorded.
-const SCREEN_SHAPES_PIN: u64 = 0x682dd283a9d69632;
+// Previous pin: 0x16e1f98fd2c2a907. Litefin wave B: rail Library section + settings TableView style.
+// Litefin's Home records its hero band and Ken Burns timer in place of the hero buttons' pops
+// and the slide direction (its slides crossfade).
+// Previous pin: 0x08cf2d0ab2d885dd. Litefin integration: the library head, Genres memory and
+// alphabet bar, the HUD cursor without its tabs row, the track-menu table style, and the
+// Favorites screen.
+// Previous pin: 0xb720f5575b1a29a8. The library's pending edit gains the Genres tab's drill-in.
+const SCREEN_SHAPES_PIN: u64 = 0x07de630ea639f9d6;
 
 #[cfg(test)]
 mod arg_tests {
@@ -2278,34 +2295,18 @@ mod arg_tests {
 
     // ---- the bar-wearing alphabet -------------------------------------------------------------
 
-    /// **The profile chip is offered on exactly the pages that wear the shared top bar.**
-    ///
-    /// This test used to be `the_profile_popover_stands_on_the_page_it_was_opened_from`, and it
-    /// graded `Route::Account { over: BarHost }` through `page_of`: the chip is a stop on all
-    /// three bar screens, so the route had to CARRY the page underneath or a press on the
-    /// Library's chip would cut to Home under the panel and strand the user there on dismissal.
-    ///
-    /// The menu is a `ModalStack` surface since phase 10, so that whole class of bug is gone by
-    /// construction — a surface is presented OVER the top page and never replaces it, which is
-    /// why `Route::Account` and `BarHost` are both deleted. What survives of the old rule is the
-    /// half `BarHost::of` answered: WHICH pages have a chip to press at all. It is derived from
-    /// `ScreenArg::chrome` now (the chip is a control on that bar), so the two cannot drift —
-    /// which is exactly what `BarHost::of`'s own hand-written three-route list could do.
-    /// `app::bridge`'s `the_profile_menu_is_a_surface_over_the_page_whose_chip_was_pressed`
-    /// grades the other half, on a real tree.
-    ///
-    /// It is asked of `ScreenArg::chrome` DIRECTLY, here, rather than of its one-line consumer
-    /// (`app::input::wears_the_chip`, which is `chrome() == Chrome::TabBar` and nothing else):
-    /// this file is where a page argument joins the alphabet, so the bar-wearing set and the
-    /// screen that joins it land in the same commit. A `screens/` module may not name
-    /// `crate::app::` at all (`ci/check-deps.sh`'s `layer` gate), which is the same boundary
-    /// stated as a rule.
+    /// **The rail — and the account avatar at its foot — is on exactly the pages Litefin shows
+    /// its sidebar on**: every browsing page, the detail, person and collection pages included,
+    /// and never the player, sign-in or onboarding (`docs/litefin-look.md` 0, Sidebar mode
+    /// shown). Asked of `ScreenArg::chrome` DIRECTLY, here, because this file is where a page
+    /// argument joins the alphabet, so the rail-wearing set and the screen that joins it land in
+    /// the same commit. `app::bridge`'s
+    /// `the_profile_menu_is_a_surface_over_the_page_whose_avatar_was_pressed` grades the other
+    /// half, on a real tree.
     #[test]
-    fn the_profile_chip_is_offered_on_exactly_the_bar_wearing_pages() {
-        for r in [AppArg::Home, AppArg::Library, AppArg::Search] {
-            assert!((r.chrome() == Chrome::TabBar), "a bar-wearing page carries the chip");
-        }
+    fn the_rail_is_worn_on_exactly_the_browsing_pages() {
         for r in [
+            AppArg::Home, AppArg::Library, AppArg::Search,
             AppArg::Content(crate::screens::registry::ContentArg::Detail {
                 sid: crate::catalog::ServerId::UNSET, rk: String::new(),
             }),
@@ -2316,15 +2317,11 @@ mod arg_tests {
             AppArg::Content(crate::screens::registry::ContentArg::Collection(
                 crate::catalog::collections::CollectionRef::by_tag(crate::catalog::ServerId::UNSET, 0, 1, ""),
             )),
-            AppArg::Login,
-            AppArg::Profiles,
-            AppArg::Onboard,
-            AppArg::Player,
         ] {
-            assert!(
-                !(r.chrome() == Chrome::TabBar),
-                "only the bar-wearing screens carry the profile chip"
-            );
+            assert!((r.chrome() == Chrome::TabBar), "a browsing page wears the rail");
+        }
+        for r in [AppArg::Login, AppArg::Profiles, AppArg::Onboard, AppArg::Player] {
+            assert!(!(r.chrome() == Chrome::TabBar), "the player and the sign-in pages have no rail");
         }
     }
 

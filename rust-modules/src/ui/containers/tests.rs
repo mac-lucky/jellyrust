@@ -143,38 +143,28 @@ fn the_scrim_ladder_scales_by_appear_and_the_route_dip() {
 }
 
 /// The production dispatcher supplies one borrowed chrome projection to the bare lift callback;
-/// it must include the profile, labels and the material the normal chrome draw just published.
+/// it must include the avatar and its focus the normal chrome draw just used.
 #[test]
 fn the_scrim_callback_receives_the_normal_chromes_borrowed_frame_read() {
     use std::sync::atomic::{AtomicBool, Ordering};
     static SEEN: AtomicBool = AtomicBool::new(false);
     fn lift(read: crate::ui::screen::ScrimLiftRead<'_>) {
         let chrome = read.chrome.expect("the fixture rig supplied chrome");
-        assert_eq!(chrome.profile.name.to_bytes(), b"Captured A");
-        assert_eq!(chrome.profile.initial.to_bytes(), b"A");
-        assert_eq!(chrome.labels.labels, ["Home", "Movies", ""]);
-        assert!((chrome.chip_expand - 0.625).abs() < 1e-6);
-        let face = read.bar_material.expect("the frame plan supplied the tab face");
-        assert_eq!(face.scrim_top, [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(chrome.avatar.name.to_bytes(), b"Captured A");
+        assert!((chrome.avatar_focus - 0.625).abs() < 1e-6);
         SEEN.store(true, Ordering::Relaxed);
     }
 
     let _guard = nj_base::testlock::serial();
     SEEN.store(false, Ordering::Relaxed);
     let (mut d, mut rig, _) = booted();
-    rig.seed_scrim_chrome_for_test("Captured A", "A", &["Home", "Movies", ""], 0.625);
+    rig.seed_scrim_chrome_for_test("Captured A", 0.625);
     let id = open_modal(&mut d, &mut rig, Style::Sheet, 16);
     let modal = modal_mut(&mut d, id);
     modal.scrim_alpha = 0.5;
     modal.scrim_lift = Some(lift);
     d.nav.modals.surface_mut(id).unwrap().motion = super::modal::PopoverMotion::at(1.0);
-    let mut glass = crate::ui::frame::glass::GlassPlan::new();
-    glass.set_tab_face_for_test(nj_gfx::gfx::GlassFace {
-        scrim_top: [0.1, 0.2, 0.3, 0.4],
-        scrim_bot: [0.5, 0.6, 0.7, 0.8],
-        rim: [0.0; 4], rim_lit: [0.0; 4], rim_w: 1.0,
-    });
-    let read = crate::ui::dispatch::scrim_lift_read::<FixtureHost>(&rig, Some(&glass));
+    let read = crate::ui::dispatch::scrim_lift_read::<FixtureHost>(&rig);
     let lifts = d.nav.modals.scrims(1.0);
     assert_eq!(lifts.len(), 1, "the live surface contributes exactly one lift");
     (lifts[0].2)(read);
@@ -284,7 +274,7 @@ fn key_level(d: &Dispatcher<FixtureHost>) -> f32 {
 
 /// Draw one frame's dims through `fb`.
 fn dims_frame(d: &mut Dispatcher<FixtureHost>, rig: &FixtureRig, fb: &mut FakeFb) {
-    let read = crate::ui::dispatch::scrim_lift_read::<FixtureHost>(rig, None);
+    let read = crate::ui::dispatch::scrim_lift_read::<FixtureHost>(rig);
     d.nav.modals.draw_scrims_on(1.0, read, fb);
 }
 

@@ -96,7 +96,7 @@ impl Rig<ProbeHost> for ProbeRig {
     fn timer(&mut self, _: MachineId, _: TimerId, _: &CxParts<u32>, _: &mut Effects<'_, ProbeHost>) {}
     fn app_return(&mut self, _: MachineId, ret: ReturnState<u32, Memory>) { self.current_return = ret.memory; }
     fn app_fx(&mut self, _: MachineId, fx: AppFx, _: &CxParts<u32>, _: &mut Effects<'_, ProbeHost>) {
-        self.executed.push((matches!(fx, AppFx::Library(LibraryReq::Account)), self.current_return.0));
+        self.executed.push((matches!(fx, AppFx::Library(LibraryReq::BackToHome)), self.current_return.0));
     }
     fn log(&mut self, _: &str) {}
     fn prepare(&mut self, _: &mut Budget, _: &mut Present) {}
@@ -152,10 +152,10 @@ fn interleaved_housekeeping_keeps_navigation_bookmarks_at_emission_time_across_c
         let (mut d, mut rig) = booted();
         rig.probe.value.set(11);
         enqueue(&mut d, housekeeping().remove(0), absorb);
-        enqueue(&mut d, AppFx::Library(LibraryReq::Account), absorb);
+        enqueue(&mut d, AppFx::Library(LibraryReq::BackToHome), absorb);
         rig.probe.value.set(22);
         enqueue(&mut d, housekeeping().remove(2), absorb);
-        enqueue(&mut d, AppFx::Library(LibraryReq::Account), absorb);
+        enqueue(&mut d, AppFx::Library(LibraryReq::BackToHome), absorb);
         enqueue(&mut d, housekeeping().remove(3), absorb);
         rig.probe.value.set(99);
         for _ in 0..5 { drain(&mut d, &mut rig, 1); }

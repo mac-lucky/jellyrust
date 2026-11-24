@@ -261,16 +261,16 @@ mod tests {
 
     #[test]
     fn nightly_app_identity() {
-        assert_eq!(app_identity(Path::new("/media/developer/apps/usr/palm/services/com.sostk.nativejelly.nightly.storage/nativejelly-storage")), Ok("com.sostk.nativejelly.nightly"));
+        assert_eq!(app_identity(Path::new("/media/developer/apps/usr/palm/services/com.macluckylab.jellyrust.nightly.storage/nativejelly-storage")), Ok("com.macluckylab.jellyrust.nightly"));
     }
 
     #[test]
     fn rejects_foreign_or_malformed_install_paths() {
         for path in [
-            "/usr/palm/services/com.sostk.nativejelly.typo.storage/nativejelly-storage",
-            "/usr/palm/services/com.sostk.nativejelly.nightly/nativejelly-storage",
-            "/usr/palm/applications/com.sostk.nativejelly.nightly.storage/nativejelly-storage",
-            "/usr/palm/services/com.sostk.nativejelly.nightly.storage/other",
+            "/usr/palm/services/com.macluckylab.jellyrust.typo.storage/nativejelly-storage",
+            "/usr/palm/services/com.macluckylab.jellyrust.nightly/nativejelly-storage",
+            "/usr/palm/applications/com.macluckylab.jellyrust.nightly.storage/nativejelly-storage",
+            "/usr/palm/services/com.macluckylab.jellyrust.nightly.storage/other",
             "nativejelly-storage",
         ] {
             assert_eq!(app_identity(Path::new(path)), Err(ErrorCode::Invalid));

@@ -17,10 +17,11 @@ SCHEMA = 1
 # SPDX GPL-3.0-or-later plain text, retained verbatim as the project LICENSE.
 GPL_SHA256 = "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
 ROOT_FILES = {'Makefile', 'LICENSE', 'LICENSING.md', 'THIRD-PARTY-NOTICES.md',
-              'README.md', 'CONTRIBUTING.md', 'DCO', 'PRIVACY.md', 'SECURITY.md',
+              'README.md', 'CONTRIBUTING.md', 'CONTRIBUTORS.md', 'DCO', 'PRIVACY.md', 'SECURITY.md',
               'TRADEMARKS.md', '.gitignore', 'AGENTS.md', 'CLAUDE.md'}
 ROOT_DIRS = {'src', 'include', 'rust-modules', 'assets', 'ci', 'tools', 'docs', 'tests', 'licenses', 'locales', '.agents'}
-PKG_FILES = {'OFL.txt', 'appfont.ttf', 'appfont-bold.ttf', 'appfont-cjk.ttf',
+PKG_FILES = {'OFL.txt', 'appfont.ttf', 'appfont-bold.ttf', 'appfont-inter.ttf', 'appfont-inter-bold.ttf',
+             'appfont-cjk.ttf',
              'appinfo.json', 'icon.png', 'icon160.png', 'icon320.png', 'icon400.png',
              'largeIcon.png', 'splash.png', 'telemetry.local.json.example'}
 PRIVATE_NAMES = {'.tv-host', '.tv-mac', '.tv-dpad-pass', '.tv-remote-url',

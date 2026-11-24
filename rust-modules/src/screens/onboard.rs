@@ -24,7 +24,7 @@ use crate::ui::route_screen::RouteLayout;
 use super::family::SessionGround as RouteGround;
 use crate::ui::screen::{DrawFrame, Enter, FocusSource, FocusTarget, HitSource, Part, RenderStrategy, Screen, ScreenEvent};
 use crate::ui::form::{FormTable, RowKey};
-use crate::appkit::source_list::{self, Level, SrcTarget, Tail};
+use crate::appkit::source_list::{self, SrcTarget};
 use crate::ui::table_screen::{BandPart, Header, TableScreen};
 use crate::ui::widgets::{CtlPop, Spinner, StatusKind, StatusOverlay};
 use crate::ui::{theme, Env, Painter, View};
@@ -154,6 +154,12 @@ impl OnboardScreen {
         Self::new(entry, false, directory, super::family::pre_home_ground(hubs))
     }
     /// The Settings editor.
+    /// Favorite libraries in Settings is a page of Litefin's content panel; first run keeps the
+    /// two columns.
+    fn layout(&self) -> RouteLayout {
+        if self.settings { RouteLayout::panel() } else { RouteLayout::screen() }
+    }
+
     pub(crate) fn settings(entry: EntryId, directory: DirectoryView<'_>) -> Self {
         Self::new(entry, true, directory, RouteGround::new())
     }
@@ -248,9 +254,12 @@ impl OnboardScreen {
         let gen = directory.source_list_gen();
         let groups: Vec<_> = directory.sources().iter().map(|(_, group)| group.clone()).collect();
         let rows = self.draft_rows(directory);
-        let form = source_list::form(Level::OnHome, &groups, &rows, Tail::None);
+        let form = source_list::form(&groups, &rows);
         self.table_gen = gen;
         self.form.table.compact = false;
+        if self.settings {
+            super::family::style_page_table(&mut self.form.table);
+        }
         if keep {
             // a rebuild under the cursor (a press, a roster landing) holds the focused library by
             // identity and lets the pill glide rather than snap
@@ -341,23 +350,22 @@ impl OnboardScreen {
     }
 
     fn toggle_row(&mut self, target: SrcTarget, directory: DirectoryView<'_>) {
-        if let SrcTarget::Library(section) = target {
-            let Some(idx) = self.draft.iter().position(|(s, _)| *s == section) else {
-                return;
-            };
-            let on = self.draft[idx].1;
-            let last_pinned = on && self.draft.iter().filter(|(_, v)| *v).count() == 1;
-            if last_pinned {
-                return;
-            }
-            self.draft[idx].1 = !on;
-            // The press IS the provenance ([`Self::touched`]): recorded here, where it happened,
-            // and never recovered afterwards from what the value ended up equal to.
-            if !self.touched.contains(&section) {
-                self.touched.push(section);
-            }
-            self.rebuild(true, directory);
+        let SrcTarget::Library(section) = target;
+        let Some(idx) = self.draft.iter().position(|(s, _)| *s == section) else {
+            return;
+        };
+        let on = self.draft[idx].1;
+        let last_pinned = on && self.draft.iter().filter(|(_, v)| *v).count() == 1;
+        if last_pinned {
+            return;
         }
+        self.draft[idx].1 = !on;
+        // The press IS the provenance ([`Self::touched`]): recorded here, where it happened,
+        // and never recovered afterwards from what the value ended up equal to.
+        if !self.touched.contains(&section) {
+            self.touched.push(section);
+        }
+        self.rebuild(true, directory);
     }
 
     /// The one action pill, pressed: retry discovery (nothing found yet) or write the draft down
@@ -442,7 +450,7 @@ struct OnboardView<'a> {
 
 impl<'a> OnboardView<'a> {
     fn screen(&'a self) -> TableScreen<'a> {
-        let layout = RouteLayout::screen();
+        let layout = self.screen.layout();
         TableScreen::new(Header::new(layout, None, "", ""), &self.screen.form.table, TABLE_GROUP, self.screen.entry)
             .keyed(&self.screen.form)
             .uncommitted(self.screen.settings && self.screen.dirty())
@@ -518,7 +526,7 @@ impl<H: DirectoryLike> Machine<H> for OnboardScreen {
                 }
                 let band = cx.focus.current.and_then(|k| band_index(k.elem));
                 self.pop.step(band, dt);
-                self.form.table.update(dt, RouteLayout::screen().sectioned_table().h);
+                self.form.table.update(dt, self.layout().sectioned_table().h);
                 if self.form.table.n_rows() == 0 {
                     self.phase_ms = self.phase_clock.advance(*t, &mut fx.present()); // the spinner
                 }
@@ -715,7 +723,7 @@ impl<H: DirectoryLike> Screen<H> for OnboardScreen {
             // a first-run route is not a sheet, but it belongs to the same visual family
             self.ground.draw_home(Painter::root());
         }
-        let layout = RouteLayout::screen();
+        let layout = self.layout();
         let directory = H::directory(f.cx);
         let body = self.body_copy(directory);
         Header::new(
@@ -1843,7 +1851,6 @@ mod tests {
     fn every_favourites_row_fits_its_column_in_every_language() {
         use nj_platform::i18n::{language_on_this_thread_for_test, SHIPPED};
         let _g = nj_base::testlock::serial();
-        let frame_w = RouteLayout::screen().sectioned_table().w;
         let mut out = Vec::new();
         for language in SHIPPED {
             let _guard = language_on_this_thread_for_test(language);
@@ -1854,6 +1861,7 @@ mod tests {
             let inside = OnboardScreen::settings(EntryId(0), browse.capture());
             for (mounting, screen) in [("first run", &first), ("settings", &inside)] {
                 assert!(screen.form.table.n_rows() > 0, "the fixture must put rows in the table");
+                let frame_w = screen.layout().sectioned_table().w;
                 out.extend(screen.form.table.app_fit_failures(frame_w, &format!("{} {mounting}", language.tag())));
             }
         }

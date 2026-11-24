@@ -1,0 +1,26 @@
+{
+  "sidebar.home": {
+    "value": "Home",
+    "description": "rail item: the Home page (tooltip beside the focused icon)"
+  },
+  "sidebar.favorites": {
+    "value": "Favorites",
+    "description": "rail item: the Favorites page"
+  },
+  "sidebar.search": {
+    "value": "Search",
+    "description": "rail item: the Search page"
+  },
+  "sidebar.random": {
+    "value": "Random",
+    "description": "rail item: opens the page of one random film or series"
+  },
+  "sidebar.libraries": {
+    "value": "Libraries",
+    "description": "rail item: opens the list of the server's libraries"
+  },
+  "sidebar.settings": {
+    "value": "Settings",
+    "description": "rail item: opens Settings"
+  }
+}

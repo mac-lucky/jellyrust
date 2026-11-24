@@ -8,7 +8,6 @@ use crate::screens::registry::{
 };
 use nj_machine::machine::GroupId;
 
-const LIBRARY_BASE: u32 = 0x2100_0000;
 const SHELF_BASE: u32 = 0x2200_0000;
 const GRID_BASE: u32 = 0x2300_0000;
 const RAIL_BASE: u32 = 0x2400_0000;
@@ -17,7 +16,6 @@ const REGION_MASK: u32 = 0xff00_0000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum KeyRegion {
-    Library,
     Shelf,
     Grid,
     Rail,
@@ -26,7 +24,6 @@ pub(super) enum KeyRegion {
 
 pub(super) fn region_of_elem(elem: u32) -> Option<KeyRegion> {
     Some(match elem & REGION_MASK {
-        LIBRARY_BASE => KeyRegion::Library,
         SHELF_BASE => KeyRegion::Shelf,
         GRID_BASE => KeyRegion::Grid,
         RAIL_BASE => KeyRegion::Rail,
@@ -41,7 +38,7 @@ pub(super) struct KeyRegistry {
     // sequence until a publication actually changes a key or its recovery position; then
     // detach once for that mutation batch, retaining every older snapshot unchanged.
     keys: Arc<Vec<LibraryKey>>,
-    next: [u32; 5],
+    next: [u32; 4],
     identity_index: HashMap<LibraryIdentity, usize>,
     elem_index: HashMap<u32, usize>,
     #[cfg(test)]
@@ -50,14 +47,14 @@ pub(super) struct KeyRegistry {
 
 impl Default for KeyRegistry {
     fn default() -> Self {
-        Self { keys: Arc::new(Vec::new()), next: [0; 5], identity_index: HashMap::new(),
+        Self { keys: Arc::new(Vec::new()), next: [0; 4], identity_index: HashMap::new(),
             elem_index: HashMap::new(), #[cfg(test)] register_probes: 0 }
     }
 }
 
 impl KeyRegistry {
     pub(super) fn restore(memory: &LibraryMemory) -> Self {
-        let mut out = Self { keys: Arc::clone(&memory.keys), next: [0; 5],
+        let mut out = Self { keys: Arc::clone(&memory.keys), next: [0; 4],
             identity_index: HashMap::with_capacity(memory.keys.len()),
             elem_index: HashMap::with_capacity(memory.keys.len()),
             #[cfg(test)] register_probes: 0 };
@@ -90,6 +87,7 @@ impl KeyRegistry {
             section,
             scroll,
             shelf_scroll,
+            genres: Default::default(),
         }
     }
 
@@ -133,7 +131,6 @@ impl KeyRegistry {
 
     pub(super) fn region(&self, elem: u32) -> Option<KeyRegion> {
         let typed = match &self.key(elem)?.identity {
-            LibraryIdentity::Library(_) => KeyRegion::Library,
             LibraryIdentity::Shelf { .. } | LibraryIdentity::ShelfSlot { .. } => KeyRegion::Shelf,
             LibraryIdentity::Grid { .. } | LibraryIdentity::GridSlot { .. } => KeyRegion::Grid,
             LibraryIdentity::Rail { .. } => KeyRegion::Rail,
@@ -168,7 +165,6 @@ impl KeyRegistry {
 
 fn identity_region(identity: &LibraryIdentity) -> KeyRegion {
     match identity {
-        LibraryIdentity::Library(_) => KeyRegion::Library,
         LibraryIdentity::Shelf { .. } | LibraryIdentity::ShelfSlot { .. } => KeyRegion::Shelf,
         LibraryIdentity::Grid { .. } | LibraryIdentity::GridSlot { .. } => KeyRegion::Grid,
         LibraryIdentity::Rail { .. } => KeyRegion::Rail,
@@ -178,17 +174,15 @@ fn identity_region(identity: &LibraryIdentity) -> KeyRegion {
 
 const fn region_index(region: KeyRegion) -> usize {
     match region {
-        KeyRegion::Library => 0,
-        KeyRegion::Shelf => 1,
-        KeyRegion::Grid => 2,
-        KeyRegion::Rail => 3,
-        KeyRegion::Control => 4,
+        KeyRegion::Shelf => 0,
+        KeyRegion::Grid => 1,
+        KeyRegion::Rail => 2,
+        KeyRegion::Control => 3,
     }
 }
 
 const fn region_base(region: KeyRegion) -> u32 {
     match region {
-        KeyRegion::Library => LIBRARY_BASE,
         KeyRegion::Shelf => SHELF_BASE,
         KeyRegion::Grid => GRID_BASE,
         KeyRegion::Rail => RAIL_BASE,

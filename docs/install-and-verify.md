@@ -1,5 +1,9 @@
 # Installing Native Jelly
 
+> This is upstream Native Jelly's public install guide, kept for reference: its links, ids and
+> Homebrew Channel listing are Native Jelly's. JellyRust is not published; build and install it
+> as `README.md` describes.
+
 Native Jelly is not yet available in the LG Content Store. You can install it on a regular LG webOS TV using LG's Developer Mode and a computer. **No root is required.**
 
 ## Already have Homebrew Channel?

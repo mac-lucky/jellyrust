@@ -46,7 +46,7 @@ use crate::ui::screen::{
     At, Dir, DrawFrame, Enter, FocusSource, FocusTarget, Focusable, GroupSpec, HitSource, Mounter,
     Placed, RenderStrategy, ReturnState, Screen, ScreenEvent, Step,
 };
-use crate::ui::table::Row;
+use crate::ui::table::{Row, TableStyle};
 use crate::ui::table_screen::{Header, TableScreen};
 use crate::ui::{theme, Painter, Rect};
 
@@ -127,6 +127,10 @@ pub(crate) struct RouteSurface {
     ground_ready: bool,
     /// The focus each inner entry was left at, for the `Restored` seat on a pop.
     remembered: Vec<(EntryId, u32)>,
+    /// The rest of a boot target's trail (`SettingsPage::boot_trail`), pushed one page per commit
+    /// at mount: the inner stack holds ONE pending op, so requesting the whole trail before the
+    /// first commit kept only its last page.
+    boot: Vec<SettingsPage>,
 }
 
 impl RouteSurface {
@@ -148,15 +152,21 @@ impl RouteSurface {
             ground: if kind == Family::FirstRunConsent { super::family::pre_home_ground(hubs) } else { RouteGround::new() },
             ground_ready: false,
             remembered: Vec::new(),
+            boot: Vec::new(),
         };
         let mut trail = root.boot_trail().into_iter();
         if let Some(first) = trail.next() {
             s.inner.request(NavOp::Root(first), ReturnState::default());
         }
-        for page in trail {
-            s.inner.request(NavOp::Push(page), ReturnState::default());
-        }
+        s.boot = trail.collect();
         s
+    }
+
+    /// Is the bottom of the stack the Settings root, i.e. the category list every other page of
+    /// the family is drawn beside? (A dev boot target can root the surface at any page.)
+    fn menu_root(&self) -> bool {
+        self.kind == Family::Settings
+            && self.inner.entries.first().is_some_and(|e| e.arg == SettingsPage::Root)
     }
 
     /// The family's top page, if the stack has a body.
@@ -608,6 +618,18 @@ impl<H: DirectoryLike> Machine<H> for RouteSurface {
         match ev {
             ScreenEvent::Mount => {
                 self.run_inner(cx, fx);
+                let boot = std::mem::take(&mut self.boot);
+                // the root's category list marks, and BACK returns to, the row an interactive
+                // visit would have opened the trail from
+                if let (Some(root), Some(key)) = (self.inner.top().map(|e| e.id), boot.first().and_then(|p| root_row_for(*p))) {
+                    let to = FocusKey { entry: self.entry, elem: key.0 };
+                    self.deliver(root, ScreenEvent::FocusMoved { from: None, to, by: nj_machine::machine::By::Restore }, cx, fx);
+                    self.remembered.push((root, key.0));
+                }
+                for page in boot {
+                    self.inner.request(NavOp::Push(page), ReturnState::default());
+                    self.run_inner(cx, fx);
+                }
                 Handled::Yes
             }
             ScreenEvent::Tick(t) => {
@@ -841,7 +863,9 @@ impl<H: DirectoryLike> Screen<H> for RouteSurface {
                 // opaque ground at rest and what fades out over the host on dismissal
                 let dim = theme::scrim_black(settings_scrim_alpha(a, f.nav_page_alpha));
                 root.rect(Rect::FULL, 0.0, dim, dim, 0.0);
-                crate::ui::profile::phase("st.ground", || self.ground.draw_host(root.alpha(a)));
+                // Litefin's Settings is a page on the flat #000000 ground (`docs/litefin-look.md`
+                // 2.1, 9): no wash keyed off the host
+                root.alpha(a).rect(Rect::FULL, 0.0, theme::SURFACE_APP, theme::SURFACE_APP, 0.0);
             }
             Family::FirstRunConsent => {
                 self.ground.draw_home(root);
@@ -863,6 +887,11 @@ impl<H: DirectoryLike> Screen<H> for RouteSurface {
     fn hit_source(&self) -> HitSource {
         HitSource::Engine
     }
+    /// The rail beside Settings (`AppArg::chrome`) is reached from the category list only: a page
+    /// pushed over it answers LEFT by walking back to the list first.
+    fn strip_reachable(&self) -> bool {
+        self.inner.depth() == 1
+    }
     fn ground_ready(&self) -> bool {
         self.ground_ready
     }
@@ -876,10 +905,35 @@ impl RouteSurface {
         let t = self.push.amount();
         let icx = inner_cx(f.cx);
         let mut stops = Vec::new();
-        // the parent role: the page beneath the top on a push, the top itself on a pop
-        let parent_p = self.push.parent(entrance);
-        let child_p = self.push.child(entrance);
         let popping = self.push.leaving.is_some();
+        let depth = self.inner.entries.len();
+        // **The Settings root is Litefin's category list** (`docs/litefin-look.md` 9): it stays
+        // still at `entrance` under every page pushed over it, which slide only inside the content
+        // panel. It takes input only while it is the top.
+        let menu = self.menu_root();
+        // the parent role: the page beneath the top on a push, the top itself on a pop — never the
+        // still category list
+        let parent_is_menu = menu && if popping { depth == 1 } else { depth == 2 };
+        let (parent_p, child_p) = if menu {
+            (self.push.route.panel_parent(entrance), self.push.route.panel_child(entrance))
+        } else {
+            (self.push.parent(entrance), self.push.child(entrance))
+        };
+        if menu {
+            // popping back to the list, the root's own panel (its header and switch) takes the
+            // parent role and fades in under the leaving page's; the list itself stays still
+            let panel = if popping && parent_is_menu { parent_p } else { entrance };
+            if let Some(inst) = self.inner.entries[0].inst.as_mut() {
+                let mut inner = DrawFrame::with_navigation(&icx, entrance, navigation);
+                match inst.screen.as_any_mut().and_then(|s| s.downcast_mut::<RootPage>()) {
+                    Some(root) => root.draw_with_panel(&mut inner, panel),
+                    None => inst.screen.draw(&mut inner),
+                }
+                if depth == 1 {
+                    stops.extend(inner.into_stops());
+                }
+            }
+        }
         // **AT REST THERE IS EXACTLY ONE PAGE ON SCREEN — THE TOP — AND THE SPRING IS WHAT SAYS
         // SO.** It settles at BOTH ends (0 after a pop and at mount, 1 after a push), and at
         // either end the surviving page belongs at `entrance`: untranslated, undimmed, and the
@@ -890,13 +944,15 @@ impl RouteSurface {
         // strength while the Legal index it had just returned to was invisible. The hit map
         // followed the draw, so the only rows a click could reach were the wrong page's.
         if self.at_rest() {
-            if let Some(inst) = self.top_mut() {
+            if menu && depth == 1 {
+                // the root is the one page on screen, drawn above
+            } else if let Some(inst) = self.top_mut() {
                 let mut inner = DrawFrame::with_navigation(&icx, entrance, navigation);
                 inst.screen.draw(&mut inner);
                 stops.extend(inner.into_stops());
             }
         } else {
-            if t < 0.999 {
+            if t < 0.999 && !parent_is_menu {
                 if let Some(inst) = if popping { self.top_mut() } else { self.below() } {
                     let mut inner = DrawFrame::with_navigation(&icx, parent_p, navigation);
                     inst.screen.draw(&mut inner);
@@ -970,6 +1026,23 @@ enum RootId {
     About,
 }
 
+/// The root row that opens `page` (a picker's parent page's), for a boot trail's seat.
+fn root_row_for(page: SettingsPage) -> Option<RowKey> {
+    let id = match page {
+        SettingsPage::Picker(kind) => return root_row_for(kind.parent()),
+        SettingsPage::Favourites => RootId::Favourites,
+        SettingsPage::Playback => RootId::Playback,
+        SettingsPage::AudioSubtitles => RootId::AudioSubtitles,
+        SettingsPage::Language | SettingsPage::Contribute => RootId::Language,
+        SettingsPage::RootBack => RootId::RootBack,
+        SettingsPage::Privacy | SettingsPage::Preview(_) => RootId::Privacy,
+        SettingsPage::Legal | SettingsPage::Document(_) => RootId::Legal,
+        SettingsPage::About => RootId::About,
+        SettingsPage::Root | SettingsPage::ConsentStage(_) => return None,
+    };
+    Some(id.key())
+}
+
 /// The first key of the per-server switches: past every fixed [`RootId`] key.
 const PLAINTEXT_KEY_BASE: u32 = 1000;
 
@@ -1004,6 +1077,9 @@ enum Action {
     Plaintext(ServerMachineId),
 }
 
+/// The Settings root's rows are Litefin's category list (`docs/litefin-look.md` 9).
+const ROOT_STYLE: TableStyle = TableStyle::Menu;
+
 /// The Settings root: a table of destinations, every row a door (no band; rule 9 in full).
 pub(crate) struct RootPage {
     entry: EntryId,
@@ -1024,6 +1100,9 @@ pub(crate) struct RootPage {
     alert: PlaintextAlert,
     /// `plex::grant::revision` as last read — an offer or an answer landing rebuilds the rows.
     grant_seen: u64,
+    /// A page is pushed over the root (`ScreenEvent::Cover` .. `Uncover`): the list then marks the
+    /// category that page belongs to as ACTIVE and the content panel is that page's.
+    covered: bool,
 }
 
 struct RootState {
@@ -1240,6 +1319,7 @@ impl RootPage {
             pending_plaintext: None,
             alert: PlaintextAlert::new(ALERT_GROUP, super::registry::ALERT, super::registry::ALERT + 1),
             grant_seen: crate::catalog::grant::revision(),
+            covered: false,
             state: RootState {
                 sel: RowKey(0),
                 auto_sign_in: false,
@@ -1275,9 +1355,9 @@ impl RootPage {
         });
         let keep = self.form.selected_id().cloned();
         self.form.table.compact = false;
-        self.form.table.header_ink = theme::TEXT_READING;
+        self.form.table.set_style(ROOT_STYLE);
         self.form.set(form, keep.as_ref());
-        self.form.table.list_focused = true;
+        self.form.table.list_focused = !self.covered;
         if let Some(key) = self.form.key_at(self.form.table.sel.max(0) as usize) {
             self.state.sel = key;
         }
@@ -1363,19 +1443,18 @@ impl RootPage {
             .collect()
     }
 
+    /// The root as Litefin's Settings page: the rows are the category list, and the content
+    /// panel's header names the focused category (its title and description) until a page is
+    /// pushed for it.
     fn view(&self) -> TableScreen<'_> {
-        TableScreen::new(
-            Header::new(
-                RouteLayout::screen(),
-                None,
-                nj_platform::i18n::msg::settings_title(),
-                nj_platform::i18n::msg::settings_root_copy(),
-            ),
-            &self.form.table,
-            GroupId(0),
-            self.entry,
-        )
-        .keyed(&self.form)
+        let layout = RouteLayout::panel();
+        let (title, copy) = match self.form.table.sections.iter().flat_map(|s| s.rows.iter()).nth(self.form.table.sel.max(0) as usize) {
+            Some(row) => (row.label.as_str(), row.detail.as_str()),
+            None => (nj_platform::i18n::msg::settings_title(), nj_platform::i18n::msg::settings_root_copy()),
+        };
+        TableScreen::new(Header::new(layout, None, title, copy), &self.form.table, GroupId(0), self.entry)
+            .with_frame(layout.menu_table())
+            .keyed(&self.form)
     }
 
     /// Activate the row whose focus key is `key` (an `Activate` element or the RIGHT rule's).
@@ -1517,7 +1596,12 @@ impl Machine<InnerHost> for RootPage {
                 if landed { self.rebuild(cx.views); fx.invalidate(nj_machine::present::Provenance::Landing(MachineId::Session)); }
 
                 self.form.table
-                    .update(t.dt(), RouteLayout::screen().sectioned_table().h);
+                    .update(t.dt(), RouteLayout::panel().menu_table().h);
+                Handled::Yes
+            }
+            ScreenEvent::Cover | ScreenEvent::Uncover => {
+                self.covered = matches!(ev, ScreenEvent::Cover);
+                self.form.table.list_focused = !self.covered;
                 Handled::Yes
             }
             ScreenEvent::FocusMoved { to, .. } => {
@@ -1594,6 +1678,41 @@ impl Focusable<InnerHost> for RootPage {
     }
 }
 
+impl RootPage {
+    /// The root's draw with its content panel (the header and a focused switch) through `panel`:
+    /// `f.painter` at rest, the surface's parent role while a page pops back to the list, so the
+    /// leaving page's header is never drawn over a full-strength one.
+    fn draw_with_panel(&mut self, f: &mut DrawFrame<'_, '_, InnerHost>, panel: Painter) {
+        let layout = RouteLayout::panel();
+        layout.draw_menu_ground(f.painter);
+        if self.covered {
+            // beside a pushed page: the list alone, its category marked active; no stops (the
+            // surface does not take them from a covered root either)
+            self.form.table.draw(f.painter, layout.menu_table(), f.measure);
+            return;
+        }
+        let mut v = self.view();
+        v.header.paint(panel, f.measure);
+        let frame = v.table.frame;
+        crate::ui::screen::Part::<InnerHost>::draw(&mut v.table, f, frame);
+        // a category button carries no control: a focused switch's state is the panel's, under
+        // its header, as Litefin's pill with its word
+        let sel = self.form.table.sel.max(0) as usize;
+        if let Some(on) = self.form.table.sections.iter().flat_map(|s| s.rows.iter()).nth(sel).and_then(|r| r.toggle) {
+            use crate::ui::table::{draw_switch, SWITCH_H, SWITCH_W};
+            let c = layout.content;
+            let cy = c.y + SWITCH_H;
+            draw_switch(panel, c.x + SWITCH_W, cy, on, 1.0);
+            let word = if on { nj_platform::i18n::msg::widgets_toggle_on() } else { nj_platform::i18n::msg::widgets_toggle_off() };
+            let x = c.x + SWITCH_W + theme::space::SM;
+            crate::ui::text_view::TextView::new(word, theme::size::lf::S22, theme::TEXT_PRIMARY)
+                .max_lines(1)
+                .draw(panel, Rect::new(x, cy - f.measure.cap_h(theme::size::lf::S22) * 0.5, c.x + c.w - x, SWITCH_H));
+        }
+        self.alert.draw(f, self.entry);
+    }
+}
+
 impl Screen<InnerHost> for RootPage {
     fn name(&self) -> &'static str {
         word::SETTINGS
@@ -1606,9 +1725,11 @@ impl Screen<InnerHost> for RootPage {
     }
     fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, InnerHost>) {}
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, InnerHost>) {
-        let mut v = self.view();
-        crate::ui::screen::Part::<InnerHost>::draw(&mut v, f, Rect::FULL);
-        self.alert.draw(f, self.entry);
+        let panel = f.painter;
+        self.draw_with_panel(f, panel);
+    }
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
     fn render(&self) -> RenderStrategy {
         RenderStrategy::Page
@@ -1659,10 +1780,11 @@ fn preference_name(preference: nj_platform::i18n::Preference) -> &'static str {
     }
 }
 
-const LANGUAGES: [nj_platform::i18n::Preference; 5] = [
+// Latin-script languages first, then Cyrillic.
+const LANGUAGES: [nj_platform::i18n::Preference; 6] = [
     nj_platform::i18n::Preference::System, nj_platform::i18n::Preference::En,
-    nj_platform::i18n::Preference::Es, nj_platform::i18n::Preference::Be,
-    nj_platform::i18n::Preference::Ru,
+    nj_platform::i18n::Preference::Es, nj_platform::i18n::Preference::Pl,
+    nj_platform::i18n::Preference::Be, nj_platform::i18n::Preference::Ru,
 ];
 
 /// A Language row's identity: the preference a `Choice` row saves, or the contribution guide.
@@ -1682,6 +1804,7 @@ impl FormId for LangId {
             LangId::Choice(P::Be) => 3,
             LangId::Choice(P::Ru) => 4,
             LangId::Contribute => 5,
+            LangId::Choice(P::Pl) => 6,
         })
     }
 }
@@ -1760,6 +1883,7 @@ impl LanguagePage {
     fn rebuild(&mut self) {
         let keep = self.form.selected_id().cloned().unwrap_or(LangId::Choice(self.state.selected));
         self.form.table.compact = false;
+        self.form.table.set_style(TableStyle::Settings);
         self.form.set(language_form(self.state.selected, self.state.busy), Some(&keep));
         self.form.table.list_focused = true;
     }
@@ -1774,7 +1898,7 @@ impl LanguagePage {
         } else {
             nj_platform::i18n::msg::settings_language_copy()
         };
-        TableScreen::new(Header::new(RouteLayout::screen(), Some(nj_platform::i18n::msg::settings_title()),
+        TableScreen::new(Header::new(RouteLayout::panel(), Some(nj_platform::i18n::msg::settings_title()),
             nj_platform::i18n::msg::settings_language_title(), copy), &self.form.table, GroupId(0), self.entry).keyed(&self.form)
     }
 
@@ -1830,7 +1954,7 @@ impl Machine<InnerHost> for LanguagePage {
             }
             ScreenEvent::Tick(t) => {
                 if self.poll_save() { fx.invalidate(nj_machine::present::Provenance::Input); }
-                self.form.table.update(t.dt(), RouteLayout::screen().sectioned_table().h);
+                self.form.table.update(t.dt(), RouteLayout::panel().sectioned_table().h);
                 Handled::Yes
             }
             ScreenEvent::FocusMoved { to, .. } => {

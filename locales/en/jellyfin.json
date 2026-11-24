@@ -224,7 +224,7 @@
     "description": "Jellyfin sign-in consent: what the permission covers"
   },
   "jellyfin.login.consent_checks": {
-    "value": "Native Jelly checks it's the same server every time before sending anything.",
+    "value": "JellyRust checks it's the same server every time before sending anything.",
     "description": "Jellyfin sign-in consent: how the server is checked"
   },
   "jellyfin.login.consent_settings": {

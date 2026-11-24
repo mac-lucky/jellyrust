@@ -1,0 +1,8 @@
+{
+  "browse.litefin.genres": "Géneros",
+  "browse.litefin.shuffle": "Aleatorio",
+  "browse.litefin.view_mode": "Modo de vista",
+  "browse.litefin.paging": "{first}-{last} de {total}",
+  "browse.litefin.genres_empty": "Esta biblioteca no tiene géneros",
+  "browse.litefin.start_typing": "Empieza a escribir para buscar"
+}

@@ -1,7 +1,7 @@
 //! A registered Library menu surface. Navigation owns its lifetime, phase, and input scope.
-use crate::browse::{LibraryType, GenreEntry, SecKind, SortEntry, SrcGroup, SrcRow};
+use crate::browse::{LibraryType, GenreEntry, SecKind, SortEntry};
 use crate::screens::registry::{AppFx, AppMsg, LibraryLike, LibraryMenuArg, LibraryMenuKind};
-use crate::stores::browse::{BrowseCmd, LibraryWork, QueryEdit, SectionAddress};
+use crate::stores::browse::{BrowseCmd, LibraryWork, QueryEdit};
 use crate::stores::{StoreCmd, StoreId};
 use crate::ui::frame::Budget;
 use nj_machine::machine::{
@@ -13,7 +13,6 @@ use crate::ui::screen::{
     Hover, Placed, RenderStrategy, Screen, ScreenEvent, Seat, Step, Stop,
 };
 use crate::ui::form::{Binding, Form, FormSection, FormTable, RowKey, RowKind};
-use crate::appkit::source_list::{self, Level, SrcTarget, Tail};
 use crate::ui::table::{Row, TableView};
 use std::convert::Infallible;
 #[cfg(test)]
@@ -33,8 +32,6 @@ pub(crate) const SHAPE: [&str; 2] = [
 enum Action {
     Edit(QueryEdit),
     Genre,
-    Select(SectionAddress),
-    Recheck,
 }
 
 /// A menu's rows: identity string per focusable row (the stable name focus follows across a
@@ -85,135 +82,12 @@ impl Stamp {
     fn u32(&mut self, value: u32) {
         self.0.extend_from_slice(&value.to_le_bytes());
     }
-    fn i64(&mut self, value: i64) {
-        self.0.extend_from_slice(&value.to_le_bytes());
-    }
     fn str(&mut self, value: &str) {
         self.u32(value.len() as u32);
         self.0.extend_from_slice(value.as_bytes());
     }
     fn finish(self) -> Vec<u8> {
         self.0
-    }
-}
-
-fn stamp_kind(stamp: &mut Stamp, kind: Option<crate::browse::SecKind>) {
-    stamp.tag(match kind {
-        None => 0,
-        Some(crate::browse::SecKind::Movie) => 1,
-        Some(crate::browse::SecKind::Show) => 2,
-    });
-}
-
-fn stamp_state(stamp: &mut Stamp, state: crate::browse::SourceState) {
-    stamp.tag(match state {
-        crate::browse::SourceState::NotProbed => 0,
-        crate::browse::SourceState::Reachable => 1,
-        crate::browse::SourceState::Unauthorized => 2,
-        crate::browse::SourceState::Unreachable => 3,
-        crate::browse::SourceState::InsecureOnly => 4,
-    });
-}
-
-fn stamp_tier(stamp: &mut Stamp, tier: Option<crate::catalog::probe::Location>) {
-    stamp.tag(match tier {
-        None => 0,
-        Some(crate::catalog::probe::Location::Local) => 1,
-        Some(crate::catalog::probe::Location::Remote) => 2,
-        Some(crate::catalog::probe::Location::Relay) => 3,
-    });
-}
-
-fn source_draft(
-    epoch: u32,
-    current: usize,
-    groups: &[SrcGroup],
-    sections: &[crate::browse::view::SectionView],
-) -> MenuDraft {
-    let kind = sections.get(current).map(|section| section.kind);
-    let source_rows: Vec<SrcRow> = sections
-        .iter()
-        .filter(|section| Some(section.kind) == kind && section.row.pinned)
-        .map(|section| section.row.clone())
-        .collect();
-    let source_form =
-        source_list::form(Level::Browse, groups, &source_rows, Tail::Recheck);
-    let mut stamp = Stamp::default();
-    stamp.tag(1);
-    stamp.u32(epoch);
-    stamp.u32(current as u32);
-    stamp_kind(&mut stamp, kind);
-    for group in groups {
-        stamp.tag(2);
-        stamp.str(&group.name);
-        stamp.str(&group.handle);
-        stamp_state(&mut stamp, group.state);
-        stamp_tier(&mut stamp, group.tier);
-    }
-    for row in &source_rows {
-        stamp.tag(3);
-        stamp.u32(row.src as u32);
-        stamp.u32(row.section as u32);
-        stamp.str(&row.title);
-        stamp.str(&row.count_line);
-        stamp.bool(row.pinned);
-        stamp.bool(row.last_pinned);
-        stamp.bool(row.current);
-    }
-    let slots: Vec<Option<SrcTarget>> = source_form
-        .slots()
-        .into_iter()
-        .map(|slot| slot.map(|b| b.action))
-        .collect();
-    let mut selected = None;
-    let mut addresses = std::collections::HashMap::new();
-    for slot in &slots {
-        match slot {
-            Some(SrcTarget::Library(index)) => {
-                // A library the directory has no address for is drawn, never focusable.
-                let Some(candidate) = sections.get(*index) else {
-                    continue;
-                };
-                let Some(sid) = candidate.sid else { continue };
-                let target = SectionAddress {
-                    epoch,
-                    sid,
-                    section: candidate.key,
-                };
-                stamp.tag(4);
-                stamp.u32(u32::from(sid.raw()));
-                stamp.i64(candidate.key);
-                stamp.u32(target.epoch);
-                let identity = format!("section:{}:{}", sid.raw(), candidate.key);
-                if candidate.row.current {
-                    selected = Some(identity.clone());
-                }
-                addresses.insert(*index, (identity, target));
-            }
-            Some(SrcTarget::Recheck) => stamp.tag(5),
-            None => stamp.tag(6),
-        }
-    }
-    let form = source_form.map(|b| match b.action {
-        SrcTarget::Library(index) => addresses.remove(&index).map(|(identity, target)| Binding {
-            id: identity,
-            key: RowKey(0),
-            kind: b.kind,
-            action: Action::Select(target),
-            disabled: b.disabled,
-        }),
-        SrcTarget::Recheck => Some(Binding {
-            id: "recheck".into(),
-            key: RowKey(0),
-            kind: b.kind,
-            action: Action::Recheck,
-            disabled: b.disabled,
-        }),
-    });
-    MenuDraft {
-        stamp: stamp.finish(),
-        form,
-        selected,
     }
 }
 
@@ -443,56 +317,12 @@ impl LibraryMenu {
         listing: crate::stores::browse::ListingView<'_>,
         directory: crate::stores::browse::DirectoryView<'_>,
     ) -> MenuDraft {
-        let title = match self.kind {
-            LibraryMenuKind::Type => nj_platform::i18n::msg::browse_library_filter_by(),
-            LibraryMenuKind::Sort => nj_platform::i18n::msg::browse_library_sort_by(),
-            LibraryMenuKind::Filter => nj_platform::i18n::msg::browse_library_filter(),
-            LibraryMenuKind::Genre => nj_platform::i18n::msg::browse_library_genre(),
-            LibraryMenuKind::Sources => nj_platform::i18n::msg::browse_library_libraries(),
-        };
-        let mut section = MenuSection::new(title);
         match self.kind {
-            LibraryMenuKind::Type => return type_draft(listing_kind(listing, directory), listing.library_type()),
-            LibraryMenuKind::Sort => {
-                return sort_draft(listing.sorts(), listing.sort_index(), listing.sort_desc());
-            }
-            LibraryMenuKind::Filter => {
-                return filter_draft(self.desired_unwatched.unwrap_or(listing.unwatched()), listing.genre(), listing.library_type() == LibraryType::Primary);
-            }
-            LibraryMenuKind::Genre => {
-                return genre_draft(listing.genres(), listing.genre());
-            }
-            LibraryMenuKind::Sources => {
-                if let Some(current) = directory.current() {
-                    let groups: Vec<SrcGroup> = directory
-                        .sources()
-                        .iter()
-                        .map(|(_, group)| group.clone())
-                        .collect();
-                    return source_draft(
-                        directory.epoch().unwrap_or(0),
-                        current,
-                        &groups,
-                        directory.sections(),
-                    );
-                }
-                section = choice(
-                    section,
-                    "recheck".into(),
-                    Action::Recheck,
-                    Row::new(nj_platform::i18n::msg::browse_library_check_shares()),
-                );
-            }
-        }
-        let mut stamp = Stamp::default();
-        stamp.tag(12);
-        stamp.u32(self.kind as u32);
-        stamp.u32(listing.sort_index() as u32);
-        stamp.bool(listing.unwatched());
-        MenuDraft {
-            stamp: stamp.finish(),
-            form: MenuForm::new().section(section),
-            selected: None,
+            LibraryMenuKind::Type => type_draft(listing_kind(listing, directory), listing.library_type()),
+            LibraryMenuKind::Sort => sort_draft(listing.sorts(), listing.sort_index(), listing.sort_desc()),
+            LibraryMenuKind::Filter => filter_draft(self.desired_unwatched.unwrap_or(listing.unwatched()),
+                listing.genre(), listing.library_type() == LibraryType::Primary),
+            LibraryMenuKind::Genre => genre_draft(listing.genres(), listing.genre()),
         }
     }
     fn activate<H: LibraryLike>(&mut self, elem: u32, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
@@ -527,17 +357,6 @@ impl LibraryMenu {
                     fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
                 }
             }
-            Action::Select(target) => {
-                fx.push(Fx::Deliver(
-                    MachineId::Instance(self.arg.host),
-                    Delivery::Screen(ScreenEvent::App(AppMsg::LibrarySelect(target))),
-                ));
-                fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
-            }
-            Action::Recheck => fx.push(Fx::App(AppFx::Store(
-                StoreId::Browse,
-                StoreCmd::Browse(BrowseCmd::RecheckShares),
-            ))),
         }
     }
 }
@@ -760,8 +579,9 @@ mod review_actions_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browse::{SecKind, SourceState};
+    use crate::browse::SecKind;
     use crate::catalog::ServerId;
+    use crate::stores::browse::SectionAddress;
     use crate::ui::fixture::FixtureMeasure;
     use nj_machine::machine::{FocusRead, Host, InputOwner, PressRead, Tick};
     use crate::ui::screen::ScreenArg;
@@ -1011,157 +831,11 @@ mod tests {
         assert_ne!(all.stamp, filtered.stamp);
     }
 
-    fn source_sections() -> (Vec<SrcGroup>, Vec<crate::browse::view::SectionView>) {
-        let groups = vec![
-            SrcGroup {
-                name: "Own NAS".into(),
-                handle: String::new(),
-                state: SourceState::Reachable,
-                tier: None,
-            },
-            SrcGroup {
-                name: "Friend NAS".into(),
-                handle: "friend".into(),
-                state: SourceState::Reachable,
-                tier: None,
-            },
-        ];
-        let sections = vec![
-            crate::browse::view::SectionView {
-                sid: Some(ServerId::from_raw(1)),
-                key: 7,
-                kind: SecKind::Movie,
-                row: SrcRow { assorted: false,
-                    src: 0,
-                    section: 0,
-                    title: "Movies".into(),
-                    count_line: "26 films".into(),
-                    pinned: true,
-                    last_pinned: false,
-                    current: true,
-                },
-            },
-            crate::browse::view::SectionView {
-                sid: Some(ServerId::from_raw(2)),
-                key: 7,
-                kind: SecKind::Movie,
-                row: SrcRow { assorted: false,
-                    src: 1,
-                    section: 1,
-                    title: "Shared Movies".into(),
-                    count_line: "4 films".into(),
-                    pinned: true,
-                    last_pinned: false,
-                    current: false,
-                },
-            },
-        ];
-        (groups, sections)
-    }
-
-    #[test]
-    fn sources_keep_server_identity_and_align_recheck_after_separator() {
-        // with_cx retains the same explicit directory shape a Bridge captures from its owner.
-        let _guard = nj_base::testlock::serial();
-        let (groups, sections) = source_sections();
-        let draft = lay(source_draft(11, 0, &groups, &sections));
-        assert_eq!(draft.sections.len(), 2);
-        assert_eq!(draft.sections[1].header, "Friend NAS");
-        assert_eq!(draft.sections[1].accessory, "friend");
-        assert!(draft.sections[1].rows[1].sep);
-        assert_eq!(
-            draft.rows[2].2, 3,
-            "recheck follows the separator in TableView coordinates"
-        );
-        match &draft.rows[0].1 {
-            Action::Select(target) => assert_eq!(target.sid, ServerId::from_raw(1)),
-            _ => panic!("first source row is not selectable"),
-        }
-        match &draft.rows[1].1 {
-            Action::Select(target) => assert_eq!(target.sid, ServerId::from_raw(2)),
-            _ => panic!("second source row is not selectable"),
-        }
-        assert!(matches!(draft.rows[2].1, Action::Recheck));
-
-        let mut menu = LibraryMenu::new(
-            EntryId(7),
-            LibraryMenuArg {
-                host: nj_machine::machine::InstanceId(8),
-                target: SectionAddress {
-                    epoch: 11,
-                    sid: ServerId::from_raw(1),
-                    section: 7,
-                },
-                kind: LibraryMenuKind::Sources,
-                anchor: [0; 4],
-            },
-        );
-        menu.apply_draft(source_draft(11, 0, &groups, &sections));
-        let recheck = menu.form.key_at(3).expect("recheck is bound").0;
-        let placed = with_cx(|cx|
-            <LibraryMenu as Focusable<HostFixture>>::place(&menu, &recheck, cx, At::Drawn)
-                .expect("recheck remains placed after the separator"));
-        assert_eq!(placed.index, Some(3));
-        let mut output = Vec::new();
-        let mut present = nj_machine::present::Present::new();
-        let mut fx = Effects::new(
-            &mut output,
-            nj_machine::machine::MachineId::Instance(nj_machine::machine::InstanceId(8)),
-            &mut present,
-        );
-        with_cx(|cx| menu.activate(recheck, cx, &mut fx));
-        assert!(output.iter().any(|effect| matches!(
-            &effect.fx,
-            Fx::App(AppFx::Store(
-                StoreId::Browse,
-                StoreCmd::Browse(BrowseCmd::RecheckShares)
-            ))
-        )));
-    }
-
-    #[test]
-    fn sources_rebuild_on_metadata_without_changing_stable_row_identities() {
-        let (groups, sections) = source_sections();
-        let before = lay(source_draft(11, 0, &groups, &sections));
-        let mut changed_groups = groups.clone();
-        changed_groups[1].state = SourceState::Unreachable;
-        let mut changed_sections = sections.clone();
-        changed_sections[1].row.count_line = "5 films".into();
-        changed_sections[1].row.current = true;
-        let after = lay(source_draft(11, 1, &changed_groups, &changed_sections));
-
-        assert_ne!(before.stamp, after.stamp);
-        assert!(after.sections[1].dim);
-        assert_eq!(
-            before.rows.iter().map(|r| &r.0).collect::<Vec<_>>(),
-            after.rows.iter().map(|r| &r.0).collect::<Vec<_>>()
-        );
-        assert_eq!(after.selected, 1);
-        assert_eq!(after.sections[1].rows[0].detail, "5 films");
-    }
-
-    #[test]
-    fn source_stamp_is_length_safe_for_colons_and_pipes_in_display_text() {
-        let (mut groups, sections) = source_sections();
-        groups[0].name = "A:B".into();
-        groups[0].handle = "C".into();
-        let first = lay(source_draft(11, 0, &groups, &sections));
-        groups[0].name = "A".into();
-        groups[0].handle = "B:C".into();
-        let second = lay(source_draft(11, 0, &groups, &sections));
-        assert_ne!(first.stamp, second.stamp);
-
-        groups[0].name = "A|B".into();
-        let third = lay(source_draft(11, 0, &groups, &sections));
-        groups[0].name = "A".into();
-        groups[0].handle = "B:C|A|B".into();
-        let fourth = lay(source_draft(11, 0, &groups, &sections));
-        assert_ne!(third.stamp, fourth.stamp);
-    }
-
     #[test]
     fn metadata_refresh_preserves_focus_by_stable_element_key() {
-        let (groups, sections) = source_sections();
+        let sorts = |keys: &[&str]| keys.iter().map(|key| SortEntry {
+            key: (*key).into(), desc_key: String::new(), title: (*key).into(), default_desc: false,
+        }).collect::<Vec<_>>();
         let mut menu = LibraryMenu::new(
             EntryId(7),
             LibraryMenuArg {
@@ -1171,47 +845,26 @@ mod tests {
                     sid: ServerId::from_raw(1),
                     section: 7,
                 },
-                kind: LibraryMenuKind::Sources,
+                kind: LibraryMenuKind::Sort,
                 anchor: [0; 4],
             },
         );
-        menu.apply_draft(source_draft(11, 0, &groups, &sections));
-        let focused_key = menu.form.key_at(1).expect("second source row").0;
+        menu.apply_draft(sort_draft(&sorts(&["titleSort", "addedAt"]), 0, false));
+        let focused_key = menu.form.key_at(1).expect("second sort row").0;
         menu.form.table.sel = 1;
-        let quiet = source_draft(11, 0, &groups, &sections);
-        menu.apply_draft(quiet);
+        menu.apply_draft(sort_draft(&sorts(&["titleSort", "addedAt"]), 0, false));
         assert_eq!(
             menu.form.table.sel, 1,
             "identical refresh does not reset TableView selection"
         );
-
-        let mut shifted = sections.clone();
-        shifted.insert(
-            1,
-            crate::browse::view::SectionView {
-                sid: Some(ServerId::from_raw(1)),
-                key: 8,
-                kind: SecKind::Movie,
-                row: SrcRow { assorted: false,
-                    src: 0,
-                    section: 1,
-                    title: "More Movies".into(),
-                    count_line: "1 film".into(),
-                    pinned: true,
-                    last_pinned: false,
-                    current: false,
-                },
-            },
-        );
-        shifted[2].row.section = 2;
-        menu.apply_draft(source_draft(11, 0, &groups, &shifted));
+        menu.apply_draft(sort_draft(&sorts(&["titleSort", "year", "addedAt"]), 0, false));
         assert_eq!(
             menu.form.index_of_key(RowKey(focused_key)),
             Some(2)
         );
         assert_eq!(
             menu.form.table.sel, 2,
-            "metadata/shape refresh preserves the focused source key"
+            "a shape refresh preserves the focused row's key"
         );
     }
 

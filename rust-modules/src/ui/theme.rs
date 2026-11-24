@@ -21,6 +21,11 @@
 //!
 //! `ACCENT`/`ACCENT_INK` live here and are re-exported from `ui` (`mod.rs`) so the existing
 //! `crate::ui::ACCENT` call sites keep compiling unchanged.
+//!
+//! **Litefin.** This fork wears Litefin's black theme (`docs/litefin-look.md`, cited by section
+//! at each value): the ground, text inks, surfaces and status colours are repointed in place, and
+//! the accent `#6b6ede` arrives as NEW roles ([`BRAND_FILL`], [`FOCUS_RING`], the `sidebar` and
+//! `osd` modules) rather than as a new [`ACCENT`] - see [`ACCENT`] for why that one stays white.
 #![allow(dead_code)]
 
 // ── PRIMITIVES — the palette. PRIVATE: nothing outside this module may name a stop ───────────
@@ -36,22 +41,40 @@ use nj_gfx::gfx::tokens::{rgb8, NEUTRAL_500};
 
 // Cool — blue-leaning: everything that is text, and artwork that has not loaded.
 const COOL_0: [f32; 4] = rgb8(0xf7, 0xfa, 0xfc);
-const COOL_50: [f32; 4] = rgb8(0xeb, 0xf0, 0xf7);
 const COOL_150: [f32; 4] = rgb8(0xdb, 0xe0, 0xeb);
-const COOL_200: [f32; 4] = rgb8(0xcd, 0xd3, 0xdd);
-const COOL_300: [f32; 4] = rgb8(0xb8, 0xbf, 0xcc);
+const COOL_250: [f32; 4] = rgb8(0xbc, 0xbe, 0xbf);
 const COOL_400: [f32; 4] = rgb8(0x94, 0x99, 0xa3);
-const COOL_850: [f32; 4] = rgb8(0x1f, 0x21, 0x29);
-const COOL_900: [f32; 4] = rgb8(0x14, 0x17, 0x1c);
+const COOL_870: [f32; 4] = rgb8(0x18, 0x19, 0x1c);
 
 // Neutral — achromatic: the shelf, panels, control plates, inks.
 const NEUTRAL_600: [f32; 4] = rgb8(0x25, 0x25, 0x27);
-const NEUTRAL_650: [f32; 4] = rgb8(0x22, 0x22, 0x24);
-const NEUTRAL_750: [f32; 4] = rgb8(0x1b, 0x1b, 0x1d);
-const NEUTRAL_850: [f32; 4] = rgb8(0x14, 0x14, 0x16);
 const NEUTRAL_950: [f32; 4] = rgb8(0x08, 0x08, 0x0a);
 const WHITE: [f32; 4] = rgb8(0xff, 0xff, 0xff);
 const BLACK: [f32; 4] = rgb8(0x00, 0x00, 0x00);
+
+// Grey - Litefin's black theme (`docs/litefin-look.md` 2.1): pure achromatic codes, named by their
+// 8-bit value because the spec states them as codes. Three inks over the #000 page, then the
+// surfaces just off it. `GREY_CC` is the spec's `rgba(255,255,255,.8)` text resolved over that
+// page, an opaque code so a contrast floor can grade it.
+const GREY_CC: [f32; 4] = rgb8(0xcc, 0xcc, 0xcc);
+const GREY_66: [f32; 4] = rgb8(0x66, 0x66, 0x66);
+const GREY_44: [f32; 4] = rgb8(0x44, 0x44, 0x44);
+const GREY_2A: [f32; 4] = rgb8(0x2a, 0x2a, 0x2a);
+const GREY_22: [f32; 4] = rgb8(0x22, 0x22, 0x22);
+const GREY_18: [f32; 4] = rgb8(0x18, 0x18, 0x18);
+const GREY_12: [f32; 4] = rgb8(0x12, 0x12, 0x12);
+const GREY_0A: [f32; 4] = rgb8(0x0a, 0x0a, 0x0a);
+const GREY_08: [f32; 4] = rgb8(0x08, 0x08, 0x08);
+
+// Violet - Litefin's one accent, "Litefin Purple Blue" `#6b6ede`, and the variants its
+// `ThemeUtils.getAccentVariants` / `getContrastColor` derive from it (`docs/litefin-look.md` 2.1):
+// hover (lightness +10), active (-10), the light lavender every ink on the accent is drawn in, and
+// the dark rgb its tinted panels use.
+const VIOLET_200: [f32; 4] = rgb8(0xd4, 0xd5, 0xf7);
+const VIOLET_400: [f32; 4] = rgb8(0x95, 0x97, 0xe7);
+const VIOLET_500: [f32; 4] = rgb8(0x6b, 0x6e, 0xde);
+const VIOLET_600: [f32; 4] = rgb8(0x41, 0x45, 0xd5);
+const VIOLET_950: [f32; 4] = rgb8(0x11, 0x12, 0x22);
 
 // Caption — the achromatic ladder under `WHITE`, and it has exactly one job: the subtitle tones.
 // Not more Neutral stops, because Neutral is the app's own dark SURFACES and these are light
@@ -100,9 +123,19 @@ const AMBER_400: [f32; 4] = rgb8(0xf0, 0xb4, 0x29);
 const AMBER_500: [f32; 4] = rgb8(0xe5, 0xa0, 0x0d);
 const AMBER_950: [f32; 4] = rgb8(0x1a, 0x12, 0x04);
 const RED_400: [f32; 4] = rgb8(0xeb, 0x52, 0x4a);
-const RED_500: [f32; 4] = rgb8(0xf5, 0x34, 0x1a);
 const GREEN_400: [f32; 4] = rgb8(0x3e, 0xc9, 0x6b);
 const GREEN_500: [f32; 4] = rgb8(0x2f, 0xae, 0x5b);
+// Litefin's own state and mark codes (`docs/litefin-look.md` 2.1), stated exactly by the spec, so
+// they are stops of their own rather than a nudge of the ones above.
+const RED_430: [f32; 4] = rgb8(0xff, 0x3b, 0x30);
+const RED_450: [f32; 4] = rgb8(0xf4, 0x43, 0x36);
+const RED_550: [f32; 4] = rgb8(0xfa, 0x32, 0x0a);
+const RED_300: [f32; 4] = rgb8(0xff, 0x6b, 0x6b);
+const RED_600: [f32; 4] = rgb8(0xdc, 0x35, 0x45);
+const GREEN_450: [f32; 4] = rgb8(0x4c, 0xaf, 0x50);
+const ORANGE_500: [f32; 4] = rgb8(0xff, 0x98, 0x00);
+const BLUE_500: [f32; 4] = rgb8(0x21, 0x96, 0xf3);
+const GOLD_400: [f32; 4] = rgb8(0xf5, 0xc5, 0x18);
 
 // The two ALPHA ramps are `WHITE`/`BLACK` at a measured weight, spelled `with_a(WHITE, .20)` at the
 // role: a new overlay is a weight on that ramp, never a new hue. `NEUTRAL_900` (#0c0c0d) is not a
@@ -110,20 +143,38 @@ const GREEN_500: [f32; 4] = rgb8(0x2f, 0xae, 0x5b);
 // see `TAB_TRACK_TOP`.
 
 // ── Text ────────────────────────────────────────────────────────────────────
-/// Primary reading text / high-emphasis title. Collapses the 3-4 near-whites.
-pub const TEXT_PRIMARY: [f32; 4] = COOL_0;
-/// Section headings ("Related", "Cast & Crew", About headings) — a touch below primary.
-pub const TEXT_HEADING: [f32; 4] = COOL_50;
-/// Secondary text: metadata lines, idle row titles.
-pub const TEXT_SECONDARY: [f32; 4] = COOL_300;
+/// Primary reading text / high-emphasis title. Litefin's text primary `#ffffff`
+/// (`docs/litefin-look.md` 2.1); upstream collapsed its 3-4 near-whites onto `COOL_0` here.
+pub const TEXT_PRIMARY: [f32; 4] = WHITE;
+/// Section headings ("Related", "Cast & Crew", About headings). Litefin draws its row titles in
+/// `#fff` (`docs/litefin-look.md` 2.2 Home row title), so this is the primary stop; upstream sat it
+/// a touch below primary.
+pub const TEXT_HEADING: [f32; 4] = WHITE;
+/// Secondary text: metadata lines, idle row titles. Litefin's text secondary,
+/// `rgba(255,255,255,.8)` over the page (`docs/litefin-look.md` 2.1).
+pub const TEXT_SECONDARY: [f32; 4] = GREY_CC;
 /// **Reading copy** — a multi-line paragraph someone actually reads through, one step brighter than
 /// the label grey above it (`#cdd3dd`, `Details Screen.dc.html`). Its one job today is the detail
 /// hero's synopsis, which is the longest run of text on the page and sits over the backdrop scrim;
 /// at [`TEXT_SECONDARY`] it read as fine print rather than as the blurb. A one-line metadata VALUE
 /// stays secondary — the distinction is paragraph-vs-label, not importance.
-pub const TEXT_READING: [f32; 4] = COOL_200;
+///
+/// Litefin draws both its synopses at the secondary ink, white .8 (`docs/litefin-look.md` 2.2 Hero
+/// synopsis, Details overview), so the two roles share [`TEXT_SECONDARY`]'s stop here.
+pub const TEXT_READING: [f32; 4] = GREY_CC;
 /// Tertiary text: runtime, kickers, inactive tabs, About labels, dim/empty states.
+///
+/// **Not Litefin's `#666666`** (`docs/litefin-look.md` 2.1): that reads 3.66:1 on the bare black
+/// page but this role sits on keyed washes, route grounds and panels too, where it falls to 1.8 and
+/// 2.7:1 under the 3:1 floor `widgets_ambient_ground_tests`, `route_screen` and `underlay_tests`
+/// grade it at. Copy that only ever sits on the page itself takes [`TEXT_FAINT`].
 pub const TEXT_TERTIARY: [f32; 4] = COOL_400;
+/// **Litefin's tertiary ink, `#666666`** (`docs/litefin-look.md` 2.1, the Quick Connect
+/// instructions and status in 8) - legal ONLY on the bare page ([`SURFACE_APP`], 3.66:1), never on
+/// artwork, a wash or a panel; [`TEXT_TERTIARY`] is the dim ink for those.
+pub const TEXT_FAINT: [f32; 4] = GREY_66;
+/// Litefin's text disabled, `#444444` (`docs/litefin-look.md` 2.1): a label that cannot be acted on.
+pub const TEXT_DISABLED: [f32; 4] = GREY_44;
 /// The `·` between fine-print facts, and **only** that — a step below the words it separates.
 /// Both mocks set every separator dot `opacity:.45` against the run around it, and the reason is
 /// worth keeping: a dot at the full ink of its neighbours joins the list instead of punctuating
@@ -255,6 +306,15 @@ pub mod logo {
 /// pair collapsed onto this one. Both survivors of that collapse are elsewhere and neither is a
 /// control: the warm off-white is [`WASH_WARM`], a page ground; the cool plate is
 /// [`SURFACE_QR_PLATE`], a scan surface.
+///
+/// **It stays white in the Litefin fork, on purpose.** Litefin fills a focused control with its
+/// accent and inks it `#d4d5f7` (`docs/litefin-look.md` 2.6), but this role cannot carry that pair:
+/// a KEYED focused face is solved near-white in OKLCH ([`CONTROL_FOCUS_FACE_L`] .972) and inked
+/// [`ACCENT_INK`], so a lavender ink would vanish on it; [`ROW_VALUE_INK_ON`] is black on this
+/// fill; and the unkeyed rim must be brighter than it ([`CONTROL_RIM_FOCUS_UNKEYED`]). Litefin's
+/// pair is also 2.99:1 where this one is 18:1. So the accent is a NEW family - [`BRAND_FILL`] /
+/// [`BRAND_INK`] for filled controls, [`FOCUS_RING`] for artwork - that a screen adopts per control,
+/// with its own face variant (`widgets::ControlStyle`), rather than a repaint of every focus at once.
 pub const ACCENT: [f32; 4] = COOL_0;
 /// Near-black ink/glyphs drawn over [`ACCENT`].
 pub const ACCENT_INK: [f32; 4] = NEUTRAL_950;
@@ -287,36 +347,280 @@ pub const CONTROL_SPENT_FOCUS_W: f32 = 0.76;
 /// mid-word.
 pub const CONTROL_SPENT_FILL: [f32; 4] = mix(COOL_0, NEUTRAL_500, 1.0 - CONTROL_SPENT_FOCUS_W);
 
-/// The Search query field's **editing** ink — the bright endpoint of the `hot` cross-fade in
-/// `search::field::draw` (idle end: `TEXT_SECONDARY`) while the television's keyboard is up. Its own
-/// role because it names the JOB: the design system's `SearchField` contract forbids a rim or rule
-/// on this control, so ink is the only focus signal editing ever gets, and one stop (`TEXT_HEADING`)
-/// was too little from the couch (owner feedback, 2026-09-02). Lands on `TEXT_PRIMARY`, the
-/// brightest ink stop short of pure white.
-///
-/// **Until 2026-09-04 this was also the ink for focused-but-not-editing** — first alone, then (for
-/// one day, issue 22) behind a flat [`ACCENT`]/[`ACCENT_INK`] plate that the owner rejected on sight
-/// ("you made the search bar background white, while I wanted text to be white"). The plate is
-/// gone for good and focus is ink-only again, but the two focused states now read apart by ink
-/// alone too: [`FIELD_WAITING_INK`] is the target while waiting for a press, and this token narrowed
-/// to the state that still has the caret to help it — see `field::draw`'s `ink_target`.
-pub const FIELD_EDITING_INK: [f32; 4] = TEXT_PRIMARY;
+/// A text field's **editing** ink while the television's keyboard is up: the sign-in inputs'
+/// (`screens::jf_login`). Lands on `COOL_0`, the brightest ink stop short of pure white.
+pub const FIELD_EDITING_INK: [f32; 4] = COOL_0;
 
-/// The Search query field's **focused-but-not-editing** ink — the `hot` cross-fade's bright
-/// endpoint for the one state that has no caret, no keyboard and (since 2026-09-04) no plate to
-/// carry focus instead. Pure `WHITE`, not `TEXT_PRIMARY`/[`FIELD_EDITING_INK`]'s near-white
-/// `#f7fafc`: a field waiting for a press has to read as the brightest thing on the page by ink
-/// alone, one stop past what editing needs once the caret is there to help. `field::draw`'s
-/// `ink_target` is the one place that picks between this and [`FIELD_EDITING_INK`], on `editing`
-/// alone — never a second spring.
-pub const FIELD_WAITING_INK: [f32; 4] = WHITE;
-
-/// Idle (unfocused) control disc/pill fill — solid dark, faintly translucent.
-pub const CONTROL_IDLE_FILL: [f32; 4] = with_a(NEUTRAL_600, 0.92);
+/// Idle (unfocused) control disc/pill fill - solid dark, faintly translucent. Litefin's black theme
+/// button bg `#222222` (`docs/litefin-look.md` 2.1), at the `.92` the destructive plate mixes from.
+pub const CONTROL_IDLE_FILL: [f32; 4] = with_a(GREY_22, 0.92);
 /// White glyph/label over an idle control. Both grounds ink it the same: the design system states
 /// one `--control-idle-ink`, and the UNKEYED face below is a white film over a black ramp, which is
 /// still a dark surface — see [`CONTROL_IDLE_FILL_UNKEYED`].
 pub const CONTROL_IDLE_INK: [f32; 4] = WHITE;
+
+// -- Litefin accent: brand fill, focus ring and border ------------------------
+// `docs/litefin-look.md` 2.1 (values) and 2.6 (where they go). New roles beside [`ACCENT`] (see
+// its doc for why that one stays white); every screen slice reads these and never adds its own.
+
+/// **The accent fill** a Litefin control lights up with - the focused primary button, tab, chip,
+/// settings category, OSD button and sidebar squircle (2.6 "Primary buttons"), and the details Play
+/// button at rest. `#6b6ede`, "Litefin Purple Blue" (2.1 Accent).
+pub const BRAND_FILL: [f32; 4] = VIOLET_500;
+/// The accent under a pointer hover, lightness +10 (2.1 Accent hover). Also the far stop of the
+/// card progress gradient ([`RESUME_FILL_END`]).
+pub const BRAND_FILL_HOVER: [f32; 4] = VIOLET_400;
+/// The accent while pressed, lightness -10 (2.1 Accent active).
+pub const BRAND_FILL_ACTIVE: [f32; 4] = VIOLET_600;
+/// Every glyph and label drawn ON [`BRAND_FILL`]: Litefin's `getContrastColor` lavender
+/// `#d4d5f7` (2.1 Text on accent). The pair measures 2.99:1 - Litefin's own choice, used only for
+/// the short bold labels and icons it puts on the accent.
+pub const BRAND_INK: [f32; 4] = VIOLET_200;
+/// The accent at .20 (2.1 Accent light): a tint, never a fill a label sits on alone.
+pub const BRAND_TINT: [f32; 4] = with_a(VIOLET_500, 0.20);
+/// A focused SETTINGS row: the accent at .15, no scale (2.6 "Rows of settings", 9 Setting row).
+pub const BRAND_ROW_FOCUS: [f32; 4] = with_a(VIOLET_500, 0.15);
+/// Litefin's accent-dark panel, `rgba(17,18,34,.65)` (2.1 Accent dark rgb): the season page's
+/// episode rows and the focused rich-metadata table (5).
+pub const BRAND_PANEL: [f32; 4] = with_a(VIOLET_950, 0.65);
+/// [`BRAND_PANEL`] under focus, `.85` (5 Season page episodes).
+pub const BRAND_PANEL_FOCUS: [f32; 4] = with_a(VIOLET_950, 0.85);
+/// The SELECTED-but-not-focused segment - the active library tab, the active settings category, the
+/// focused Quick Connect button: the lavender as the fill (6 Tabs, 8 Buttons, 9 Left category list).
+pub const SELECTED_FILL: [f32; 4] = VIOLET_200;
+/// The label on [`SELECTED_FILL`]: the accent as ink (same sections).
+pub const SELECTED_INK: [f32; 4] = VIOLET_500;
+/// An "active" toggle's icon at rest - watched, favourite, an OSD toggle that is on: the accent
+/// as ink on an idle control (5 Actions row, 10 Buttons).
+pub const BRAND_ACTIVE_INK: [f32; 4] = VIOLET_500;
+
+/// **The artwork focus ring** - a media card's 3px ring turns `#6b6ede` on focus (2.1 Card focus
+/// ring, 2.6 Media cards), drawn with `Painter::rring` around the image. No glow, no shadow.
+pub const FOCUS_RING: [f32; 4] = VIOLET_500;
+/// [`FOCUS_RING`]'s width (2.6 Media cards: "a permanent 3px transparent border").
+pub const FOCUS_RING_W: f32 = 3.0;
+/// **The generic focus border** - `.btn`, text inputs and episode cards turn their border lavender
+/// `#d4d5f7` on focus (2.1 Focus border, 2.6 Generic `.btn`); also the sidebar avatar's 2px ring (3).
+pub const FOCUS_BORDER: [f32; 4] = VIOLET_200;
+/// [`FOCUS_BORDER`]'s width on a button or input (2.6).
+pub const FOCUS_BORDER_W: f32 = 3.0;
+/// [`FOCUS_BORDER`]'s width on an episode card and on the login buttons and inputs (2.6, 8).
+pub const FOCUS_BORDER_W_WIDE: f32 = 4.0;
+
+/// Litefin's corner pair, `--jf-border-radius` / `--jf-border-radius-lg` with rounded corners on
+/// (2.3). Cards themselves are [`CARD_RING_RAD`] / [`CARD_FOCUS_RING_RAD`].
+pub mod radius {
+    /// Cards' outer box, setting rows, small chips, the sidebar label pill, tech pills (2.3).
+    pub const BASE: f32 = 12.0;
+    /// Buttons, pills, badges and menus (2.3).
+    pub const LG: f32 = 16.0;
+}
+
+/// **Litefin's left rail** (`docs/litefin-look.md` 3, modern-collapsed): a transparent 100px icon
+/// rail on every page, the label shown only as a tooltip pill beside the focused item. Geometry
+/// and inks the sidebar slice draws with; [`crate::ui::consts::CONTENT_LEFT`] is the content edge
+/// it leaves.
+pub mod sidebar {
+    use super::{with_a, COOL_250, COOL_870, VIOLET_200, VIOLET_500, WHITE};
+
+    /// The visible rail, x 0..100 (2.4 Sidebar rail width, 3 Geometry).
+    pub const RAIL_W: f32 = 100.0;
+    /// Padding above the logo header and below the footer (3).
+    pub const PAD_Y: f32 = 20.0;
+    /// The logo header's height and the gap under it (3: 80 tall + 20 margin).
+    pub const HEADER_H: f32 = 80.0;
+    pub const HEADER_GAP: f32 = 20.0;
+    /// The logo, drawn 40x40 centred at x=50 (3).
+    pub const LOGO: f32 = 40.0;
+    /// One nav item's height; the block of items is centred between header and footer (3).
+    pub const ITEM_H: f32 = 72.0;
+    /// The item icon, 28x28 centred at x=50 (3).
+    pub const ICON: f32 = 28.0;
+    /// The squircle behind an active or focused icon: 56x56, radius 18 (2.3, 3 States).
+    pub const SQUIRCLE: f32 = 56.0;
+    pub const SQUIRCLE_RAD: f32 = 18.0;
+    /// The focused icon and squircle pop, 250 ms overshoot (3, 2.5).
+    pub const FOCUS_SCALE: f32 = 1.08;
+    /// The footer avatar: a 40x40 circle in a 72-tall item, a 2px [`super::FOCUS_BORDER`] ring on
+    /// focus (3).
+    pub const AVATAR: f32 = 40.0;
+    pub const AVATAR_RING_W: f32 = 2.0;
+
+    /// Idle icon `#bcbebf`, no squircle (3 States, 2.1 Sidebar unselected icon).
+    pub const ICON_IDLE: [f32; 4] = COOL_250;
+    /// The current page's icon, filled white (3, 2.1 Sidebar selected icon).
+    pub const ICON_ACTIVE: [f32; 4] = WHITE;
+    /// The focused icon, filled lavender on the accent squircle (3).
+    pub const ICON_FOCUS: [f32; 4] = VIOLET_200;
+    /// The current page's squircle, white .14 with a 1px white .08 edge (3).
+    pub const SQUIRCLE_ACTIVE: [f32; 4] = with_a(WHITE, 0.14);
+    pub const SQUIRCLE_ACTIVE_RIM: [f32; 4] = with_a(WHITE, 0.08);
+    /// The focused squircle, the accent with a 1px white .25 edge (3).
+    pub const SQUIRCLE_FOCUS: [f32; 4] = VIOLET_500;
+    pub const SQUIRCLE_FOCUS_RIM: [f32; 4] = with_a(WHITE, 0.25);
+
+    /// The focused item's label pill: left edge at x=92, centred on the item, padding 8x18,
+    /// radius 12, at most 300 wide, one line (3). Its text is 16.8px weight 600 in Litefin, which
+    /// is below `size::CAPTION`; the slice picks the rung.
+    pub const LABEL_X: f32 = 92.0;
+    pub const LABEL_PAD_X: f32 = 18.0;
+    pub const LABEL_PAD_Y: f32 = 8.0;
+    pub const LABEL_RAD: f32 = 12.0;
+    pub const LABEL_MAX_W: f32 = 300.0;
+    /// The label pill's fill, edge and ink: accent, white .25, lavender (3).
+    pub const LABEL_FILL: [f32; 4] = VIOLET_500;
+    pub const LABEL_RIM: [f32; 4] = with_a(WHITE, 0.25);
+    pub const LABEL_INK: [f32; 4] = VIOLET_200;
+
+    /// The Libraries popover: left edge x=92, 270 wide, radius 18, padding 8, rows 48 tall at
+    /// radius 12 (3).
+    pub const POPOVER_X: f32 = 92.0;
+    pub const POPOVER_W: f32 = 270.0;
+    pub const POPOVER_RAD: f32 = 18.0;
+    pub const POPOVER_PAD: f32 = 8.0;
+    pub const POPOVER_ROW_H: f32 = 48.0;
+    pub const POPOVER_ROW_RAD: f32 = 12.0;
+    /// Its fill `#18191c`, 1px white .18 edge, the active row's white .10 (3).
+    pub const POPOVER_FILL: [f32; 4] = COOL_870;
+    pub const POPOVER_RIM: [f32; 4] = with_a(WHITE, 0.18);
+    pub const POPOVER_ROW_ACTIVE: [f32; 4] = with_a(WHITE, 0.10);
+    /// Its row text, white .90 (3).
+    pub const POPOVER_INK: [f32; 4] = with_a(WHITE, 0.90);
+    /// The focused row: accent fill, lavender ink, a 1.02 pop (3).
+    pub const POPOVER_ROW_FOCUS: [f32; 4] = VIOLET_500;
+    pub const POPOVER_INK_FOCUS: [f32; 4] = VIOLET_200;
+    pub const POPOVER_FOCUS_SCALE: f32 = 1.02;
+    /// A row's side padding, its 28px library icon and the gap to the name (3).
+    pub const POPOVER_ROW_PAD_X: f32 = 14.0;
+    pub const POPOVER_ICON: f32 = 28.0;
+    pub const POPOVER_ICON_GAP: f32 = 12.0;
+    /// Its top sits 6 above the Libraries item, kept 10 from the top and 20 from the bottom of
+    /// the screen (`Sidebar.js:_toggleFloatingLibraries`).
+    pub const POPOVER_NUDGE: f32 = 6.0;
+    pub const POPOVER_EDGE_TOP: f32 = 10.0;
+    pub const POPOVER_EDGE_BOTTOM: f32 = 20.0;
+    /// It opens from scale 0.92, and the label pill from 0.9, both with the overshoot (3).
+    pub const POPOVER_OPEN_FROM: f32 = 0.92;
+    pub const LABEL_OPEN_FROM: f32 = 0.9;
+    /// The label pill's line box: 16.8px text at Litefin's 1.5 line height (2.2).
+    pub const LABEL_LINE_H: f32 = 25.2;
+    /// The avatar's ground while no picture has landed: the action fill white .10 (2.1).
+    pub const AVATAR_FILL: [f32; 4] = with_a(WHITE, 0.10);
+
+    /// The global clock, top 32 / right 50, 22.4px at white .90 on a 1.5 line box (4.2).
+    pub const CLOCK_TOP: f32 = 32.0;
+    pub const CLOCK_RIGHT: f32 = 50.0;
+    pub const CLOCK_LINE_H: f32 = 33.6;
+    pub const CLOCK_INK: [f32; 4] = with_a(WHITE, 0.90);
+}
+
+/// **Litefin's `.page-error` box** (`styles/components.css`), drawn by `widgets::PageError` where a
+/// page has nothing to show (the Favorites page today): `rgba(220,53,69,.1)` inside a 1px
+/// `#ff6b6b` border, the text `#ff6b6b`. Litefin's look, so it is red where upstream's failure
+/// read-outs are not.
+pub mod page_error {
+    use super::{with_a, RED_300, RED_600};
+
+    pub const FILL: [f32; 4] = with_a(RED_600, 0.10);
+    /// The border and the text.
+    pub const INK: [f32; 4] = RED_300;
+}
+
+/// **Litefin's player OSD** (`docs/litefin-look.md` 10): two black gradients, icon-only circle
+/// buttons that fill with the accent on focus, and an accent seek fill.
+pub mod osd {
+    use super::{rgb8, scrim_black, with_a, VIOLET_200, VIOLET_500, WHITE};
+
+    /// The header and bottom gradients start at black .75 and run to transparent, downward from
+    /// the top edge and upward from the bottom edge (10).
+    pub const GRADIENT_FROM: [f32; 4] = scrim_black(0.75);
+    pub const GRADIENT_TO: [f32; 4] = scrim_black(0.0);
+    /// Header padding 38.4 a side, 76.8 below (10).
+    pub const HEADER_PAD: f32 = 38.4;
+    pub const HEADER_PAD_BOTTOM: f32 = 76.8;
+    /// Bottom area padding: 160 above the controls, 38.4 a side, 48 below (10).
+    pub const BOTTOM_PAD_TOP: f32 = 160.0;
+    pub const BOTTOM_PAD_X: f32 = 38.4;
+    pub const BOTTOM_PAD_BOTTOM: f32 = 48.0;
+
+    /// A control: a 58px circle with a 33.6px icon, 11.52 apart (10 Buttons, Controls row).
+    pub const BUTTON_D: f32 = 58.0;
+    pub const BUTTON_ICON: f32 = 33.6;
+    pub const BUTTON_GAP: f32 = 11.52;
+    /// Play/pause: an 86.4px circle with a 48px icon, 11.52 extra margin each side (10).
+    pub const PLAY_D: f32 = 86.4;
+    pub const PLAY_ICON: f32 = 48.0;
+    pub const PLAY_MARGIN: f32 = 11.52;
+    /// Focus pops the circle 1.08 and the icon inside it a further 1.12 (10).
+    pub const FOCUS_SCALE: f32 = 1.08;
+    pub const ICON_FOCUS_SCALE: f32 = 1.12;
+    /// An idle button is the white icon alone (icon-only, 10).
+    pub const BUTTON_IDLE_INK: [f32; 4] = WHITE;
+    /// A focused button: accent fill, lavender icon, no border (10).
+    pub const BUTTON_FOCUS_FILL: [f32; 4] = VIOLET_500;
+    pub const BUTTON_FOCUS_INK: [f32; 4] = VIOLET_200;
+    /// A toggle that is on shows its icon in the accent (10).
+    pub const BUTTON_ACTIVE_INK: [f32; 4] = VIOLET_500;
+    /// A disabled chapter button sits at .30 (10).
+    pub const BUTTON_DISABLED_A: f32 = 0.30;
+
+    /// The seek track: 8 tall, white .30, radius 12, 20 from the times (10 Seek row).
+    pub const SEEK_TRACK_H: f32 = 8.0;
+    pub const SEEK_TRACK: [f32; 4] = with_a(WHITE, 0.30);
+    pub const SEEK_RAD: f32 = 12.0;
+    pub const SEEK_TIME_GAP: f32 = 20.0;
+    /// The played part, the accent (10 Seek row; 0 OSD progress accent).
+    pub const SEEK_FILL: [f32; 4] = VIOLET_500;
+    /// The thumb, 8x8 white; a 10x28 white bar while the seek bar has focus (10).
+    pub const THUMB: f32 = 8.0;
+    pub const THUMB_FOCUS_W: f32 = 10.0;
+    pub const THUMB_FOCUS_H: f32 = 28.0;
+    pub const THUMB_INK: [f32; 4] = WHITE;
+    /// The time read-outs: at least 80 wide, 36 tall (10).
+    pub const TIME_MIN_W: f32 = 80.0;
+    pub const TIME_H: f32 = 36.0;
+    /// The track menus' full-screen dim, black .85 (10 Track menus, `osdTrackMenuBgOpacity`).
+    pub const TRACK_MENU_DIM: f32 = 0.85;
+    /// The track menus' list: centred, at least 750 wide, at most 90 % of the width and 70 % of
+    /// the height (10 Track menus).
+    pub const TRACK_MENU_MIN_W: f32 = 750.0;
+    pub const TRACK_MENU_MAX_W: f32 = crate::ui::consts::SCR_W * 0.90;
+    pub const TRACK_MENU_MAX_H: f32 = crate::ui::consts::SCR_H * 0.70;
+
+    /// The title's secondary run, the clock and "Ends at": white at .90 (10 Header, Controls row).
+    pub const TEXT_SOFT: [f32; 4] = with_a(WHITE, 0.90);
+    /// Chapter ticks, 4 x 13 in the track colour (10 Seek row).
+    pub const TICK_W: f32 = 4.0;
+    pub const TICK_H: f32 = 13.0;
+    /// The seek tooltip: the gradient's black at .90 inside a 2px white .20 border, 14 above the
+    /// seek row, its trickplay still clipped at radius 6 (10 Seek row, `.osd-seek-tooltip`).
+    pub const TOOLTIP_FILL: [f32; 4] = scrim_black(0.90);
+    pub const TOOLTIP_BORDER: [f32; 4] = with_a(WHITE, 0.20);
+    pub const TOOLTIP_BORDER_W: f32 = 2.0;
+    pub const TOOLTIP_GAP: f32 = 14.0;
+    pub const TOOLTIP_THUMB_RAD: f32 = 6.0;
+
+    /// The Up Next card's and Skip Intro's text buttons at rest: a white .10 fill, a 2.5px white
+    /// .20 border, .80 ink (10 Up Next, `styles/upnext.css` `.upnext-btn`).
+    pub const PILL_FILL: [f32; 4] = with_a(WHITE, 0.10);
+    pub const PILL_INK: [f32; 4] = with_a(WHITE, 0.80);
+    pub const PILL_BORDER: [f32; 4] = with_a(WHITE, 0.20);
+    pub const PILL_BORDER_W: f32 = 2.5;
+    /// A focused secondary pill (Hide): white .22 under a white border.
+    pub const PILL_FOCUS_FILL: [f32; 4] = with_a(WHITE, 0.22);
+    pub const PILL_FOCUS_BORDER: [f32; 4] = WHITE;
+
+    /// The Up Next card: `rgba(12,12,18,.92)` behind a 1px white .15 border (10 Up Next).
+    const CARD_INK: [f32; 4] = rgb8(12, 12, 18);
+    pub const CARD_FILL: [f32; 4] = with_a(CARD_INK, 0.92);
+    pub const CARD_BORDER: [f32; 4] = with_a(WHITE, 0.15);
+    /// The still's ground while it loads, and the episode badge over it.
+    pub const CARD_THUMB_FILL: [f32; 4] = with_a(WHITE, 0.06);
+    pub const CARD_BADGE_FILL: [f32; 4] = scrim_black(0.70);
+    /// "UP NEXT" in the accent at .90; the countdown in white .55.
+    pub const CARD_LABEL: [f32; 4] = with_a(VIOLET_500, 0.90);
+    pub const CARD_COUNTDOWN: [f32; 4] = with_a(WHITE, 0.55);
+}
 
 // ── The UNKEYED ground: a control standing on the VIDEO PLANE ────────────────
 // Everything above assumes the ground can be SAMPLED — the page read its own artwork and a control
@@ -391,9 +695,10 @@ pub const CONTROL_RIM_FOCUS_UNKEYED_GLOW: [f32; 4] = [5.0, 1.0, 2.5, 0.55];
 pub const CONTROL_CAST_FOCUS: [(f32, f32, f32); 2] = [(5.0, 32.0, 0.34), (1.0, 6.0, 0.20)];
 
 // ── Surfaces / backgrounds ───────────────────────────────────────────────────
-/// Flat shelf/app base (both gradient stops) — Apple TV's shelf gray **#2C2C2E (44,44,46)**. A
-/// MEDIUM gray, deliberately not near-black: the focused-card drop-shadow only reads against a base
-/// this light (on the old near-black 25,25,29 a black shadow had almost nothing to darken).
+/// Flat shelf/app base (both gradient stops) - Litefin's black theme page `#000000`
+/// (`docs/litefin-look.md` 2.1; also its sidebar and navbar background). Upstream's was Apple TV's
+/// shelf gray `#2C2C2E`, chosen so a focused card's drop shadow had something to darken; Litefin
+/// focuses with a ring instead and draws no shadow at all (2.6).
 pub const SURFACE_APP: [f32; 4] = NEUTRAL_500;
 /// Opaque sheet drawn over the hardware video plane when a detail page scrolls the hero away.
 /// Same stop as [`SURFACE_APP`] so the rising page and the cover are one surface. Different role:
@@ -402,13 +707,16 @@ pub const PLANE_COVER: [f32; 4] = SURFACE_APP;
 // GL clear color — 3-float (`frame_clear` takes r,g,b, no alpha): [`SURFACE_APP`] itself (both are
 // the `NEUTRAL_500` stop), defined in `gfx::tokens` because `gfx` clears with it.
 pub use nj_gfx::gfx::tokens::CLEAR_RGB;
-/// Opaque menu panel / fade mask / badge knockout interior.
-pub const SURFACE_PANEL: [f32; 4] = NEUTRAL_650;
+/// Opaque menu panel / fade mask / badge knockout interior. Litefin's one floating panel in the black
+/// theme, the sidebar's libraries popover `#18191c` (`docs/litefin-look.md` 3); flat, because the
+/// black theme has no gradient surface anywhere (2.1).
+pub const SURFACE_PANEL: [f32; 4] = COOL_870;
 /// Near-opaque sheet/card gradient — top stop. [`SURFACE_PANEL`]'s own stop at .985, so the sheet
 /// and its opaque twin are one material rather than two greys a hair apart.
-pub const PANEL_TOP: [f32; 4] = with_a(NEUTRAL_650, 0.985);
-/// Near-opaque sheet gradient — bottom stop (kept distinct; the gradient is deliberate).
-pub const PANEL_BOT: [f32; 4] = with_a(NEUTRAL_750, 0.985);
+pub const PANEL_TOP: [f32; 4] = with_a(COOL_870, 0.985);
+/// Near-opaque sheet gradient - bottom stop. The same stop as the top in the Litefin fork: the
+/// black theme's surfaces are flat fills (`docs/litefin-look.md` 2.1).
+pub const PANEL_BOT: [f32; 4] = with_a(COOL_870, 0.985);
 /// **The material scale, named rather than numbered — SwiftUI's `Material` is the vocabulary.**
 ///
 /// Every glass surface in this app used to be described by two unrelated numbers written at its own
@@ -584,23 +892,48 @@ mod material_tests {
 /// The floor is legibility, not taste: the fine print's contrast over the composite at a white and
 /// a black underlay is graded in `underlay_tests.rs`
 /// (`text_contrast_floors_hold_over_a_bright_and_a_dark_underlay`).
-pub const PANEL_FROST_TOP: [f32; 4] = with_a(NEUTRAL_650, 0.72);
-/// The frosted sheet's bottom stop — see [`PANEL_FROST_TOP`].
-pub const PANEL_FROST_BOT: [f32; 4] = with_a(NEUTRAL_750, 0.72);
+pub const PANEL_FROST_TOP: [f32; 4] = with_a(COOL_870, 0.72);
+/// The frosted sheet's bottom stop - see [`PANEL_FROST_TOP`] (flat, as [`PANEL_BOT`] is).
+pub const PANEL_FROST_BOT: [f32; 4] = with_a(COOL_870, 0.72);
 /// The sign-in **QR card's** quiet-zone plate (`login.rs`) — a bright cool-white whose job is SCAN
 /// CONTRAST for a phone camera, not focus. It is a SURFACE, not a control fill, which is the whole
 /// reason it outlived the second control white it used to be (`FILL_PRIMARY`): a plate under a
 /// black-tinted QR texture, and the only place in the app where the app paints something this
 /// bright on purpose.
 pub const SURFACE_QR_PLATE: [f32; 4] = COOL_0;
-/// Poster/thumb skeleton flat placeholder.
-pub const CARD_PLACEHOLDER: [f32; 4] = COOL_850;
-/// Loading-skeleton gradient — top. The same `COOL_850` stop as [`CARD_PLACEHOLDER`]: a card whose
-/// artwork is on the way and one with none to load are the same object at rest. Both lean BLUE,
-/// away from the neutral panel greys, so a missing poster never reads as a panel.
-pub const SKELETON_TOP: [f32; 4] = COOL_850;
-/// Loading-skeleton gradient — bottom.
-pub const SKELETON_BOT: [f32; 4] = COOL_900;
+/// Poster/thumb skeleton flat placeholder: Litefin's `--jf-surface` `#0a0a0a`, the card image's
+/// background while it loads (`docs/litefin-look.md` 2.1, 4.2).
+pub const CARD_PLACEHOLDER: [f32; 4] = GREY_0A;
+/// Loading-skeleton gradient - top. The same stop as [`CARD_PLACEHOLDER`]: a card whose artwork is
+/// on the way and one with none to load are the same object at rest.
+pub const SKELETON_TOP: [f32; 4] = GREY_0A;
+/// Loading-skeleton gradient - bottom. Flat like the top: Litefin's loading fill is one code (4.2).
+pub const SKELETON_BOT: [f32; 4] = GREY_0A;
+/// A card's own box under its image - the details poster's loading fill and any card body: Litefin's
+/// `--jf-card-bg` `#080808` (`docs/litefin-look.md` 2.1, 5 Poster).
+pub const CARD_BG: [f32; 4] = GREY_08;
+/// [`CARD_BG`] under a pointer hover, `#121212`; also the focused secondary login button (2.1, 8).
+pub const CARD_BG_HOVER: [f32; 4] = GREY_12;
+
+// Litefin's flat control surfaces (`docs/litefin-look.md` 2.1), for the slices that restyle buttons,
+// inputs and toggles. Overlays stay weights on the white ramp, as everywhere in this file.
+/// The black theme's border `#222222` (2.1 Border); also an input's border (2.1 Input bg / border).
+pub const BORDER: [f32; 4] = GREY_22;
+/// The lighter border `#2a2a2a` (2.1 Border light); also a solid button's hover fill (2.1 Button
+/// bg / hover).
+pub const BORDER_LIGHT: [f32; 4] = GREY_2A;
+/// A text input's fill, `#181818` (2.1 Input bg).
+pub const INPUT_FILL: [f32; 4] = GREY_18;
+/// An action button at rest - the details icon circles, library tabs and controls, the search
+/// field: white .10 with a 2px white .20 border and a white label (2.1 Action button, 5, 6, 7).
+pub const ACTION_FILL: [f32; 4] = with_a(WHITE, 0.10);
+pub const ACTION_BORDER: [f32; 4] = with_a(WHITE, 0.20);
+/// The border [`ACTION_BORDER`] is drawn at (5 Actions row, 7 Input: 2px).
+pub const ACTION_BORDER_W: f32 = 2.0;
+/// A toggle's track while off, white .15 (2.1 Switch track, 9 Toggle).
+pub const SWITCH_TRACK_OFF: [f32; 4] = with_a(WHITE, 0.15);
+/// A full-screen overlay's black, `rgba(0,0,0,.95)` (2.1 Overlay bg), as a dim weight.
+pub const OVERLAY_DIM_A: f32 = 0.95;
 
 // ── Scrims (near-black; alpha supplied per call) ─────────────────────────────
 // Hero/scroll scrim ink; use via [`scrim`]. Defined in `gfx::tokens` (the renderer paints with it).
@@ -614,10 +947,7 @@ pub const SCRIM_BLACK_INK: [f32; 3] = [BLACK[0], BLACK[1], BLACK[2]];
 ///
 /// MEASURED, not chosen. The panel is plain 888 with no sRGB framebuffer anywhere in the tree, so a
 /// token value IS an sRGB code and GL's blend is a straight lerp in that space — which makes the
-/// whole derivation arithmetic. It lives on [`crate::ui::widgets::hero_scrim`] and is asserted by
-/// that component's anchor table, so brightening a text token and re-deriving this stay one edit.
-/// The binding case is a `TEXT_SECONDARY` BODY line where the hero's bottom-up ramp supplies only
-/// ~0.29: it needs 0.655 total, so the wedge must carry ~0.51 there and rather more at the title.
+/// whole derivation arithmetic, so brightening a text token means re-deriving this.
 ///
 /// The same weight the tab bar's own track capsule already uses for the same job over the same
 /// artwork ([`TAB_TRACK_A_TOP`]) — one value per role, arrived at independently twice. An alpha
@@ -770,15 +1100,20 @@ pub const WASH_WARM: [f32; 4] = SAND_100;
 pub const ROUTE_GROUND_FALLBACK: [[f32; 4]; 4] =
     [ATMOS_WARM_GREY, ATMOS_CHARCOAL, ATMOS_UMBER, ATMOS_ASH];
 /// **A caution that is not an error** — a server reached without encryption, marked where it is
-/// named (the sign-in's server card). Amber, the palette's one warm signal, distinct in lightness
-/// from `DANGER`'s red so the two never rely on hue alone.
-pub const CAUTION: [f32; 4] = AMBER_300;
+/// named (the sign-in's server card). Litefin's warning `#ff9800` (`docs/litefin-look.md` 2.1),
+/// distinct in lightness from `DANGER`'s red so the two never rely on hue alone.
+pub const CAUTION: [f32; 4] = ORANGE_500;
 /// **A person's avatar disc** (who's watching, *Add a user*): the person's initial on one of these,
 /// chosen by their id so one person keeps one colour on every screen. Drawn from the pre-Home
 /// atmosphere those screens stand on, so a disc reads as part of that ground rather than a badge.
 pub const AVATAR_TONES: [[f32; 4]; 4] = [ATMOS_WARM_GREY, ATMOS_ASH, ATMOS_UMBER, NEUTRAL_600];
-/// Warm amber Continue-Watching progress fill (Plex-specific; no player equivalent). `#fab82e`.
-pub const RESUME_FILL: [f32; 4] = with_a(AMBER_300, 0.95);
+/// Continue-Watching progress fill: the left stop of Litefin's card progress gradient, the accent
+/// `#6b6ede` (`docs/litefin-look.md` 4.2 Progress). Upstream's was a warm amber `#fab82e`.
+pub const RESUME_FILL: [f32; 4] = VIOLET_500;
+/// The progress gradient's right stop, the accent hover `#9597e7` (4.2 Progress).
+pub const RESUME_FILL_END: [f32; 4] = VIOLET_400;
+/// The card progress bar's height, at the very bottom inside the image (4.2 Progress: 6px).
+pub const RESUME_BAR_H: f32 = 6.0;
 /// Plex's own "Plex Pass" gold, `#e5a00d` — a BRAND REFERENCE, not a palette member
 /// (`Plex Pass Awareness.dc.html`, "the amber decision"). Two ambers exist ON PURPOSE and stay
 /// two tokens: [`RESUME_FILL`] is ours and tunable; this one names somebody else's colour and
@@ -796,17 +1131,19 @@ pub const PASS_GOLD: [f32; 4] = AMBER_500;
 /// Near-black ink over a [`PASS_GOLD`] fill — the error read-out's FILLED capsule, the one place
 /// the capsule fills (on pure black an outline has no ground and reads as a hole). `#1a1204`.
 pub const PASS_GOLD_INK: [f32; 4] = AMBER_950;
-/// Unfilled track behind the Continue-Watching resume bar — the full-bleed card-bottom rail. A
-/// hair lighter than the player scrubber's so the amber reads against a bright poster.
-pub const RESUME_TRACK: [f32; 4] = with_a(WHITE, 0.22);
+/// Unfilled track behind the Continue-Watching resume bar - the full-bleed card-bottom rail.
+/// Litefin's `rgba(0,0,0,.5)` (`docs/litefin-look.md` 4.2 Progress): a darkening, so the accent
+/// reads against a bright poster.
+pub const RESUME_TRACK: [f32; 4] = with_a(BLACK, 0.5);
 /// Ink over [`RESUME_FILL`] when the amber is a SURFACE rather than a mark. Distinct from
 /// [`ACCENT_INK`]: that one is tuned against the near-white [`ACCENT`], and at that value it
 /// disappeared into the amber rather than reading as a knockout.
 ///
 /// **No consumer today** — its one user was the amber watched DISC, which the 2026-08-13 evening
 /// sync replaced with a bare tick over a veil ([`TILE_MARK_INK`]). Kept because the design system
-/// still carries the role, and because the next amber surface needs exactly this ink.
-pub const INK_ON_RESUME: [f32; 4] = NEUTRAL_850;
+/// still carries the role. With the fill now the accent, its ink is the accent's own lavender -
+/// what Litefin's accent-filled badges are inked in (`docs/litefin-look.md` 4.2 Badges).
+pub const INK_ON_RESUME: [f32; 4] = VIOLET_200;
 
 // ── A list row's trailing VALUE read-out ─────────────────────────────────────
 /// The word at a row's trailing edge that says what it is SET to (`On`/`Off`, "English"), over the
@@ -846,9 +1183,13 @@ pub const FAN_NAME_INK: [f32; 4] = with_a(WHITE, 0.94);
 /// The drop under that name (the mock's `text-shadow: 0 2px 8px rgba(0,0,0,.5)`), set as an offset
 /// copy of the name: the glyph path has no blur, and the fan's own scrim carries the legibility.
 pub const FAN_NAME_SHADOW: [f32; 4] = with_a(BLACK, 0.50);
-/// Error/destructive signal ink — the wrong-PIN dot flash. Desaturated toward the palette's
-/// warm neutrals so it reads as a state, not an alarm.
-pub const DANGER: [f32; 4] = RED_400;
+/// Error/destructive signal ink - the wrong-PIN dot flash. Litefin's error `#f44336`
+/// (`docs/litefin-look.md` 2.1).
+pub const DANGER: [f32; 4] = RED_450;
+/// Litefin's success `#4caf50` (`docs/litefin-look.md` 2.1).
+pub const SUCCESS: [f32; 4] = GREEN_450;
+/// Litefin's info `#2196f3` (`docs/litefin-look.md` 2.1).
+pub const INFO: [f32; 4] = BLUE_500;
 /// How much [`DANGER`] a destructive control's IDLE plate carries — the design's 16%.
 ///
 /// Named rather than written into [`CONTROL_DANGER_IDLE_FILL`] because it is the one number that
@@ -893,8 +1234,8 @@ pub const DIAG_NETWORK_MEAN: [f32; 4] = AMBER_300;
 /// The fixed-slot plot's overwrite cursor. Near-white survives every state colour and a phone
 /// camera's chroma subsampling, which is the output format of this surface.
 pub const DIAG_SWEEP_CURSOR: [f32; 4] = COOL_0;
-/// Section divider hairline.
-pub const HAIRLINE: [f32; 4] = with_a(WHITE, 0.10);
+/// Section divider hairline: Litefin's `--jf-divider`, white .05 (`docs/litefin-look.md` 2.1).
+pub const HAIRLINE: [f32; 4] = with_a(WHITE, 0.05);
 /// A glass container's **perimeter line** — the design system's `--glass-rim`, one notch under the
 /// tiles' own [`CARD_SHEEN`] (.22) because a sheet's edge is quieter than a card's.
 ///
@@ -1000,8 +1341,7 @@ pub const GLASS_RIM_MAX: f32 = 0.4;
 pub const OVERLAY_FOCUS_PILL: [f32; 4] = with_a(WHITE, 0.14);
 /// The shared top tab bar's **TRACK** — the recessed near-black capsule the tab pills sit in, and
 /// the one thing that owns their legibility over bright hero art (inside it a plain segment can stay
-/// bare [`TEXT_TERTIARY`] text, and the wedge above deliberately stops short of it: see
-/// `widgets::HERO_BASE_SCRIM_Y0`). Dark-material weight — light enough to keep a hint of the
+/// bare [`TEXT_TERTIARY`] text). Dark-material weight — light enough to keep a hint of the
 /// artwork, dark enough that tertiary ink holds over near-white art — and a GRADIENT: this top stop
 /// plus [`TAB_TRACK_BOT`].
 ///
@@ -1160,8 +1500,12 @@ pub const TINT_WHITE: [f32; 4] = WHITE;
 // They tint an icon MASK only — never text, never a surface — so they cannot leak into the rest of
 // the UI. The row's captions and scores use the ordinary TEXT_* tokens, which is the point: the
 // only colour left in the row is the verdict.
-/// The ripe tomato's body — `#f5341a`.
-pub const RATING_FRESH: [f32; 4] = RED_500;
+/// The ripe tomato's body - Litefin's critic colour `#fa320a` (`docs/litefin-look.md` 2.1).
+pub const RATING_FRESH: [f32; 4] = RED_550;
+/// The star before a community rating - Litefin's `#f5c518` (`docs/litefin-look.md` 2.1, 4.1).
+pub const RATING_STAR: [f32; 4] = GOLD_400;
+/// The favourite heart - Litefin's `#ff3b30` (`docs/litefin-look.md` 2.1).
+pub const FAVORITE: [f32; 4] = RED_430;
 /// The Certified body — `#f0b429`. The SAME fruit struck in gold rather than a separate seal:
 /// a rarer bar reads as a richer version of the thing, and a seal was the one shape here that was
 /// unmistakably somebody's award rather than a piece of fruit.
@@ -1184,7 +1528,12 @@ pub const RATING_MUTED: [f32; 4] = COOL_400;
 // is tunable). The hero-grid card's wide glow pad is `consts::GLOW_PAD` (shared with off-screen
 // culling, so it has one home there).
 /// Card corner radius (tiles/shelves — `CardRow`'s rounded rect + its baked focus glow follow it).
-pub const CARD_RING_RAD: f32 = 14.0;
+/// Litefin's card IMAGE corner, 9 = the card's 12 less its 3px focus ring (`docs/litefin-look.md`
+/// 2.3 Card image inner); the ring around it is [`CARD_FOCUS_RING_RAD`]. Upstream's was 14.
+pub const CARD_RING_RAD: f32 = 9.0;
+/// The outer corner of a card's [`FOCUS_RING`]: the image's [`CARD_RING_RAD`] plus the ring's
+/// [`FOCUS_RING_W`], Litefin's `--jf-border-radius` 12 (`docs/litefin-look.md` 2.3).
+pub const CARD_FOCUS_RING_RAD: f32 = CARD_RING_RAD + FOCUS_RING_W;
 
 // ── Episode filmstrip focus treatment ───────────────────────────────────────────────────────────
 // The episode filmstrip's labels sit BELOW the tile, so a focus change has to read from the text as
@@ -1226,8 +1575,8 @@ pub const EP_META_INK: [f32; 4] = TEXT_TERTIARY;
 /// > leaves it. 32 stays inside that vocabulary while still reading as softer than a card, and
 /// > clears the 28px glass bevel so the chamfer runs inside the arc."
 ///
-/// The tile's 14 is [`CARD_RING_RAD`] and the row pill's 18 is `table::PILL_RAD`, so that sentence
-/// is checkable against this tree rather than only against the mock. Two consequences are
+/// The tile's 14 was [`CARD_RING_RAD`] (9 in the Litefin fork) and the row pill's 18 is
+/// `table::PILL_RAD`, so that sentence was checkable against this tree rather than only the mock. Two consequences are
 /// load-bearing rather than decorative. The **bevel clause**: below the 28px glass bevel the
 /// chamfer would run OUTSIDE the corner arc and the rim would break at each corner. And the
 /// **padding clause**, which the design leaves implicit and the panels make explicit — every one of
@@ -1371,3 +1720,92 @@ const PURPLE_700: [f32; 4] = rgb8(0x70, 0x30, 0xa0);
 /// Opaque main-thread checker warning surface (developer builds only).
 #[cfg(feature = "threadcheck")]
 pub(crate) const RUNTIME_WARNING: [f32; 4] = PURPLE_700;
+
+/// Litefin's Home (`docs/litefin-look.md` 4.1): the hero's meta line and rating badge, its pager
+/// dots and the focused hero's accent band.
+pub mod home_lf {
+    use super::{with_a, BRAND_FILL, WHITE};
+    /// The hero meta line (`.hero-meta-row`, white at 0.9).
+    pub const META_INK: [f32; 4] = with_a(WHITE, 0.90);
+    /// The rating badge's fill (`.hero-meta-badge`).
+    pub const BADGE_FILL: [f32; 4] = with_a(WHITE, 0.20);
+    /// Pager dots: the other slides, and the one on screen.
+    pub const DOT_IDLE: [f32; 4] = with_a(WHITE, 0.28);
+    pub const DOT_ACTIVE: [f32; 4] = WHITE;
+    /// The focused hero's accent band where it peaks (`.hero-carousel-container.focused::after`).
+    pub const FOCUS_BAND: [f32; 4] = with_a(BRAND_FILL, 0.15);
+}
+
+/// **Litefin's library and search surfaces** (`docs/litefin-look.md` 6, 7) that no shared role
+/// names. The browse slice reads these; every other control there takes the shared Litefin roles
+/// ([`ACTION_FILL`], [`BRAND_FILL`], [`SELECTED_FILL`] and their inks).
+pub mod browse_lf {
+    use super::{with_a, VIOLET_500, WHITE};
+
+    /// The alphabet bar's pill, white .05 (6 Alphabet bar; 2.1's 0.05 chip/surface weight).
+    pub const ALPHA_BAR: [f32; 4] = with_a(WHITE, 0.05);
+    /// The alphabet bar's corner, 36 (2.3 Alphabet bar).
+    pub const ALPHA_BAR_RAD: f32 = 36.0;
+    /// A genre row's focused header: white .15 behind the title (6 Genres tab).
+    pub const GENRE_HEADER_FOCUS: [f32; 4] = with_a(WHITE, 0.15);
+    /// The focused genre header's 3px accent border (6 Genres tab).
+    pub const GENRE_HEADER_RING: [f32; 4] = VIOLET_500;
+    /// The search field's border while it holds focus: the accent (7 Input, `.search-input:focus`).
+    /// Litefin's own field outranks the upstream "ink only" Search focus verdict in this fork.
+    pub const SEARCH_BORDER_FOCUS: [f32; 4] = VIOLET_500;
+}
+
+/// **The card slice's roles** (`docs/litefin-look.md` 4.2 Badges): Litefin's `tinted` badge skin,
+/// the household's (spec 0), is the accent with its lavender ink and no border. Roles of their own
+/// beside [`BRAND_FILL`]/[`BRAND_INK`], which light a CONTROL: a badge is a mark on artwork.
+pub mod cards_lf {
+    /// A card badge's fill - the episode code and the watched check - `#6b6ede`.
+    pub const BADGE_FILL: [f32; 4] = super::VIOLET_500;
+    /// The badge's text and glyph, `#d4d5f7` (2.1 Text on accent).
+    pub const BADGE_INK: [f32; 4] = super::VIOLET_200;
+}
+
+/// **The Litefin details page's own roles** (`docs/litefin-look.md` 5, posterLeft): the fixed
+/// backdrop's black ramp and the flat white-alpha plates of the meta row, the tech pills and the
+/// rich-metadata table. Kept apart from the shared roles because only the details slice reads them.
+pub mod details_lf {
+    use super::{rgb8, with_a, AMBER_300, VIOLET_500, WHITE};
+
+    /// The backdrop gradient, top to bottom, as `(fraction of the screen height, black alpha)`:
+    /// .35 at the top, .60 at 45%, .90 at 75%, solid from 88% (5 Backdrop, `.backdrop-gradient`).
+    pub const BACKDROP_RAMP: [(f32, f32); 5] =
+        [(0.0, 0.35), (0.45, 0.60), (0.75, 0.90), (0.88, 1.0), (1.0, 1.0)];
+    /// The official rating badge: white .15 under `#e0e0e0` text (5 Meta row).
+    pub const RATING_BADGE_FILL: [f32; 4] = with_a(WHITE, 0.15);
+    pub const RATING_BADGE_INK: [f32; 4] = rgb8(0xe0, 0xe0, 0xe0);
+    /// A tech pill: white .09 inside a 1px white .16 border (5 Tech pills row, `.tech-pill`).
+    pub const TECH_PILL_FILL: [f32; 4] = with_a(WHITE, 0.09);
+    pub const TECH_PILL_BORDER: [f32; 4] = with_a(WHITE, 0.16);
+    /// The HDR pill's warm tint and the Dolby Vision pill's violet one (`.tech-pill-hdr`,
+    /// `.tech-pill-dovi`), each a two-stop wash over the plain pill.
+    pub const TECH_PILL_HDR: ([f32; 4], [f32; 4]) = (with_a(AMBER_300, 0.30), with_a(AMBER_300, 0.12));
+    pub const TECH_PILL_DOVI: ([f32; 4], [f32; 4]) = (with_a(VIOLET_500, 0.40), with_a(VIOLET_500, 0.16));
+    /// A rich-metadata chip: white .05 inside a 2px white .10 border (5 Rich metadata table).
+    pub const CHIP_FILL: [f32; 4] = with_a(WHITE, 0.05);
+    pub const CHIP_BORDER: [f32; 4] = with_a(WHITE, 0.10);
+    /// The 1px rule between the table's rows, white .05 (`--jf-divider`).
+    pub const DIVIDER: [f32; 4] = with_a(WHITE, 0.05);
+}
+
+/// **Litefin's sign-in screens** (`docs/litefin-look.md` 8, modern layout): the roles its brand
+/// pane, inputs, buttons and who's-watching tiles need that no shared role covers.
+pub mod settings_lf {
+    use super::{with_a, GREY_0A, VIOLET_500, WHITE};
+
+    /// An input's and a secondary button's fill, and the ground under a who's-watching avatar:
+    /// Litefin's `--jf-surface` `#0a0a0a` (8 Buttons, Inputs, User picker).
+    pub const LOGIN_FILL: [f32; 4] = GREY_0A;
+    /// The 4px ring of a focused input, secondary button or avatar: the accent (8).
+    pub const LOGIN_RING: [f32; 4] = VIOLET_500;
+    /// The ring's width (8: "focused accent 4px border").
+    pub const LOGIN_RING_W: f32 = 4.0;
+    /// The corner of every sign-in button and input (2.3 Login buttons / inputs).
+    pub const LOGIN_RAD: f32 = 14.0;
+    /// The brand pane's tagline, white at .5 (8 Left brand pane).
+    pub const TAGLINE: [f32; 4] = with_a(WHITE, 0.5);
+}

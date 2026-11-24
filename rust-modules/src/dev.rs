@@ -62,7 +62,7 @@ pub(crate) mod scenarios;
 // `test` as well as the feature: `any_trigger_present` is the only caller and it is cfg'd out of a
 // release build, but the test below asserts this list's contents and runs with default features.
 #[cfg(any(feature = "devtriggers", test))]
-const DIAG: [&str; 41] = [
+const DIAG: [&str; 40] = [
     "nativejelly-diag.log",
     "nativejelly-events.log",
     "nativejelly-stderr.log",
@@ -85,8 +85,8 @@ const DIAG: [&str; 41] = [
     // harness has to be able to observe the who's-watching picker, which a non-DIAG trigger would
     // suppress — the observer would remove the screen it was armed to watch.
     "nativejelly-focus",
-    // The two OVERDRAW surfaces and the hero-ground fold ([`nj_gfx::overdraw`],
-    // `docs/backdrop-blur-profiling.md` Part 5). All three are measurement knobs whose whole
+    // The OVERDRAW surfaces ([`nj_gfx::overdraw`], `docs/backdrop-blur-profiling.md` Part 5) and
+    // the card-split control leg. All three are measurement knobs whose whole
     // method is an A/B against an unmasked control leg — and a non-DIAG trigger suppresses the
     // who's-watching picker, so the control leg and the masked leg would boot to DIFFERENT
     // SCREENS and the difference between them would be the screen, not the class being priced.
@@ -94,7 +94,6 @@ const DIAG: [&str; 41] = [
     "nativejelly-overdraw",
     "nativejelly-drawmask",
     "nativejelly-nocardsplit",
-    "nativejelly-heroground",
     // The FRAME BUDGET's A/B control leg (`ui/frame/budget.rs`, spec §8.1): admission as it was
     // before phase 11 — quota only, no time ceiling, no solo rule. DIAG for exactly the argument
     // the three above make: its whole method is an A/B against an unmasked control leg, and a

@@ -3072,7 +3072,13 @@ extern "C" fn seek_cb(op: *mut c_void, offset: i64, whence: c_int) -> i64 {
             // any 2xx. That is the one behavioural difference between these two arms, and it is
             // deliberate: bytes from the head of the file, delivered as though they were the bytes
             // at `target`, are corruption that looks like success.
-            Src::Curl(cs) => cs.seek(target),
+            Src::Curl(cs) => {
+                let ok = cs.seek(target);
+                if !ok && cs.poisoned() {
+                    SHARED.demux_range_ignored.store(true, Ordering::Release);
+                }
+                ok
+            }
             Src::Idle => false,
         };
         if let Some(cs) = hopped_to_tls {

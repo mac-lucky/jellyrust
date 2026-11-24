@@ -18,8 +18,10 @@ pub const LEDGER_CAPACITY: usize = 16;
 // Compatibility: DB8 `_id`s are global across every kind on the TV. Through v0.10.0 the installs
 // used plxstate.{stable,debug,night}, the same ids upstream PlxNative writes into its own private
 // kinds, so whichever app was installed second could not read its state (-3963, issue #39). They
-// now use njstate.{stable,debug,night}; each flavor's `legacy_object_id` is its old id, which the
+// then used njstate.{stable,debug,night}; each flavor's `legacy_object_id` is its old id, which the
 // helper moves once (`Backend::migrate_legacy`) and then deletes so upstream can use it again.
+// JellyRust (`com.macluckylab.jellyrust*`) uses jrstate.{stable,debug,night}: Native Jelly's own
+// installs keep njstate.* in their kinds and can sit on the same TV.
 // On webOS 4.10.2 a 16-byte ID failed get with -995 (generated base64 ID), and an 18-byte ID
 // failed put with -3968 ("Invalid _id length"); custom IDs stay within 1..=15 bytes.
 // Flavor is serialized as snake_case. An old binary rejects the unknown "nightly" variant
@@ -1022,9 +1024,9 @@ mod tests {
 
     #[test]
     fn exact_ids_and_key_names() {
-        assert_eq!(Flavor::Stable.object_id().as_bytes(), b"njstate.stable");
-        assert_eq!(Flavor::Debug.object_id().as_bytes(), b"njstate.debug");
-        assert_eq!(Flavor::Nightly.object_id().as_bytes(), b"njstate.night");
+        assert_eq!(Flavor::Stable.object_id().as_bytes(), b"jrstate.stable");
+        assert_eq!(Flavor::Debug.object_id().as_bytes(), b"jrstate.debug");
+        assert_eq!(Flavor::Nightly.object_id().as_bytes(), b"jrstate.night");
         assert_eq!(Flavor::Stable.legacy_object_id(), Some("plxstate.stable"));
         assert_eq!(Flavor::Debug.legacy_object_id(), Some("plxstate.debug"));
         assert_eq!(Flavor::Nightly.legacy_object_id(), Some("plxstate.night"));
@@ -1820,7 +1822,7 @@ mod install_identity_tests {
 
     #[test]
     fn unknown_flavors_are_invalid_and_cross_flavor_reads_are_rejected() {
-        assert_eq!(Flavor::from_app_id("com.sostk.nativejelly.typo"), None);
+        assert_eq!(Flavor::from_app_id("com.macluckylab.jellyrust.typo"), None);
         let state = CanonicalState::new(Flavor::Nightly, Generation([1; 16]));
         let bytes = state.encode().unwrap();
         assert_eq!(
@@ -1877,9 +1879,13 @@ mod install_identity_tests {
     /// Issue #39: DB8 `_id`s are global across every kind on the TV, not per app. Upstream
     /// PlxNative (`com.beb.plxnative*`) owns `plxstate.{stable,debug,night}` in its own private
     /// kinds, so reusing one made our helper's `get` fail with -3963 whenever both were installed.
+    /// Native Jelly (`com.sostk.nativejelly*`) owns `njstate.*` the same way.
     #[test]
     fn no_install_identity_reuses_an_upstream_plxnative_object_id() {
-        const UPSTREAM: [&str; 3] = ["plxstate.stable", "plxstate.debug", "plxstate.night"];
+        const UPSTREAM: [&str; 6] = [
+            "plxstate.stable", "plxstate.debug", "plxstate.night",
+            "njstate.stable", "njstate.debug", "njstate.night",
+        ];
         let identities: Vec<Value> =
             serde_json::from_str(include_str!("../../../../ci/install-identities.json")).unwrap();
         for identity in &identities {

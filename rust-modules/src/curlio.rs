@@ -1486,6 +1486,11 @@ impl CurlSource {
     /// **Checks the abort flag before any curl call**, which is what keeps a teardown from being
     /// answered with a brand-new connection the main thread's join is already waiting behind — the
     /// same invariant `ff.rs`'s `seek_cb` carries for the socket source, and for the same reason.
+    /// A seek's Range was answered from the wrong offset; every later read and seek fails.
+    pub(crate) fn poisoned(&self) -> bool {
+        self.poisoned
+    }
+
     pub(crate) fn seek(&mut self, to: i64) -> bool {
         if self.abort.is_set() || self.poisoned {
             return false;

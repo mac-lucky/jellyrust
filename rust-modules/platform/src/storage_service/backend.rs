@@ -1397,14 +1397,14 @@ mod tests {
                 calls: vec![],
             },
             Flavor::Stable,
-            "com.sostk.nativejelly.storage".into(),
+            "com.macluckylab.jellyrust.storage".into(),
         )
     }
     fn record(rev: u64) -> Value {
         let state = CanonicalState::new(Flavor::Stable, Generation([1; 16]));
         let mut value = serde_json::to_value(state).unwrap();
         value["_rev"] = json!(rev);
-        value["_kind"] = json!("com.sostk.nativejelly.storage:1");
+        value["_kind"] = json!("com.macluckylab.jellyrust.storage:1");
         json!({"returnValue":true,"results":[value]})
     }
     fn commit(expected: Expectation) -> Request {
@@ -1435,7 +1435,7 @@ mod tests {
         .unwrap();
         let current = initial.apply(&operation).unwrap().0;
         let mut object = serde_json::to_value(&current).unwrap();
-        object["_kind"] = json!("com.sostk.nativejelly.storage:1");
+        object["_kind"] = json!("com.macluckylab.jellyrust.storage:1");
         object["_rev"] = json!(9);
         object["operations"][0]["_id"] = json!("B3K8aZ");
         (json!({"returnValue":true,"results":[object]}), current)
@@ -1443,7 +1443,7 @@ mod tests {
     fn wrapped_record(state: &CanonicalState, rev: u64) -> Value {
         json!({"returnValue":true,"results":[{
             "_id":state.id,
-            "_kind":"com.sostk.nativejelly.storage:1",
+            "_kind":"com.macluckylab.jellyrust.storage:1",
             "_rev":rev,
             "state":String::from_utf8(state.encode().unwrap()).unwrap()
         }]})
@@ -1622,7 +1622,7 @@ mod tests {
             b.rpc.calls[0],
             (
                 "luna://com.palm.db/get".into(),
-                json!({"ids":["njstate.stable"]})
+                json!({"ids":["jrstate.stable"]})
             )
         );
     }
@@ -1639,8 +1639,8 @@ mod tests {
             (
                 "luna://com.palm.db/putKind".into(),
                 json!({
-                    "id":"com.sostk.nativejelly.storage:1",
-                    "owner":"com.sostk.nativejelly.storage",
+                    "id":"com.macluckylab.jellyrust.storage:1",
+                    "owner":"com.macluckylab.jellyrust.storage",
                     "private":true,
                     "indexes":[]
                 })
@@ -1655,7 +1655,7 @@ mod tests {
         let bytes: Value = serde_json::to_value(&legacy).unwrap();
         json!({
             "_id":"plxstate.stable",
-            "_kind":"com.sostk.nativejelly.storage:1",
+            "_kind":"com.macluckylab.jellyrust.storage:1",
             "_rev":rev,
             "state":serde_json::to_string(&bytes).unwrap()
         })
@@ -1669,7 +1669,7 @@ mod tests {
     fn find_call() -> (String, Value) {
         (
             "luna://com.palm.db/find".into(),
-            json!({"query":{"from":"com.sostk.nativejelly.storage:1","limit":4}}),
+            json!({"query":{"from":"com.macluckylab.jellyrust.storage:1","limit":4}}),
         )
     }
 
@@ -1679,7 +1679,7 @@ mod tests {
         let mut b = backend(vec![
             ok(),
             found(vec![legacy_object(&current, 9)]),
-            Ok(json!({"returnValue":true,"results":[{"id":"njstate.stable","rev":1}]})),
+            Ok(json!({"returnValue":true,"results":[{"id":"jrstate.stable","rev":1}]})),
             Ok(Value::Null),
             ok(),
             ok(),
@@ -1688,14 +1688,14 @@ mod tests {
         assert_eq!(b.rpc.calls[1], find_call());
         // The legacy id is never addressed by `get`: that is the call PlxNative's ACL refuses.
         assert!(b.rpc.calls.iter().all(|(uri, payload)| uri != "luna://com.palm.db/get"
-            || payload["ids"] == json!(["njstate.stable"])));
+            || payload["ids"] == json!(["jrstate.stable"])));
         let put = &b.rpc.calls[2].1["objects"][0];
-        assert_eq!(put["_id"], "njstate.stable");
+        assert_eq!(put["_id"], "jrstate.stable");
         assert!(put.get("_rev").is_none(), "create, never overwrite");
         let moved = CanonicalState::decode(put["state"].as_str().unwrap().as_bytes(), Flavor::Stable)
             .unwrap();
         let mut expected = current.clone();
-        expected.id = "njstate.stable".into();
+        expected.id = "jrstate.stable".into();
         assert_eq!(moved, expected, "only the id changes");
         assert_eq!(
             b.rpc.calls[4],
@@ -1724,9 +1724,9 @@ mod tests {
     fn an_interrupted_move_only_purges_when_the_current_record_exists() {
         let (_, current) = device_record();
         let mut moved = current.clone();
-        moved.id = "njstate.stable".into();
+        moved.id = "jrstate.stable".into();
         let mut existing = wrapped_record(&moved, 3)["results"][0].clone();
-        existing["_id"] = json!("njstate.stable");
+        existing["_id"] = json!("jrstate.stable");
         let mut b = backend(vec![
             ok(),
             found(vec![existing, legacy_object(&current, 9)]),
@@ -1821,7 +1821,7 @@ mod tests {
         ));
         assert_eq!(b.rpc.calls.len(), 3);
         assert_eq!(b.rpc.calls[1].0, "luna://com.palm.db/put");
-        assert_eq!(b.rpc.calls[1].1["objects"][0]["_id"], "njstate.stable");
+        assert_eq!(b.rpc.calls[1].1["objects"][0]["_id"], "jrstate.stable");
         assert!(b.rpc.calls[1].1["objects"][0].get("_rev").is_none());
         assert!(b.rpc.calls[1].1.get("force").is_none());
         assert_eq!(b.rpc.calls[2].0, "luna://com.palm.db/get");
@@ -2024,7 +2024,7 @@ mod tests {
                 removed: vec![],
             },
             Flavor::Stable,
-            "com.sostk.nativejelly.storage".into(),
+            "com.macluckylab.jellyrust.storage".into(),
         )
     }
     fn changing_request(mutation: WireMutation) -> Request {
@@ -2185,7 +2185,7 @@ mod tests {
                 repair_failure: None,
             },
             Flavor::Stable,
-            "com.sostk.nativejelly.storage".into(),
+            "com.macluckylab.jellyrust.storage".into(),
         )
     }
     fn protected_auth(public: state::PublicPayload) -> WireMutation {
@@ -3575,7 +3575,7 @@ mod tests {
         let wrapped = wrapped_record(&current, 20);
         let mut object = serde_json::to_value(current).unwrap();
         object["_rev"] = json!(20);
-        object["_kind"] = json!("com.sostk.nativejelly.storage:1");
+        object["_kind"] = json!("com.macluckylab.jellyrust.storage:1");
         add_db8_array_ids(&mut object);
         let record = json!({"returnValue":true,"results":[object]});
         let reconcile = Request::Reconcile {
@@ -3624,7 +3624,7 @@ mod tests {
         }
         let mut object = serde_json::to_value(current).unwrap();
         object["_rev"] = json!(20);
-        object["_kind"] = json!("com.sostk.nativejelly.storage:1");
+        object["_kind"] = json!("com.macluckylab.jellyrust.storage:1");
         let record = json!({"returnValue":true,"results":[object]});
         let mut b = backend(vec![Ok(record.clone()), Ok(record)]);
         assert!(matches!(

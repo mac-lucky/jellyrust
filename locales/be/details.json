@@ -1,0 +1,18 @@
+{
+  "details.runtime_hm": "{hours} гадз {minutes} хв",
+  "details.runtime_m": "{minutes} хв",
+  "details.ends_at": "Скончыцца а {time}",
+  "details.aired": "Прэм'ера {date}",
+  "details.show_more": "Паказаць больш",
+  "details.genres": "Жанры",
+  "details.directors": "Рэжысёры",
+  "details.writers": "Сцэнарысты",
+  "details.audio": "Аўдыя",
+  "details.subtitles": "Субтытры",
+  "details.seasons": "Сезоны",
+  "details.special_features": "Дадатковыя матэрыялы",
+  "details.more_like_this": "Падобнае",
+  "details.added": "Дададзена {date}",
+  "details.studios": "Студыі",
+  "details.favorite": "Абранае"
+}

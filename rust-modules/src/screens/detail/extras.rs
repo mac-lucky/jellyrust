@@ -8,7 +8,7 @@ use crate::screens::registry::PlayIntent;
 use crate::ui::card_row::{self, CardRow, RowStyle, TileLabel};
 use nj_machine::machine::GroupId;
 use crate::ui::widgets::Art;
-use crate::ui::{theme, Painter, Rect};
+use crate::ui::{Painter, Rect};
 
 pub(crate) const EXTRAS_ELEM_RANGE_START: u32 = 1728;
 /// Stops before published detail keys (`FIRST_ITEM_ELEM` 2048). 32 tiles is the shelf cap.
@@ -17,7 +17,7 @@ pub(crate) const EXTRAS_GROUP: GroupId = GroupId(6);
 /// Heading cap top to card top — the SHARED shelf pitch, as on [`super::related`].
 pub(crate) const LABEL_H: f32 = crate::ui::consts::TITLE_DY + crate::ui::consts::CARD_DY;
 const MAX: usize = (EXTRAS_ELEM_RANGE_END - EXTRAS_ELEM_RANGE_START) as usize;
-const STYLE: RowStyle = RowStyle::EPISODE;
+const STYLE: RowStyle = super::section::STILLS;
 
 pub(crate) fn elem(index: usize) -> Option<u32> {
     (index < MAX).then_some(EXTRAS_ELEM_RANGE_START + index as u32)
@@ -43,7 +43,7 @@ pub(crate) fn block_h(band: f32) -> f32 {
 pub(crate) fn rect(row: &CardRow, index: usize, top: f32, at_drawn: bool) -> Rect {
     let base = card_row::tile_rect(
         index,
-        crate::ui::consts::MARGIN_X,
+        STYLE.margin_x,
         STYLE.w + STYLE.gap,
         row.scroll_x(),
         top + LABEL_H,
@@ -90,16 +90,7 @@ pub(crate) fn draw(
     if n == 0 {
         return;
     }
-    let lift = row.lift();
-    p.text(
-        nj_platform::i18n::msg::browse_detail_extras_c().as_ptr(),
-        crate::ui::consts::MARGIN_X,
-        top - lift,
-        theme::size::HEADLINE,
-        theme::TEXT_HEADING,
-        0,
-        1,
-    );
+    super::section::heading(p, nj_platform::i18n::msg::details_special_features_c(), top - row.lift());
     card_row::strip(
         p,
         row,
@@ -144,7 +135,7 @@ pub(crate) fn draw_focused(
     };
     let base = card_row::tile_rect(
         index,
-        crate::ui::consts::MARGIN_X,
+        STYLE.margin_x,
         STYLE.w + STYLE.gap,
         row.scroll_x(),
         top + LABEL_H,

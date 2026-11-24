@@ -184,14 +184,14 @@ mod tests {
         let called = std::cell::Cell::new(false);
         for (path, id) in [
             (dir("com.evil"), "com.evil"),
-            (dir("com.sostk.nativejelly.bad;id"), "com.sostk.nativejelly.bad;id"),
+            (dir("com.macluckylab.jellyrust.bad;id"), "com.macluckylab.jellyrust.bad;id"),
             (
-                PathBuf::from("/tmp/com.sostk.nativejelly"),
+                PathBuf::from("/tmp/com.macluckylab.jellyrust"),
                 nj_base::paths::STABLE_APP_ID,
             ),
             (
                 PathBuf::from(
-                    "/media/developer/apps/usr/palm/applications/com.sostk.nativejelly.debug",
+                    "/media/developer/apps/usr/palm/applications/com.macluckylab.jellyrust.debug",
                 ),
                 nj_base::paths::STABLE_APP_ID,
             ),
@@ -214,11 +214,11 @@ mod tests {
 
     #[test]
     fn command_is_fixed_and_contains_the_only_validated_install_arguments() {
-        let id = "com.sostk.nativejelly.debug-1";
+        let id = "com.macluckylab.jellyrust.debug-1";
         let c = command(&dir(id), id).unwrap();
-        assert!(c.contains("/usr/bin/jailer -t native -p '/media/developer/apps/usr/palm/applications/com.sostk.nativejelly.debug-1' -i 'com.sostk.nativejelly.debug-1' /bin/true"));
+        assert!(c.contains("/usr/bin/jailer -t native -p '/media/developer/apps/usr/palm/applications/com.macluckylab.jellyrust.debug-1' -i 'com.macluckylab.jellyrust.debug-1' /bin/true"));
         assert!(c.contains("id -u"));
         assert!(c.contains("[ ! -c /dev/rtkmem ]"));
-        assert!(c.contains("/var/palm/jail/com.sostk.nativejelly.debug-1/dev/rtkmem"));
+        assert!(c.contains("/var/palm/jail/com.macluckylab.jellyrust.debug-1/dev/rtkmem"));
     }
 }

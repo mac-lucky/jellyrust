@@ -799,22 +799,24 @@ pub(crate) struct Stream {
     pub(crate) ad: bool,
     pub(crate) forced: bool,
     pub(crate) default: bool, // the file's default track (drives the "Original:" audio label)
-    /// external/sidecar stream (downloaded .srt etc. — NOT inside the container). The DEMUXER
-    /// cannot reach it; on direct play a TEXT sidecar is fetched and drawn by `player::sidecar`
+    /// external/sidecar stream (downloaded .srt, an audio sidecar `.mka` — NOT inside the
+    /// container). The DEMUXER cannot reach it: an audio sidecar plays only through a server
+    /// conversion (`metadata::audio_ordinal` gives it no ordinal). On direct play a TEXT subtitle
+    /// sidecar is fetched and drawn by `player::sidecar`
     /// instead ([`Stream::sidecar_renderable`]); a conversion delivers it as the server's file for
     /// the same renderer, or burns it when nothing soft fits (`route::adopt_subtitle_delivery`).
     pub(crate) external: bool,
     /// PMS `Stream.key` — the sidecar's delivery path (`/library/streams/{id}`). Empty for every
     /// embedded stream, which is exactly how `external` is derived.
     pub(crate) key: String,
-    /// PMS `Stream.selected` — the server's CURRENT pick for this part, i.e. the track a user
-    /// chose on ANY Plex client (phone, web, another TV) and the one `select_streams` writes.
-    /// `route`'s selection ladder prefers it over its own defaults, which is what makes a pick
-    /// made elsewhere survive here instead of being silently overwritten. NB for AUDIO the server
-    /// marks a selected stream on essentially every part — for an untouched one that is just the
-    /// container `default` echoed back — so `route::pick_dp_audio` only treats it as a choice when
-    /// it names a DIFFERENT stream, and never as a reason to transcode. Read its doc before using
-    /// this flag anywhere else.
+    /// The server's pick for this part and this user: Jellyfin's `DefaultAudioStreamIndex` /
+    /// `DefaultSubtitleStreamIndex` (`jf::convert::media`), the film's remembered track when the
+    /// user's `RememberAudioSelections`/`RememberSubtitleSelections` is on (so a pick made on ANY
+    /// client survives here), else the server's own ranking of the user's language preferences.
+    /// `route`'s selection ladder honours it first (`AudioIntent::ServerPick`, which falls through
+    /// when the panel cannot decode it on direct play; `pick_dp_subtitle`; the sidecar restore via
+    /// [`server_selected_sidecar`]). Subtitles remembered Off have no selected stream and set
+    /// `subs_off` instead. The route also marks an automatic sidecar pick here, on its own copy.
     pub(crate) selected: bool,
     /// Audio track only: PMS 1.43.4+ with Plex Pass says the server can honor
     /// `boostDialog=1`/`normalizeLoudness=1` for this track on the transcoder (issue #266). Same
@@ -1092,15 +1094,20 @@ pub(crate) const COLLECTION_MAX: usize = RELATED_MAX;
 /// item itself included (a live probe, `docs/pms-api.md`). Detail draws it as its own shelf above
 /// Related, headed by a link to the collection page, so the members are never also Related tiles.
 ///
-/// The collection is named by its TAG id, not its rating key — the hub's key filters the section
+/// PMS names the collection by its TAG id, not its rating key — the hub's key filters the section
 /// by `tagId` — so the page opens with `(section, tag, title)` and the collection store resolves
-/// the rating key from the section's collection listing.
+/// the rating key from the section's collection listing. Jellyfin names the box set itself
+/// (`rk`), so its page opens by key.
 #[derive(Clone, Default)]
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct CollectionShelf {
     pub(crate) title: String,
     pub(crate) section: i64,
     pub(crate) tag: i64,
+    /// The collection's own key when the server named it (Jellyfin), else empty. Left out when
+    /// empty, so a recording made before it existed round-trips unchanged.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) rk: String,
     /// Server order, the page's own item included and unmarked, capped at [`COLLECTION_MAX`].
     pub(crate) members: Vec<Related>,
     /// Every member the collection holds — the heading's "· N" — which `members` may cap.
@@ -1109,10 +1116,29 @@ pub(crate) struct CollectionShelf {
 }
 
 impl CollectionShelf {
-    /// Where the shelf's linked heading leads: the collection by section and tag, for the
-    /// collection store to resolve.
+    /// Where the shelf's linked heading leads: the collection by its key when the shelf has one,
+    /// else by section and tag, for the collection store to resolve.
     pub(crate) fn link(&self, sid: crate::catalog::ServerId) -> crate::catalog::collections::CollectionRef {
-        crate::catalog::collections::CollectionRef::by_tag(sid, self.section, self.tag, &self.title)
+        use crate::catalog::collections::CollectionRef;
+        if self.rk.is_empty() {
+            CollectionRef::by_tag(sid, self.section, self.tag, &self.title)
+        } else {
+            CollectionRef::by_rk(sid, &self.rk, self.section, &self.title)
+        }
+    }
+}
+
+#[cfg(test)]
+mod collection_shelf_serde_tests {
+    /// A shelf with no key serializes as it did before the key existed, so a recording made then
+    /// round-trips unchanged; a keyed one carries it.
+    #[test]
+    fn an_unkeyed_shelf_serializes_without_its_key() {
+        let shelf = super::CollectionShelf { title: "Saga".into(), ..Default::default() };
+        let json = serde_json::to_value(&shelf).unwrap();
+        assert!(json.get("rk").is_none(), "{json}");
+        let keyed = super::CollectionShelf { rk: "42".into(), ..shelf };
+        assert_eq!(serde_json::to_value(&keyed).unwrap()["rk"], "42");
     }
 }
 
@@ -1556,6 +1582,10 @@ pub(crate) struct Detail {
     pub(crate) crew: Vec<Cast>,
     pub(crate) audio: Vec<Stream>,
     pub(crate) subs: Vec<Stream>,
+    /// The server's subtitle pick for this version is Off ([`VersionFacts::subs_off`]). Kept off
+    /// the wire when false, so a recording from before the field still round-trips.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) subs_off: bool,
     pub(crate) seasons: Vec<Season>,   // shows only
     pub(crate) episodes: Vec<Episode>, // the currently-selected season
     /// SHOWS: the episode the SERVER says is next to watch (`OnDeck`, one request, no extra round
@@ -1592,6 +1622,20 @@ pub(crate) struct Detail {
     /// when unset, like `versions`, so a recording from before the field still round-trips.
     #[serde(default, skip_serializing_if = "TrackChoice::is_unset")]
     pub(crate) tracks: TrackChoice,
+    /// When the item joined its library, `YYYY-MM-DD` (UTC), empty when the server sent no date —
+    /// Litefin's `Added <date>` beside the aired date (`docs/litefin-look.md` 0, 5 Meta row). Kept
+    /// off the wire when empty, like the four below, so an older recording still round-trips.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) added: String,
+    /// The title in the item's own language, when the server has one (5 Info column).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) original_title: String,
+    /// Every studio, in server order (5 Rich metadata table).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) studios: Vec<String>,
+    /// The viewer marked the item a favourite (5 Actions row: Favorite).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) favorite: bool,
 }
 
 /// **The audio and subtitle a viewer chose on the Detail page before pressing Play.** Each half is
@@ -1651,6 +1695,11 @@ pub(crate) struct VersionFacts {
     pub(crate) dovi: Dovi,
     pub(crate) audio: Vec<Stream>,
     pub(crate) subs: Vec<Stream>,
+    /// The server remembers this version's subtitles as Off
+    /// ([`crate::catalog::MediaPart::subtitles_off`]): no `subs` entry is `selected`, and the route
+    /// turns none on by preference. Kept off the wire when false, like `Detail`'s twin.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) subs_off: bool,
 }
 
 /// One `Media` version, reduced to the fields a [`Detail`] carries for it: its first part's key,
@@ -1677,6 +1726,7 @@ fn version_facts(m: &crate::catalog::Media) -> VersionFacts {
         dovi: s.dovi,
         audio: s.audio,
         subs: s.subs,
+        subs_off: p.is_some_and(|p| p.subtitles_off),
     }
 }
 
@@ -1698,6 +1748,7 @@ impl Detail {
         self.dovi = f.dovi;
         self.audio = f.audio.clone();
         self.subs = f.subs.clone();
+        self.subs_off = f.subs_off;
     }
 
     /// Make the version whose part is `part` the one this page describes and Play plays. `false`
@@ -2182,7 +2233,8 @@ fn fetch_detail(sid: crate::catalog::ServerId, rk: &str) -> Option<(Detail, Stri
         hdr: false,
         dovi: Dovi::default(),
         art: it.art.clone(),
-        thumb: it.thumb.clone(),
+        // an episode's hero is its landscape still (`screens::detail`'s `poster_of`)
+        thumb: if it.kind == "episode" { episode_still(&it) } else { it.thumb.clone() },
         blur: blur.unwrap_or_default(),
         has_blur: blur.is_some(),
         genres: it.genre.iter().map(|t| t.tag.clone()).collect(),
@@ -2204,6 +2256,7 @@ fn fetch_detail(sid: crate::catalog::ServerId, rk: &str) -> Option<(Detail, Stri
         crew: crew_credits(&it),
         audio: Vec::new(),
         subs: Vec::new(),
+        subs_off: false,
         seasons: Vec::new(),
         episodes: Vec::new(),
         on_deck: it
@@ -2225,11 +2278,90 @@ fn fetch_detail(sid: crate::catalog::ServerId, rk: &str) -> Option<(Detail, Stri
             Vec::new()
         },
         tracks: TrackChoice::default(),
+        added: local_date(it.added_at),
+        original_title: it.original_title.clone(),
+        studios: if it.studios.is_empty() {
+            Some(it.studio.clone()).filter(|s| !s.is_empty()).into_iter().collect()
+        } else {
+            it.studios.clone()
+        },
+        favorite: it.favorite,
     };
     // audio/subtitle streams (movies carry Media/Part/Stream; a show does not — its
     // episodes do, so load_detail backfills a show's streams from its first episode).
     parse_streams(&it, &mut d);
     Some((d, it.primary_extra_key.clone()))
+}
+
+/// `unix` seconds as the UTC calendar date `YYYY-MM-DD` (Howard Hinnant's `civil_from_days`); empty
+/// for 0, the "never" both servers send for an absent date.
+fn utc_date(unix: i64) -> String {
+    if unix <= 0 {
+        return String::new();
+    }
+    let z = unix.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// `unix` seconds as the calendar date on the television's own clock (its time zone at that
+/// instant), the day Litefin prints for `DateCreated`; empty for 0, like [`utc_date`].
+fn local_date(unix: i64) -> String {
+    if unix <= 0 {
+        return String::new();
+    }
+    let at = unix as libc::time_t;
+    // SAFETY: `localtime_r` writes only the `tm` it is handed and reads `at`; both outlive the call.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let offset = if unsafe { libc::localtime_r(&at, &mut tm) }.is_null() { 0 } else { i64::from(tm.tm_gmtoff) };
+    date_at_offset(unix, offset)
+}
+
+/// `unix` seconds as the calendar date `offset_s` seconds east of UTC; empty for 0, like
+/// [`utc_date`].
+fn date_at_offset(unix: i64, offset_s: i64) -> String {
+    if unix <= 0 {
+        return String::new();
+    }
+    utc_date(unix + offset_s)
+}
+
+#[cfg(test)]
+mod utc_date_tests {
+    /// Litefin prints `DateCreated` in the television's own time zone, so a film added at 00:30
+    /// local time reads as added today, not on the UTC day before. Each instant is half an hour
+    /// either side of a UTC midnight, where any zone with an offset changes the day; the offset is
+    /// explicit, so the test means the same under `TZ=UTC` as anywhere else.
+    #[test]
+    fn the_added_date_is_the_local_calendar_day() {
+        use super::date_at_offset as at;
+        // 2025-11-19 23:29:59 UTC: already the 20th an hour east, still the 19th to the west.
+        assert_eq!(at(1_763_594_999, 3_600), "2025-11-20");
+        assert_eq!(at(1_763_594_999, 0), "2025-11-19");
+        assert_eq!(at(1_763_594_999, -3_600), "2025-11-19");
+        // 2025-11-20 00:30 UTC: still the 19th an hour west.
+        assert_eq!(at(1_763_598_600, -3_600), "2025-11-19");
+        assert_eq!(at(1_763_598_600, 9 * 3_600), "2025-11-20");
+        // 2025-06-30 23:30 UTC, where a month and a half-year turn.
+        assert_eq!(at(1_751_326_200, 3_600), "2025-07-01");
+        assert_eq!(at(0, 3_600), "", "never stays empty");
+        assert_eq!(super::local_date(0), "", "never stays empty");
+    }
+
+    #[test]
+    fn a_unix_time_is_its_utc_calendar_date_and_never_is_empty() {
+        assert_eq!(super::utc_date(0), "");
+        assert_eq!(super::utc_date(951_782_400), "2000-02-29");
+        assert_eq!(super::utc_date(1_763_596_799), "2025-11-19");
+        assert_eq!(super::utc_date(1_763_596_800), "2025-11-20");
+    }
 }
 
 /// The crew jobs we surface, in the order they appear on the shelf. PMS names the job by the
@@ -2330,8 +2462,9 @@ fn convert_streams(streams: &[crate::catalog::Stream]) -> Streams {
             forced: s.forced != 0,
             default: s.is_default != 0,
             title: s.title.clone(),
-            // embedded container streams carry no delivery key; sidecars do
-            external: s.stream_type == 3 && !s.key.is_empty(),
+            // embedded container streams carry no delivery key; sidecars do. An audio sidecar has
+            // no key (it is never fetched by the client), only the server's `IsExternal`.
+            external: if s.stream_type == 2 { s.external } else { s.stream_type == 3 && !s.key.is_empty() },
             key: s.key.clone(),
             // the server's current pick for this part (a track chosen on another client)
             selected: s.selected != 0,
@@ -2428,6 +2561,31 @@ mod convert_streams_tests {
         assert!(!s.audio[1].can_normalize_loudness);
         assert!(!s.video.expect("video track").can_normalize_loudness);
     }
+
+    /// Jellyfin's `IsExternal` reaches an AUDIO track (the household's AI lektor is a sidecar
+    /// `.mka` beside the video); subtitles keep their own rule, external = has a delivery key.
+    #[test]
+    fn an_external_audio_track_is_marked_external_and_subtitles_keep_their_rule() {
+        let jf = |json: &str| crate::jf::convert::stream(&serde_json::from_str(json).unwrap(), "guid", "source");
+        let s = convert_streams(&[
+            jf(r#"{"Type":"Audio","Index":1,"Codec":"ac3","Language":"eng","IsDefault":true}"#),
+            jf(r#"{"Type":"Audio","Index":4,"Codec":"aac","Language":"pol","Title":"Lektor AI","IsExternal":true}"#),
+            jf(r#"{"Type":"Subtitle","Index":2,"Codec":"subrip","Language":"pol"}"#),
+            jf(r#"{"Type":"Subtitle","Index":3,"Codec":"subrip","Language":"eng","IsExternal":true}"#),
+        ]);
+        assert_eq!(s.audio.iter().map(|a| a.external).collect::<Vec<_>>(), [false, true]);
+        assert_eq!(s.audio[1].title, "Lektor AI");
+        assert_eq!(s.subs.iter().map(|a| a.external).collect::<Vec<_>>(), [false, true]);
+    }
+
+    /// A sidecar audio track is not in the container, so it has no container ordinal (-1) and
+    /// shifts no embedded track's ordinal, the way `sub_render_ordinal` treats a sidecar subtitle.
+    #[test]
+    fn an_external_audio_track_has_no_container_ordinal() {
+        let track = |index, external| Stream { index, external, ..Default::default() };
+        let audio = [track(1, false), track(9, true), track(2, false)];
+        assert_eq!((0..3).map(|i| audio_ordinal(&audio, i)).collect::<Vec<_>>(), [0, -1, 1]);
+    }
 }
 
 /// parse an item's Media[0].Part[0].Stream[] into d.audio / d.subs (the About footer), plus that
@@ -2462,6 +2620,9 @@ pub(crate) struct PlayingItem {
     pub(crate) rk: String,
     pub(crate) audio: Vec<Stream>,
     pub(crate) subs: Vec<Stream>,
+    /// The server remembers this leaf's subtitles as Off ([`VersionFacts::subs_off`]): the route
+    /// starts it with none, whatever the user's subtitle preferences would turn on.
+    pub(crate) subs_off: bool,
     pub(crate) video_fps: f64, // the played leaf's video fps (0 = unknown) — feeds the Load esInfo
     /// The source's stored frame size, `Media[0]` (0 = unknown). `route.rs`'s local direct-play
     /// gate tests it against the device table's bound before MDE (`!video_dp` → `skip_mde`). An
@@ -2498,6 +2659,7 @@ impl PlayingItem {
             rk: "rk".into(),
             audio: Vec::new(),
             subs,
+            subs_off: false,
             video_fps: 0.0,
             width: 0,
             height: 0,
@@ -2544,6 +2706,7 @@ fn cached_playing(state: &MetadataState, sid: crate::catalog::ServerId, rk: &str
             rk: rk.to_string(),
             audio: d.audio.clone(),
             subs: d.subs.clone(),
+            subs_off: d.subs_off,
             video_fps: d.video_fps,
             width: d.width,
             height: d.height,
@@ -2587,6 +2750,7 @@ pub(crate) fn fetch_playing_item(sid: crate::catalog::ServerId, rk: &str, part: 
     let st = version
         .and_then(|m| m.part.first().map(|p| convert_streams(&p.stream)))
         .unwrap_or_default();
+    let subs_off = version.and_then(|m| m.part.first()).is_some_and(|p| p.subtitles_off);
     let (audio, subs, video_fps, dovi) = (st.audio, st.subs, st.fps, st.dovi);
     // the frame size rides the same version the streams come from (route.rs's direct-play gate
     // tests it against the device bound — see the field doc)
@@ -2600,6 +2764,7 @@ pub(crate) fn fetch_playing_item(sid: crate::catalog::ServerId, rk: &str, part: 
         rk: rk.to_string(),
         audio,
         subs,
+        subs_off,
         video_fps,
         width,
         height,
@@ -2662,16 +2827,20 @@ fn install_playing(state: &mut MetadataState, pt: Option<PlayingItem>) {
 // to document order — the previous behavior).
 
 /// Container-audio ordinal of `audio[i]` — what `player::set_audio_track`/`request_audio_track`
-/// (→ ff's nth_audio_stream) consume.
+/// (→ ff's nth_audio_stream) consume — or -1 when `audio[i]` is an external sidecar, which is not
+/// in the container and counts toward no other track's ordinal (as [`sub_render_ordinal`]).
 pub(crate) fn audio_ordinal(audio: &[Stream], i: usize) -> i32 {
     if i >= audio.len() {
         return i as i32;
+    }
+    if audio[i].external {
+        return -1;
     }
     let me = (audio[i].index, i);
     audio
         .iter()
         .enumerate()
-        .filter(|(j, s)| (s.index, *j) < me)
+        .filter(|(j, s)| !s.external && (s.index, *j) < me)
         .count() as i32
 }
 
@@ -3029,7 +3198,7 @@ fn convert_episode(x: &crate::catalog::Metadata) -> Episode {
         summary: x.summary.clone(),
         aired: x.originally_available_at.clone(),
         dur_ms: x.duration,
-        thumb: x.thumb.clone(),
+        thumb: episode_still(x),
         resume_ms: x.view_offset,
         // `viewCount` is ABSENT until the leaf has been watched once, so `> 0` is the whole test —
         // the same rule `fetch_detail` applies to a movie. (A show/season instead compares
@@ -3040,6 +3209,12 @@ fn convert_episode(x: &crate::catalog::Metadata) -> Episode {
         vcodec: media0.map(|m| m.video_codec.clone()).unwrap_or_default(),
         acodec: media0.map(|m| m.audio_codec.clone()).unwrap_or_default(),
     }
+}
+
+/// The 16:9 picture an episode wears: its own still, else its show's backdrop, else its show's
+/// poster (cover-cropped), so a freshly added episode or a special never draws an empty card.
+fn episode_still(x: &crate::catalog::Metadata) -> String {
+    [&x.thumb, &x.art, &x.grandparent_thumb].into_iter().find(|p| !p.is_empty()).cloned().unwrap_or_default()
 }
 
 fn convert_extra(x: &crate::catalog::Metadata) -> Extra {
@@ -3193,7 +3368,16 @@ fn project_extras(
 fn fetch_related(sid: crate::catalog::ServerId, rk: &str) -> RelatedRows {
     let client = crate::catalog::client_for(sid);
     let answer = match client.and_then(|c| c.jf()) {
-        Some(j) => j.similar_items(rk).map(|items| related_rows_jf(&items, sid, rk)),
+        Some(j) => {
+            let (similar, collection) = std::thread::scope(|s| {
+                let collection = nj_base::task::beside(s, "detail-collection", || collection_shelf_jf(&j, sid, rk));
+                (j.similar_items(rk), collection.finish())
+            });
+            match (similar, collection) {
+                (None, None) => None,
+                (similar, collection) => Some(related_rows_jf(&similar.unwrap_or_default(), sid, rk, collection)),
+            }
+        }
         None => client.and_then(|c| c.related(rk)).map(|mc| related_rows(&mc, sid, rk)),
     };
     answer.unwrap_or_else(|| {
@@ -3206,12 +3390,18 @@ fn fetch_related(sid: crate::catalog::ServerId, rk: &str) -> RelatedRows {
     })
 }
 
-/// A Jellyfin item's "More Like This" (`/Items/{id}/Similar`) as the Related row: listable titles
-/// other than the item itself, each once, capped at [`RELATED_MAX`]. Jellyfin lists no collection
-/// beside similar titles, so the collection shelf stays empty.
-fn related_rows_jf(items: &[crate::jf::models::BaseItemDto], sid: crate::catalog::ServerId, rk: &str) -> RelatedRows {
+/// A Jellyfin item's "More Like This" (`/Items/{id}/Similar`) as the Related row beside its
+/// collection shelf ([`collection_shelf_jf`]): listable titles other than the item itself and the
+/// collection's members, each once, capped at [`RELATED_MAX`].
+fn related_rows_jf(
+    items: &[crate::jf::models::BaseItemDto],
+    sid: crate::catalog::ServerId,
+    rk: &str,
+    collection: Option<CollectionShelf>,
+) -> RelatedRows {
     let mut seen = std::collections::HashSet::new();
     seen.insert(rk.to_string());
+    seen.extend(collection.iter().flat_map(|c| c.members.iter().map(|m| m.rk.clone())));
     let related = items
         .iter()
         .filter(|it| crate::catalog_fetch::jf_row::listable(it))
@@ -3219,7 +3409,31 @@ fn related_rows_jf(items: &[crate::jf::models::BaseItemDto], sid: crate::catalog
         .filter(|m| !m.rk.is_empty() && seen.insert(m.rk.clone()))
         .take(RELATED_MAX)
         .collect();
-    RelatedRows { collection: None, related }
+    RelatedRows { collection, related }
+}
+
+/// The first box set holding a Jellyfin item (`/Items/{id}/Collections`, 12.x) as the collection
+/// shelf: its members in the box set's own order, the item included, capped at
+/// [`COLLECTION_MAX`], linked by the box set's key. `None` on a server without the route (10.x),
+/// for an item in no box set, and, as [`collection_shelf`], when the item is its only member.
+fn collection_shelf_jf(j: &crate::jf::Jf, sid: crate::catalog::ServerId, rk: &str) -> Option<CollectionShelf> {
+    let set = j.item_collections(rk)?.into_iter().next()?;
+    let set_rk = crate::jf::ids::rating_key(&set.id);
+    let crate::catalog::collections::CollectionOutcome::Ok(page) = j.collection_members(&set_rk, 0, COLLECTION_MAX as i64)
+    else {
+        return None;
+    };
+    let members: Vec<Related> = page.items.iter()
+        .filter(|it| crate::catalog_fetch::jf_row::listable(it))
+        .map(|it| crate::catalog_fetch::jf_row::row(it, sid, 0))
+        .filter(|m| !m.rk.is_empty())
+        .take(COLLECTION_MAX)
+        .collect();
+    if members.iter().all(|m| m.rk == rk) {
+        return None;
+    }
+    let count = (page.total_record_count.max(0) as usize).max(members.len());
+    Some(CollectionShelf { title: set.name, section: 0, tag: 0, rk: set_rk, members, count })
 }
 
 /// Related tiles this shelf holds at most. PMS answers `/related` with several titled hubs and we
@@ -3303,7 +3517,7 @@ fn collection_shelf(
     }
     // A key that named no section falls back to the members' own library.
     let section = if section > 0 { section } else { members.iter().map(|m| m.sec).find(|s| *s > 0).unwrap_or(0) };
-    Some(CollectionShelf { title: h.title.clone(), section, tag, members, count })
+    Some(CollectionShelf { title: h.title.clone(), section, tag, rk: String::new(), members, count })
 }
 
 /// The full detail fetch for `rk` (movie or show): item metadata + cast + streams, plus — for
@@ -3626,6 +3840,12 @@ pub(crate) fn run(state: &mut MetadataState, adapter: &std::sync::Arc<MetadataAd
             true
         }
         MetadataCmd::SetWatchedLocal { sid, rk, on } => set_watched_local(state, sid, &rk, on),
+        MetadataCmd::SetFavoriteLocal { sid, rk, on } => state
+            .current
+            .as_mut()
+            .filter(|d| crate::catalog::same_item((d.sid, &d.rk), (sid, &rk)) && d.favorite != on)
+            .map(|d| d.favorite = on)
+            .is_some(),
         MetadataCmd::SelectVersion { sid, rk, part } => state
             .current
             .as_mut()
@@ -3724,7 +3944,7 @@ fn install_landed_detail(state: &mut MetadataState, adapter: &std::sync::Arc<Met
     // Ask the other sources about this item BEFORE the move: the resolve needs the item's own
     // server and its portable guid, and this is the one place both are known on the main thread.
     // A page with no guid, or a one-server install, spawns nothing.
-    request_alt_sources(state, adapter, d.sid, &d.rk, &d.guid);
+    request_alt_sources(state, adapter, d.sid, &d.rk, &d.guid, &d.kind);
     let mut d = d;
     // A refresh of the same item (back from playback, a watch-state write) keeps the version the
     // viewer chose, while the server still lists it.
@@ -4010,6 +4230,7 @@ fn request_alt_sources(
     sid: crate::catalog::ServerId,
     rk: &str,
     guid: &str,
+    kind: &str,
 ) {
     use std::sync::atomic::Ordering;
     let gen = adapter.alt_gen.fetch_add(1, Ordering::SeqCst) + 1;
@@ -4023,11 +4244,11 @@ fn request_alt_sources(
     if others.len() < 2 {
         return; // a one-server install pays nothing: no worker, no query, no control
     }
-    let (rk, guid) = (rk.to_string(), guid.to_string());
+    let (rk, guid, kind) = (rk.to_string(), guid.to_string(), kind.to_string());
     let n = others.len();
     let adapter = std::sync::Arc::clone(adapter);
     let _ = nj_base::task::spawn_small("altsrc", move || {
-        let list = catch_unwind(|| resolve_alt_sources(&others, &guid)).unwrap_or_default();
+        let list = catch_unwind(|| resolve_alt_sources(&others, &guid, &kind)).unwrap_or_default();
         // The one line that makes this chain debuggable from a device log. A guid is a public
         // metadata id — not an address, a token or a machine. It was filed as "safe to log" on
         // exactly that reasoning, and the reasoning is incomplete: a Plex GUID names the WORK,
@@ -4054,6 +4275,7 @@ fn request_alt_sources(
 fn resolve_alt_sources(
     others: &[crate::catalog::ServerId],
     guid: &str,
+    kind: &str,
 ) -> Vec<AltCopy> {
     let mut out = Vec::new();
     for &id in others {
@@ -4063,7 +4285,7 @@ fn resolve_alt_sources(
         // `None` here is "did not answer" and `Some(empty)` is "does not have it" — both contribute
         // no row, but only the second is a fact about the library. They are not collapsed at the
         // client (see `find_by_guid`) so a later revision can say "not reachable" in the panel.
-        let Some(mc) = c.find_by_guid(guid) else {
+        let Some(mc) = c.find_by_guid(guid, kind) else {
             continue;
         };
         let handle = crate::catalog::server_facts(id)
@@ -4736,6 +4958,16 @@ mod episode_tests {
             "and keeps the resume point the player needs"
         );
     }
+
+    /// An episode the server has no still for (freshly added, a special) draws its show's 16:9
+    /// backdrop on its card, else the show's poster, as Litefin does, never an empty card.
+    #[test]
+    fn an_episode_without_a_still_falls_back_to_the_backdrop_then_the_show_poster() {
+        let still = r#","thumb":"/still","art":"/backdrop","grandparentThumb":"/poster""#;
+        assert_eq!(convert_episode(&row(still)).thumb, "/still");
+        assert_eq!(convert_episode(&row(r#","art":"/backdrop","grandparentThumb":"/poster""#)).thumb, "/backdrop");
+        assert_eq!(convert_episode(&row(r#","grandparentThumb":"/poster""#)).thumb, "/poster");
+    }
 }
 
 #[cfg(test)]
@@ -5267,8 +5499,10 @@ mod credits_tests;
 mod beside_tests {
     use crate::catalog::rendezvous_test_support::Rendezvous;
 
-    const G: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const EP: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    // A 13-hex-digit prefix no other test interns: rating keys keep only that prefix and the
+    // reverse map is process-global, so a shared prefix let another test's id win the lookup.
+    const G: &str = "be51de0000001000000000000000000a";
+    const EP: &str = "be51de0000002000000000000000000b";
 
     fn answer(path: &str) -> String {
         if path.starts_with(&format!("/Items/{G}?")) {
@@ -5297,5 +5531,48 @@ mod beside_tests {
         fn refuse(_: &str) -> String { "not json".into() }
         let server = Rendezvous::start(&[], refuse);
         assert!(super::fetch_full(server.sid, &crate::jf::ids::rating_key(EP)).is_none());
+    }
+}
+
+#[cfg(test)]
+mod jf_collection_shelf_tests {
+    use crate::catalog::rendezvous_test_support::Rendezvous;
+    use crate::jf::ids::rating_key;
+
+    // 13-hex-digit prefixes no other test interns (rating keys keep only that prefix).
+    const ITEM: &str = "c0115e1f00001000000000000000000a";
+    const BOX: &str = "c0115e1f00002000000000000000000b";
+    const MEMBER: &str = "c0115e1f00003000000000000000000c";
+    const SIMILAR: &str = "c0115e1f00004000000000000000000d";
+
+    fn answer(path: &str) -> String {
+        let movie = |id: &str| format!(r#"{{"Id":"{id}","Name":"m","Type":"Movie"}}"#);
+        if path.starts_with(&format!("/Items/{ITEM}/Collections")) {
+            format!(r#"{{"Items":[{{"Id":"{BOX}","Name":"Trilogy","Type":"BoxSet"}}],"TotalRecordCount":1}}"#)
+        } else if path.contains(&format!("ParentId={BOX}")) {
+            format!(r#"{{"Items":[{},{}],"TotalRecordCount":3}}"#, movie(ITEM), movie(MEMBER))
+        } else if path.starts_with(&format!("/Items/{ITEM}/Similar")) {
+            format!(r#"{{"Items":[{},{}],"TotalRecordCount":2}}"#, movie(MEMBER), movie(SIMILAR))
+        } else {
+            r#"{"Items":[],"TotalRecordCount":0}"#.into()
+        }
+    }
+
+    /// A film in a box set shows the box set above More Like This (`/Items/{id}/Collections`,
+    /// asked beside `/Similar`): its members in the box set's order, the film included, headed by
+    /// a link to the box set by its key. A member is not also a More Like This tile.
+    #[test]
+    fn a_film_in_a_box_set_shows_its_collection() {
+        let _g = nj_base::testlock::serial();
+        assert!(nj_net::net::global_init());
+        let server = Rendezvous::start(&[("/Collections", "/Similar")], answer);
+        let rows = super::fetch_related(server.sid, &rating_key(ITEM));
+        let shelf = rows.collection.expect("the box set's shelf");
+        assert_eq!(shelf.title, "Trilogy");
+        assert_eq!(shelf.members.iter().map(|m| m.rk.clone()).collect::<Vec<_>>(), [rating_key(ITEM), rating_key(MEMBER)]);
+        assert_eq!(shelf.count, 3);
+        assert_eq!(shelf.link(server.sid).rk, rating_key(BOX));
+        assert_eq!(rows.related.iter().map(|m| m.rk.clone()).collect::<Vec<_>>(), [rating_key(SIMILAR)]);
+        assert_eq!(server.missed(), Vec::<String>::new(), "asked one after another: {:?}", server.seen());
     }
 }

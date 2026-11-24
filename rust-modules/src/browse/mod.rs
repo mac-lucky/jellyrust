@@ -503,6 +503,9 @@ struct SecState {
     sort_desc: bool,
     unwatched: bool,
     genre: Option<Arc<GenreEntry>>,
+    /// [`genre`](Self::genre) is a Genres-tab drill-in's (`QueryEdit::Drill`): the Library page's
+    /// view of one genre, not the reader's FILTER choice, so a page that did not open it drops it.
+    drill: bool,
     // menus (kept across re-queries)
     sorts: Arc<Vec<SortEntry>>,
     genres: Arc<Vec<GenreEntry>>,
@@ -654,6 +657,7 @@ impl Default for SecState {
             sort_desc: false,
             unwatched: false,
             genre: None,
+            drill: false,
             sorts: Arc::default(),
             genres: Arc::default(),
             genres_done: false,
@@ -1093,6 +1097,7 @@ impl BrowseState {
         state.sort_idx = 0;
         state.sort_desc = false;
         state.genre = None;
+        state.drill = false;
         state.genres = Arc::default();
         state.genres_done = false;
         state.letters = Arc::default();
@@ -1108,7 +1113,20 @@ impl BrowseState {
         state.genre = index
             .and_then(|i| state.genres.get(i).cloned())
             .map(Arc::new);
+        state.drill = false;
         self.requery();
+    }
+    /// A Genres-tab drill-in's filter: set like a FILTER genre and marked as the page's, or cleared
+    /// only when it is the page's, so leaving a genre never takes the reader's own choice with it.
+    fn set_drill(&mut self, id: Option<&str>) -> bool {
+        let Some(id) = id else {
+            if self.cur_state().is_some_and(|state| state.drill) { self.set_genre(None); }
+            return true;
+        };
+        let landed = self.set_genre_by_id(Some(id));
+        let current = self.cur();
+        if let Some(state) = self.states.get_mut(current).filter(|_| landed) { state.drill = true; }
+        landed
     }
     fn set_genre_by_id(&mut self, id: Option<&str>) -> bool {
         if id.is_some() && self.cur_state().is_some_and(|state| {
@@ -1420,6 +1438,7 @@ impl BrowseState {
                     }
                     Some(QueryEdit::Unwatched(on)) => self.set_unwatched(on),
                     Some(QueryEdit::Genre(id)) => self.set_genre_by_id(id.as_deref()),
+                    Some(QueryEdit::Drill(id)) => self.set_drill(id.as_deref()),
                     Some(QueryEdit::LibraryType(library_type)) => self.set_library_type(library_type),
                     None => true,
                 }
@@ -1569,19 +1588,6 @@ impl BrowseState {
     }
     fn tab_section(&self, tab: usize) -> Option<usize> {
         self.section_of_kind(self.tab_kind(tab)?)
-    }
-    fn kind_state(&self, kind: SecKind) -> SecFetch {
-        if let Some(index) = self.sections.iter().position(|section| section.kind == kind) {
-            return self.states.get(index).map(|state| state.fetch).unwrap_or(SecFetch::Loading);
-        }
-        if self.sources.iter().any(|source| source.reachable() && !source.sections_done)
-            || self.sources.is_empty() {
-            SecFetch::Loading
-        } else if self.sources.iter().any(|source| !source.sections_done) {
-            SecFetch::Failed
-        } else {
-            SecFetch::Ready
-        }
     }
     fn source_groups(&self) -> Vec<SrcGroup> {
         self.sources.iter().map(|source| SrcGroup {
@@ -2138,14 +2144,6 @@ impl BrowseState {
         }
         RosterSync { changed, retire_adapter }
     }
-    fn recheck_shares(&mut self) {
-        for source in &mut self.sources {
-            source.retry_cd = 0;
-            source.sections_done = false;
-            source.counts_done = false;
-        }
-        nj_machine::idle::invalidate();
-    }
     pub(crate) fn run_owned(
         &mut self,
         adapter: &Arc<BrowseAdapter>,
@@ -2163,10 +2161,6 @@ impl BrowseState {
             #[cfg(test)]
             BrowseCmd::SetCur(index) => {
                 self.set_cur(index);
-                true
-            }
-            BrowseCmd::RecheckShares => {
-                self.recheck_shares();
                 true
             }
             BrowseCmd::ApplyPins(edits) => {

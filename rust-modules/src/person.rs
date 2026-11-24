@@ -225,6 +225,9 @@ pub(crate) struct Person {
     pub(crate) born: String,
     pub(crate) died: String,
     pub(crate) birthplace: String,
+    /// The viewer's favourite flag for this person, from the profile (Jellyfin only). `None`
+    /// until it lands and wherever the server keeps no favourites: the page draws no heart then.
+    pub(crate) favorite: Option<bool>,
     /// The two shelves, indexed by KIND (0 = Movies, 1 = Shows) — the same index the screen's focus
     /// model, headings and hit-test use, so "which shelf" is spelled one way everywhere.
     ///
@@ -741,6 +744,19 @@ fn set_watched_local(state: &mut PersonState, sid: ServerId, rk: &str, on: bool)
     hit
 }
 
+/// The optimistic half of a favourite write on the person `(sid, key)`: their page's heart. Only
+/// a page that draws one (`favorite` is `Some`) is edited.
+fn set_favorite_local(state: &mut PersonState, sid: ServerId, key: &str, on: bool) -> bool {
+    match state.current.as_mut() {
+        Some(p) if p.favorite.is_some() && crate::catalog::same_item((p.sid, &p.key), (sid, key)) => {
+            let changed = p.favorite != Some(on);
+            p.favorite = Some(on);
+            changed
+        }
+        _ => false,
+    }
+}
+
 // ---- public surface --------------------------------------------------------------------------
 
 /// Open the page for the person the ORIGIN server `sid` knows as `key`, with the header the caller
@@ -797,6 +813,7 @@ fn open(
         born: String::new(),
         died: String::new(),
         birthplace: String::new(),
+        favorite: None,
         shelves: Default::default(),
         srcs,
         landed: false,
@@ -947,6 +964,7 @@ impl PersonState {
             PersonCmd::SetWatchedLocal { sid, rk, on } => {
                 set_watched_local(self, sid, &rk, on)
             }
+            PersonCmd::SetFavoriteLocal { sid, key, on } => set_favorite_local(self, sid, &key, on),
         }
     }
 }
@@ -1207,6 +1225,7 @@ fn apply_landing(state: &mut PersonState, i: usize, what: Landing) -> bool {
             p.born = prof.born_at;
             p.died = prof.died_at;
             p.birthplace = prof.birth_place;
+            p.favorite = prof.favorite;
             p.profiled = true;
             p.profile_tried = true;
             nj_base::eventlog::log(&format!(
@@ -1416,6 +1435,31 @@ fn maybe_spawn(state: &mut PersonState, adapter: &Arc<PersonAdapter>, i: usize) 
     // the person's global id rides along: the resolve joins its search answer on it, and the roles
     // worker matches a credit row by either id space
     let guid = p.guid.clone();
+    // A Jellyfin person's biography is their own server's record, `/Items/{personId}` — the
+    // origin server's, captured here like every other source fetch (`jf::person`).
+    if let Some(c) = (i == F_PROFILE).then(|| crate::catalog::client_for(p.sid)).flatten().filter(|c| c.jf().is_some()) {
+        // Gated like the Plex profile below: a controlled replay lands no biography and never
+        // dials, and a server with no signed-in user is not asked at all.
+        let controlled = crate::stores::tape::active();
+        if !controlled && c.jf().and_then(|j| j.user_id()).is_none() {
+            return;
+        }
+        let key = p.key.clone();
+        adapter.fetch[i].claim();
+        let worker_adapter = Arc::clone(adapter);
+        let spawned = crate::stores::tape::admit(serde_json::json!({
+            "store":"person","slot":i,"gen":generation,"arg":[key],"client":c.instance_gen()}), ||
+            nj_base::task::spawn_small("person", move || {
+            let what = Landing::Profile(if controlled { None } else {
+                catch_unwind(|| c.jf().and_then(|j| j.person_profile(&key))).unwrap_or(None)
+            });
+            worker_adapter.land(i, generation, what);
+        }));
+        if !spawned {
+            adapter.fetch[i].release();
+        }
+        return;
+    }
     if i == F_PROFILE || i == F_CREDITS {
         let controlled = crate::stores::tape::active();
         let session = if controlled { None } else { crate::catalog::session::peek_settled() };
@@ -1631,13 +1675,37 @@ pub(crate) fn guid_index(mc: &crate::catalog::MediaContainer) -> Vec<(String, St
 }
 
 /// [`split_by_type`] for a Jellyfin filmography: `Movie` rows to the Movies shelf, `Series` to
-/// Shows, rows built straight from the `BaseItemDto`s.
+/// Shows, rows built straight from the `BaseItemDto`s. An `Episode` is a guest appearance (the
+/// person is credited on it alone): its show joins Shows once, where the first of its episodes
+/// falls, unless the person is credited on the show itself.
 pub(crate) fn split_jf_by_type(items: &[crate::jf::models::BaseItemDto], sid: ServerId) -> [Shelf; NSHELF] {
+    use crate::jf::models::BaseItemDto;
+    let credited: std::collections::HashSet<String> = items.iter().filter(|it| it.kind == "Series")
+        .map(|it| crate::jf::ids::normalize(&it.id)).collect();
+    let mut guest = std::collections::HashSet::new();
     let mut out: [Shelf; NSHELF] = Default::default();
     for it in items {
-        let sh = match it.kind.as_str() {
-            "Movie" => &mut out[0],
-            "Series" => &mut out[1],
+        let show;
+        let (sh, it) = match it.kind.as_str() {
+            "Movie" => (&mut out[0], it),
+            "Series" => (&mut out[1], it),
+            "Episode" => {
+                let series = crate::jf::ids::normalize(it.series_id.as_deref().unwrap_or(""));
+                if series.is_empty() || credited.contains(&series) || !guest.insert(series) {
+                    continue;
+                }
+                // The show as the episode names it: its id, name, poster and backdrop.
+                show = BaseItemDto {
+                    id: it.series_id.clone().unwrap_or_default(),
+                    name: it.series_name.clone().unwrap_or_default(),
+                    kind: "Series".into(),
+                    image_tags: it.series_primary_image_tag.iter().map(|t| ("Primary".to_string(), t.clone())).collect(),
+                    parent_backdrop_item_id: it.parent_backdrop_item_id.clone(),
+                    parent_backdrop_image_tags: it.parent_backdrop_image_tags.clone(),
+                    ..Default::default()
+                };
+                (&mut out[1], &show)
+            }
             _ => continue,
         };
         sh.total += 1;
@@ -1848,6 +1916,12 @@ fn match_local(p: &Person, id: &str) -> Option<(ServerId, String)> {
 /// `Src::matches` instead.
 #[cfg(test)]
 impl PersonState {
+pub(crate) fn install_favorite_for_test(&mut self, favorite: Option<bool>) {
+    if let Some(p) = self.current.as_mut() {
+        p.favorite = favorite;
+    }
+}
+
 pub(crate) fn install_credits_for_test(&mut self, groups: &[(&str, usize)]) {
     use crate::catalog::discover::{Credit, CreditGroup, CreditItem};
     let Some(p) = self.current.as_mut() else {
@@ -2316,6 +2390,32 @@ mod tests {
             s[1].items.is_empty(),
             "an episode/season is not a Show shelf tile"
         );
+    }
+
+    /// A Jellyfin guest appearance is credited on the episode alone: the person's items include
+    /// those episodes, and the Shows shelf lists each one's show once, beside the shows they are
+    /// credited on as a whole.
+    #[test]
+    fn a_guest_appearance_lists_its_show_once() {
+        let dto = |json: &str| -> crate::jf::models::BaseItemDto { serde_json::from_str(json).unwrap() };
+        let (credited, guest) = ("5e51e5000000100000000000000000aa", "5e51e5000000200000000000000000bb");
+        let ep = |n: u32, series: &str| dto(&format!(r#"{{"Id":"e9150de{n:06}0000000000000000000","Type":"Episode",
+            "Name":"E{n}","SeriesId":"{series}","SeriesName":"Guest Show","SeriesPrimaryImageTag":"sp"}}"#));
+        let items = [
+            ep(1, guest),
+            dto(&format!(r#"{{"Id":"{credited}","Type":"Series","Name":"Own Show"}}"#)),
+            ep(2, credited),
+            ep(3, guest),
+            dto(r#"{"Id":"f11a00000000100000000000000000cc","Type":"Movie","Name":"A Film"}"#),
+        ];
+        let s = split_jf_by_type(&items, S0);
+        let shows: Vec<_> = s[1].items.iter().map(|m| (m.rk.clone(), m.title.clone(), m.kind)).collect();
+        assert_eq!(shows, [
+            (crate::jf::ids::rating_key(guest), "Guest Show".to_string(), 1),
+            (crate::jf::ids::rating_key(credited), "Own Show".to_string(), 1),
+        ]);
+        assert!(s[1].items[0].thumb.ends_with(&format!("/thumb/{guest}-sp")), "{}", s[1].items[0].thumb);
+        assert_eq!((s[0].total, s[1].total), (1, 2));
     }
 
     // ---- the cross-server join --------------------------------------------------------------
@@ -2912,16 +3012,26 @@ mod tests {
     /// Empty the registry around a test that needs real slots in it, and hand it back empty — the
     /// discipline `plex::servers`' own tests document: a client left registered at a port that
     /// closed is one another module's pump will dial on a background thread.
-    struct FreshRegistry(#[allow(dead_code)] nj_base::testlock::Serial);
+    ///
+    /// It also pins its own visible session, as [`mailbox_fixture`] does: `pump` supersedes the
+    /// page when the session changes, so an earlier test's late session write landing between a
+    /// hand landing and the next pump discarded that landing as stale (a page "still loading"
+    /// after every source had answered, seen under full-suite load).
+    struct FreshRegistry {
+        _session: crate::catalog::session::TempSession,
+        _serial: nj_base::testlock::Serial,
+    }
     impl Drop for FreshRegistry {
         fn drop(&mut self) {
             crate::catalog::reset_servers_for_test();
         }
     }
     fn fresh_registry() -> FreshRegistry {
-        let g = nj_base::testlock::serial();
+        let serial = nj_base::testlock::serial();
+        nj_base::storage_worker::drain_for_test();
         crate::catalog::reset_servers_for_test();
-        FreshRegistry(g)
+        let session = crate::catalog::session::TempSession::new("person-registry");
+        FreshRegistry { _session: session, _serial: serial }
     }
 
     /// **The bug, in one test.** The page is opened from ONE server's credit row and must ask every

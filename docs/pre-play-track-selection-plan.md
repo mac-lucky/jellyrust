@@ -259,7 +259,11 @@ in `build_stream` with the existing `AudioLangPrefs`/`SubtitleLangPrefs` machine
 ## 9. Follow-ups (not in scope)
 
 - Carry the language (not id) into Up Next / continuous play.
-- Persist per-item choice to session storage (`catalog::session`), as subtitle offset already is
-  (`persist_subtitle_offset`).
-- A "Remember for this series" toggle mapping onto Jellyfin's `RememberAudioSelections` /
-  `RememberSubtitleSelections` user settings (verify server behaviour first).
+- Done, server-side instead: the per-film choice is the server's remembered pick, served back as
+  the source's `DefaultAudioStreamIndex`/`DefaultSubtitleStreamIndex` and honoured by
+  `build_stream`; the progress reports keep it current (`docs/jellyfin-playback.md`, "Remembered
+  tracks").
+- Done: Settings, Audio & subtitles has *Remember audio choice* and *Remember subtitle choice*
+  rows for `RememberAudioSelections`/`RememberSubtitleSelections` (verified in the server source:
+  `MediaSourceManager.SetDefault*StreamIndex`, `SessionManager.UpdatePlaybackSettings`). The
+  memory is per film, not per series.

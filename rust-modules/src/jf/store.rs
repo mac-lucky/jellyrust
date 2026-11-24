@@ -166,13 +166,16 @@ impl Roster {
     }
 
     /// Keep `s` and make it the active user: it replaces the same user's older sign-in (a fresh
-    /// token) and moves to the front. Past [`MAX_USERS`] the user at the back is dropped.
-    pub fn remember(&mut self, s: Stored) {
-        self.users.retain(|u| !u.same_user(&s));
+    /// token) and moves to the front. Past [`MAX_USERS`] the user at the back is dropped. Answers
+    /// the sign-ins it pushed out, whose tokens this television no longer holds.
+    pub fn remember(&mut self, s: Stored) -> Vec<Stored> {
+        let (mut gone, kept): (Vec<Stored>, Vec<Stored>) = std::mem::take(&mut self.users).into_iter().partition(|u| u.same_user(&s));
+        self.users = kept;
         self.recent = Some(RecentServer::of(&s));
         self.users.insert(0, s);
-        self.users.truncate(MAX_USERS);
+        gone.extend(self.users.drain(MAX_USERS.min(self.users.len())..));
         self.active = Some(0);
+        gone
     }
 
     /// Make the kept user `user_id` (on `server`) the active one. `false` when no such user is kept.
@@ -290,7 +293,9 @@ fn with_roster<T>(f: impl FnOnce(&mut Roster) -> T) -> T {
 /// in and no user is kept; the server signed in to last stays, for *Recent*). Memory only.
 pub fn set_live(s: Option<Stored>) {
     with_roster(|r| match s {
-        Some(s) => r.remember(s),
+        Some(s) => {
+            r.remember(s);
+        }
         None => r.sign_out_all(),
     });
 }
@@ -326,9 +331,10 @@ pub fn plaintext_answers() -> Vec<PlaintextAllow> {
     with_roster(|r| r.plaintext.clone())
 }
 
-/// Keep `s` beside the users already kept and make it the active one. Memory only.
-pub fn remember(s: Stored) {
-    with_roster(|r| r.remember(s));
+/// Keep `s` beside the users already kept and make it the active one, answering the sign-ins it
+/// pushed out ([`Roster::remember`]). Memory only.
+pub fn remember(s: Stored) -> Vec<Stored> {
+    with_roster(|r| r.remember(s))
 }
 
 /// Make the kept user `user_id` on `server` the active one. Memory only.
@@ -569,6 +575,24 @@ mod tests {
         }
         assert_eq!(r.users.len(), MAX_USERS);
         assert!(r.users.iter().all(|u| u.user_id != "sam"), "the user signed in longest ago went");
+    }
+
+    /// What a sign-in pushed out is answered, so its token can be revoked at the server rather
+    /// than left valid there with nobody on this television holding it: the same user's older
+    /// sign-in, and the user signed in longest ago once more than [`MAX_USERS`] are kept.
+    #[test]
+    fn remembering_answers_the_sign_ins_it_pushed_out() {
+        let mut r = Roster::default();
+        assert!(r.remember(user("alex", "t1")).is_empty());
+        assert!(r.remember(user("sam", "t2")).is_empty());
+        let gone = r.remember(user("alex", "t3"));
+        assert_eq!(gone.iter().map(|u| u.token.as_str()).collect::<Vec<_>>(), ["t1"]);
+        for i in 0..MAX_USERS - 2 {
+            assert!(r.remember(user(&format!("u{i}"), "t")).is_empty(), "{i}");
+        }
+        let gone = r.remember(user("new", "tn"));
+        assert_eq!(gone.iter().map(|u| u.user_id.as_str()).collect::<Vec<_>>(), ["sam"]);
+        assert_eq!(r.users.len(), MAX_USERS);
     }
 
     /// Switching makes another kept user active; forgetting the active one leaves nobody active

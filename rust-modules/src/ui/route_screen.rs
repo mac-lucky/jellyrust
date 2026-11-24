@@ -4,6 +4,13 @@
 //! the left, a content column on the right, and one bottom action row. Screens supply words and
 //! state; this module owns every spatial relationship between them.
 //!
+//! **The Settings family wears Litefin's Settings page instead** ([`RouteKind::Panel`],
+//! [`RouteLayout::panel`]): the root's rows are the category list at the content edge, and every
+//! page's "narrative" is the HEADER of the content panel beside it (crumb, 40px title, subtitle,
+//! divider) with its table or document under it. The focus rules below hold unchanged: LEFT off a
+//! page is BACK to the category list, RIGHT on a category opens its page. First run, Filmography
+//! and the QR sign-in keep the two columns ([`RouteKind::Columns`]).
+//!
 //! # Where BACK goes is the CRUMB, never a hint in the action band
 //!
 //! A route in this family that was arrived at from somewhere says so on one caption line above
@@ -123,6 +130,9 @@ fn crumb_label_top(cy: f32, cap_h: f32) -> f32 {
     cy - cap_h * 0.5
 }
 const PUSH_K: f32 = 200.0;
+/// How far a page moves inside a [`RouteKind::Panel`]'s content panel on a push or pop: inside the
+/// panel's own padding, so a page sliding out never crosses the category list's edge.
+const PANEL_TRAVEL: f32 = theme::space::LG;
 const PARENT_TRAVEL: f32 = 0.35;
 const CHILD_LEAD: f32 = 0.22;
 
@@ -415,6 +425,19 @@ impl RoutePush {
         let t = self.amount();
         p.alpha(t)
             .translate(CHILD_LEAD * Rect::FULL.w * (1.0 - t), 0.0)
+    }
+
+    /// [`Self::parent`] inside a [`RouteKind::Panel`]'s content panel: the same fade over a short
+    /// [`PANEL_TRAVEL`], so the leaving page never slides over the category list beside it.
+    pub(crate) fn panel_parent(&self, p: Painter) -> Painter {
+        let t = self.amount();
+        p.alpha(1.0 - t).translate(-PANEL_TRAVEL * t, 0.0)
+    }
+
+    /// [`Self::child`] inside a [`RouteKind::Panel`]'s content panel.
+    pub(crate) fn panel_child(&self, p: Painter) -> Painter {
+        let t = self.amount();
+        p.alpha(t).translate(PANEL_TRAVEL * (1.0 - t), 0.0)
     }
 }
 
@@ -731,16 +754,74 @@ impl<const N: usize> ActionRow<N> {
     }
 }
 
+/// Which composition a [`RouteLayout`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RouteKind {
+    /// A narrative column (crumb, HERO title, copy, the action band) beside a content column:
+    /// first-run consent, Filmography, the QR sign-in.
+    Columns,
+    /// **Litefin's Settings page** (`docs/litefin-look.md` 9): a 380-wide category list at the
+    /// content edge, then a content panel whose HEADER (crumb, 40px title, 16px subtitle, 2px
+    /// divider) heads the table or document under it. `narrative` is that header, `menu` the list.
+    Panel,
+}
+
+/// [`RouteKind::Panel`]'s numbers (`docs/litefin-look.md` 9): the category list, the content
+/// panel's padding, and the header's bands top to bottom.
+pub(crate) mod panel {
+    use crate::ui::theme;
+    /// The category list's width, and the content panel's side padding.
+    pub(crate) const MENU_W: f32 = 380.0;
+    pub(crate) const PAD_X: f32 = 60.0;
+    /// The crumb's band at the top of the header, reserved on every page (the root has none) so the
+    /// title never moves when a page is pushed, and its gap to the title.
+    pub(crate) const CRUMB_H: f32 = 22.0;
+    pub(crate) const CRUMB_GAP: f32 = 10.0;
+    /// The title (40/300, "20 below"): one 52px line.
+    pub(crate) const TITLE_SZ: std::os::raw::c_int = theme::size::lf::S40;
+    pub(crate) const TITLE_H: f32 = 52.0;
+    pub(crate) const TITLE_GAP: f32 = 20.0;
+    /// The subtitle (15.2 -> `S16`, secondary): at most [`SUB_LINES`] lines of [`SUB_LEADING`].
+    pub(crate) const SUB_SZ: std::os::raw::c_int = theme::size::lf::S16;
+    pub(crate) const SUB_LEADING: f32 = 22.0;
+    pub(crate) const SUB_LINES: usize = 2;
+    /// The 2px divider under the subtitle, and the air on either side of it.
+    pub(crate) const RULE_GAP: f32 = 14.0;
+    pub(crate) const RULE_W: f32 = 2.0;
+    /// Header top to the content under it.
+    pub(crate) const HEADER_H: f32 = CRUMB_H + CRUMB_GAP + TITLE_H + TITLE_GAP
+        + SUB_LEADING * SUB_LINES as f32 + RULE_GAP + RULE_W + RULE_GAP;
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct RouteLayout {
     pub(crate) narrative: Rect,
     pub(crate) content: Rect,
     pub(crate) action: Rect,
+    /// The category list ([`RouteKind::Panel`]); empty for [`RouteKind::Columns`].
+    pub(crate) menu: Rect,
+    pub(crate) kind: RouteKind,
 }
 
 impl RouteLayout {
     pub(crate) fn screen() -> Self {
         Self::screen_with_copy_w(NARRATIVE_W)
+    }
+
+    /// **The Settings family's Litefin layout** ([`RouteKind::Panel`]): the category list from the
+    /// rail's edge ([`crate::ui::consts::CONTENT_LEFT`]), the content panel after it padded 60 a
+    /// side and held inside the safe area, its header on the safe top, the content under the
+    /// header and the action band at the panel's foot.
+    pub(crate) fn panel() -> Self {
+        let left = crate::ui::consts::CONTENT_LEFT;
+        let menu = Rect::new(left, 0.0, panel::MENU_W, crate::ui::consts::SCR_H);
+        let x = menu.x + menu.w + panel::PAD_X;
+        let right = (crate::ui::consts::SCR_W - panel::PAD_X).min(SAFE.x + SAFE.w);
+        let (top, bottom) = (SAFE.y, SAFE.y + SAFE.h);
+        let narrative = Rect::new(x, top, right - x, panel::HEADER_H);
+        let content = Rect::new(x, top + panel::HEADER_H, right - x, bottom - top - panel::HEADER_H);
+        let action = Rect::new(x, bottom - ACTION_H, right - x, ACTION_H);
+        Self { narrative, content, action, menu, kind: RouteKind::Panel }
     }
 
     /// The same two columns with the narrative one at a **stated measure** — `--route-copy-w`, the
@@ -767,6 +848,8 @@ impl RouteLayout {
             narrative,
             content,
             action,
+            menu: Rect::new(SAFE.x, top, 0.0, 0.0),
+            kind: RouteKind::Columns,
         }
     }
 
@@ -818,6 +901,10 @@ impl RouteLayout {
     /// as the narrative title.  Expanding the frame upward by the table-owned inset joins those
     /// two facts without either component copying the other's padding.
     pub(crate) fn sectioned_table(self) -> Rect {
+        if self.kind == RouteKind::Panel {
+            // the header above already ends on its divider; the table starts under it
+            return self.content;
+        }
         let inset = crate::ui::table::FIRST_HEADER_CAP_OFFSET;
         Rect::new(
             self.content.x,
@@ -848,6 +935,9 @@ impl RouteLayout {
     /// exactly the crumb's band, and a document on a crumbless route must follow it up rather than
     /// leaving a gap nothing explains.
     pub(crate) fn document(self, has_crumb: bool) -> Rect {
+        if self.kind == RouteKind::Panel {
+            return self.content;
+        }
         let top = self.narrative_top(has_crumb);
         Rect::new(
             self.content.x,
@@ -899,6 +989,10 @@ impl RouteLayout {
     /// grade it. The first version of this test compared `RouteLayout::screen().content.y` with
     /// its own `l.content.y` — a value against itself, which cannot fail.
     pub(crate) fn narrative_top(self, has_crumb: bool) -> f32 {
+        if self.kind == RouteKind::Panel {
+            // the crumb's band is reserved crumb or not: the title holds still across a push
+            return self.narrative.y + panel::CRUMB_H + panel::CRUMB_GAP;
+        }
         if has_crumb {
             self.narrative.y + CRUMB_BAND + theme::space::SM
         } else {
@@ -910,6 +1004,10 @@ impl RouteLayout {
     /// A scrolling disclosure uses exactly the same title flow as an ordinary route header.
     pub(crate) fn narrative_copy_frame(self, has_crumb: bool, title: &str,
         actions_top: f32, measure: &dyn Measure) -> Rect {
+        if self.kind == RouteKind::Panel {
+            let top = self.narrative_top(has_crumb) + panel::TITLE_H + panel::TITLE_GAP;
+            return Rect::new(self.narrative.x, top, self.narrative.w, panel::SUB_LEADING * panel::SUB_LINES as f32);
+        }
         let title_h = Self::narrative_title(title).with_measure(measure).measure_h(self.narrative.w);
         let top = self.narrative_top(has_crumb) + title_h + theme::space::MD;
         Rect::new(self.narrative.x, top, self.narrative.w,
@@ -917,25 +1015,64 @@ impl RouteLayout {
     }
 
     fn draw_crumb(self, p: Painter, top: f32, back_to: &str, measure: &dyn Measure) {
-        let h = CRUMB_BAND;
+        // a Panel's crumb is a quiet line over a 40px title, one rung of Litefin's own type
+        let (h, mark, sz) = match self.kind {
+            RouteKind::Columns => (CRUMB_BAND, CRUMB_MARK, theme::size::CAPTION),
+            RouteKind::Panel => (panel::CRUMB_H, panel::CRUMB_H, theme::size::lf::S16),
+        };
         let cy = top + h * 0.5;
         icons::draw(
             p,
             Icon::ChevronLeft,
-            Rect::new(
-                self.narrative.x,
-                cy - CRUMB_MARK * 0.5,
-                CRUMB_MARK,
-                CRUMB_MARK,
-            ),
+            Rect::new(self.narrative.x, cy - mark * 0.5, mark, mark),
             theme::TEXT_TERTIARY,
         );
         let (_, ink_r) = icons::ink_x(Icon::ChevronLeft);
-        let x = self.narrative.x + CRUMB_MARK * ink_r + theme::space::XS;
-        let ty = crumb_label_top(cy, measure.cap_h(theme::size::CAPTION));
-        TextView::new(back_to, theme::size::CAPTION, theme::TEXT_TERTIARY)
+        let x = self.narrative.x + mark * ink_r + theme::space::XS;
+        let ty = crumb_label_top(cy, measure.cap_h(sz));
+        TextView::new(back_to, sz, theme::TEXT_TERTIARY)
             .max_lines(1)
             .draw(p, Rect::new(x, ty, self.narrative.x + self.narrative.w - x, h));
+    }
+
+    /// **A Panel's subtitle, as [`Self::draw_narrative`] draws it** — for the tests that grade
+    /// whether a page's copy fits its [`panel::SUB_LINES`] (`truncates` at the header's width).
+    pub(crate) fn panel_subtitle(copy: &str) -> TextView<'_> {
+        TextView::new(copy, panel::SUB_SZ, theme::TEXT_SECONDARY)
+            .leading(panel::SUB_LEADING)
+            .max_lines(panel::SUB_LINES)
+    }
+
+    /// A Panel's header: the crumb, the 40px title, the subtitle and the 2px divider under it.
+    fn draw_panel_header(self, p: Painter, back_to: Option<&str>, title: &str, copy: &str, measure: &dyn Measure) {
+        if let Some(back_to) = back_to {
+            self.draw_crumb(p, self.narrative.y, back_to, measure);
+        }
+        let top = self.narrative_top(true);
+        TextView::new(title, panel::TITLE_SZ, theme::TEXT_PRIMARY)
+            .max_lines(1)
+            .leading(panel::TITLE_H)
+            .draw(p, Rect::new(self.narrative.x, top, self.narrative.w, panel::TITLE_H));
+        let sub = self.narrative_copy_frame(true, title, self.action.y, measure);
+        Self::panel_subtitle(copy).draw(p, sub);
+        let rule_y = sub.y + sub.h + panel::RULE_GAP;
+        p.rect(Rect::new(self.narrative.x, rule_y, self.narrative.w, panel::RULE_W), 0.0, theme::HAIRLINE, theme::HAIRLINE, 0.0);
+    }
+
+    /// **The category list's ground** ([`RouteKind::Panel`]): Litefin's `#000000` panel between two
+    /// 1px divider lines (9 Left category list).
+    pub(crate) fn draw_menu_ground(self, p: Painter) {
+        let m = self.menu;
+        p.rect(m, 0.0, theme::SURFACE_APP, theme::SURFACE_APP, 0.0);
+        for x in [m.x, m.x + m.w - 1.0] {
+            p.rect(Rect::new(x, m.y, 1.0, m.h), 0.0, theme::HAIRLINE, theme::HAIRLINE, 0.0);
+        }
+    }
+
+    /// The category list's table frame: the list's padding (40 0, at least the safe top) inside it.
+    pub(crate) fn menu_table(self) -> Rect {
+        let top = SAFE.y.max(40.0);
+        Rect::new(self.menu.x, top, self.menu.w, (SAFE.y + SAFE.h - top).max(0.0))
     }
 
     /// **The narrative title, as the view [`draw_narrative`] actually draws** — its rung, its
@@ -971,6 +1108,9 @@ impl RouteLayout {
         copy_size: std::os::raw::c_int,
         measure: &dyn Measure,
     ) {
+        if self.kind == RouteKind::Panel {
+            return self.draw_panel_header(p, back_to, title, copy, measure);
+        }
         let top = self.narrative_top(back_to.is_some());
         if let Some(back_to) = back_to {
             self.draw_crumb(p, self.narrative.y, back_to, measure);
@@ -1042,6 +1182,38 @@ mod tests {
         assert!(inside_safe(l.narrative));
         assert!(inside_safe(l.content));
         assert!(inside_safe(l.action));
+    }
+
+    /// **Litefin's Settings panel** (`docs/litefin-look.md` 9): the category list starts at the
+    /// rail's edge and is 380 wide, the content panel's header, content and action band all stand
+    /// inside the safe area 60 past the list, the content hangs under the header, and a table and a
+    /// document both take the content as their frame.
+    #[test]
+    fn the_settings_panel_stands_beside_its_category_list_inside_the_safe_area() {
+        let l = RouteLayout::panel();
+        assert_eq!(l.kind, RouteKind::Panel);
+        assert_eq!((l.menu.x, l.menu.w), (crate::ui::consts::CONTENT_LEFT, panel::MENU_W));
+        for r in [l.narrative, l.content, l.action, l.menu_table()] {
+            assert!(inside_safe(r), "{r:?} leaves the safe area");
+        }
+        assert_eq!(l.narrative.x, l.menu.x + l.menu.w + panel::PAD_X);
+        assert_eq!(l.content.y, l.narrative.y + panel::HEADER_H, "the content hangs under the header");
+        assert_eq!(l.sectioned_table(), l.content);
+        assert_eq!(l.document(true), l.content);
+        assert_eq!(l.narrative_top(true), l.narrative_top(false), "the title holds still crumb or not");
+        let sub = l.narrative_copy_frame(true, "", l.action.y, &crate::ui::fixture::FixtureMeasure);
+        assert!(sub.y + sub.h + panel::RULE_GAP + panel::RULE_W <= l.content.y, "the subtitle and divider fit the header");
+    }
+
+    /// A Panel push moves its pages inside the content panel only: neither role ever travels as far
+    /// as the category list beside it.
+    #[test]
+    fn a_panel_push_stays_inside_the_content_panel() {
+        for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let push = RoutePush::at(t);
+            let (parent, child) = (push.panel_parent(Painter::root()), push.panel_child(Painter::root()));
+            assert!(parent.dx().abs() <= panel::PAD_X && child.dx().abs() <= panel::PAD_X, "t={t}");
+        }
     }
 
     #[test]

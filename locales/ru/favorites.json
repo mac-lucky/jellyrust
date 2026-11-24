@@ -1,0 +1,9 @@
+{
+  "favorites.movies": "Фильмы",
+  "favorites.series": "ТВ-передачи",
+  "favorites.seasons": "Сезоны",
+  "favorites.episodes": "Эпизоды",
+  "favorites.people": "Люди",
+  "favorites.empty": "Ничего не найдено. Добавьте что-нибудь!",
+  "favorites.failed": "Не удалось загрузить избранное"
+}

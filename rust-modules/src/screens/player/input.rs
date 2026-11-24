@@ -150,29 +150,27 @@ impl Scrub {
         crate::appkit::player_hud::scrub_clamp_target(ns, duration_ns)
     }
 }
-/// The player HUD's focus cursor: WHICH row owns focus, plus the index WITHIN each of the
-/// two indexed rows. One cursor, not three settings — the three are drawn together every
-/// frame (`draw_hud`), moved together by UP/DOWN, and, the reason they are bundled here,
-/// must be RESET together when a new playback session begins.
+/// The player HUD's focus cursor: WHICH row owns focus, plus the item WITHIN the controls row.
+/// One cursor, not two settings — the two are drawn together every frame (`draw_hud`), moved
+/// together by UP/DOWN, and, the reason they are bundled here, must be RESET together when a new
+/// playback session begins.
 ///
-/// As three loose `nj_run` locals they were never reset at all: `start_playback` sets the
+/// As loose `nj_run` locals they were never reset at all: `start_playback` sets the
 /// route, the resume point and the HUD timer, but the focus cursor survived from the
 /// PREVIOUS session — leave one movie with the Subtitles button focused (`focus == 1`),
 /// start another, and the first OK opened the track menu instead of pausing. Bundling makes
 /// "reset the HUD focus" one assignment that `start_playback` cannot half-do.
 #[derive(Clone, Copy)]
 pub(crate) struct HudNav {
-    pub(crate) focus: i32, // 0 = scrubber, 1 = right buttons (Subtitles/Audio/More), 2 = bottom tabs
-    pub(crate) btn: i32,   // 0 = Subtitles, 1 = Audio, 2 = More, 3 = Previous, 4 = Next
-    pub(crate) tab: i32,   // 0 = Info, 1 = Chapters (within the tabs row)
+    pub(crate) focus: i32, // 0 = seek bar, 1 = the controls row
+    pub(crate) btn: i32,   // the controls row's item, `player_hud::BTN_*`
 }
 impl HudNav {
-    /// Focus parked on the scrubber, both indexed rows on their first item — where a fresh
-    /// session starts and where an auto-hidden HUD is re-parked.
+    /// Focus parked on the seek bar, the row on its first item — where a fresh session starts and
+    /// where an auto-hidden HUD is re-parked.
     pub(crate) const HOME: HudNav = HudNav {
         focus: 0,
         btn: 0,
-        tab: 0,
     };
 }
 /// Everything the player remembers ABOUT the transport HUD between frames: its auto-hide deadline,
@@ -291,7 +289,7 @@ impl HudState {
     /// remote, and it must clear it too — which is also what makes an offer behave the same
     /// whether the HUD auto-hid or was hidden on purpose.
     ///
-    /// Parking is only ever from REST: a user who walked to the Subtitles disc or an Info tab keeps
+    /// Parking is only ever from REST: a user who walked to the Subtitles button keeps
     /// their spot (and for Up Next thereby declines the countdown — the same one rule, read as a
     /// steady state one block below). `primary` is the occupant's own
     /// ([`crate::appkit::player_hud::ControlSlot::primary_btn`]) — item 0 for a Skip pill, the
@@ -333,8 +331,6 @@ pub(crate) enum ScrubPress {
     Jump,
     /// Walk the control row.
     Row,
-    /// Walk the bottom tabs.
-    Tabs,
     /// On the bar with nothing to seek through.
     Nothing,
 }
@@ -346,7 +342,6 @@ pub(crate) fn scrub_press(hud_vis: bool, focus: i32, seekable: bool) -> ScrubPre
     }
     match focus {
         1 => ScrubPress::Row,
-        2 => ScrubPress::Tabs,
         _ if seekable => ScrubPress::Jump,
         _ => ScrubPress::Nothing,
     }
@@ -491,7 +486,7 @@ mod hud_visibility_tests {
     /// "hidden but focus == 1" is an ordinary state, not a corner.
     #[test]
     fn a_hidden_hud_spends_the_press_on_itself() {
-        for focus in [0, 1, 2] {
+        for focus in [0, 1] {
             for seekable in [false, true] {
                 assert_eq!(
                     scrub_press(false, focus, seekable),
@@ -500,13 +495,11 @@ mod hud_visibility_tests {
                 );
             }
         }
-        // …and visible, the same three cursors act — this is what the reveal DEFERS to, one press later
+        // …and visible, the same cursors act — this is what the reveal DEFERS to, one press later
         assert_eq!(scrub_press(true, 0, true), ScrubPress::Jump);
         assert_eq!(scrub_press(true, 1, true), ScrubPress::Row);
-        assert_eq!(scrub_press(true, 2, true), ScrubPress::Tabs);
-        // Duration belongs only to the scrubber. Indexed rows remain live without one.
+        // Duration belongs only to the seek bar. The row remains live without one.
         assert_eq!(scrub_press(true, 1, false), ScrubPress::Row);
-        assert_eq!(scrub_press(true, 2, false), ScrubPress::Tabs);
         // the scrubber itself with nothing to move through is still not a Jump
         assert_eq!(scrub_press(true, 0, false), ScrubPress::Nothing);
     }
@@ -590,18 +583,17 @@ mod hud_visibility_tests {
         let ps = crate::route::PlaybackSession::IDLE;
         with_state(PlaybackState::Playing, || {
             let now = 10_000u32;
-            // parked on the Chapters tab, which is only reachable by pressing DOWN twice
+            // parked on the Subtitles button, which is only reachable by walking the row
             let mut hud = HudState {
                 nav: HudNav {
-                    focus: 2,
-                    btn: 0,
-                    tab: 1,
+                    focus: 1,
+                    btn: crate::appkit::player_hud::BTN_SUBTITLES,
                 },
                 ..HudState::IDLE
             };
             hud.raise_for_offer(now, crate::appkit::up_next::PRIMARY_BTN);
             assert!(hud.visible(&ps, now, false), "the offer is still shown");
-            assert_eq!((hud.nav.focus, hud.nav.tab), (2, 1), "their spot is theirs");
+            assert_eq!((hud.nav.focus, hud.nav.btn), (1, crate::appkit::player_hud::BTN_SUBTITLES), "their spot is theirs");
             assert!(
                 !crate::appkit::up_next::countdown_may_run(true, hud.nav.focus == 1, hud.nav.btn),
                 "engaging the transport is not consent to be pulled into the next episode"

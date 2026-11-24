@@ -6,6 +6,9 @@
 //! fade/translate the whole thing in (the open animation). It knows nothing about playback or
 //! metadata: the caller builds the sections, drives selection, and reads `sel` back — so the
 //! same widget serves the in-player track menu and the Settings, Privacy and Legal surfaces.
+//! The Settings family draws it in Litefin's look ([`TableStyle::Settings`] rows in the content
+//! panel, [`TableStyle::Menu`] for the category list), the player's audio and subtitle menus wear
+//! [`TableStyle::Track`]; every other popover keeps [`TableStyle::Classic`].
 #![allow(dead_code)]
 use crate::ui::fit;
 use crate::ui::label::{HAlign, Label, VAlign};
@@ -220,14 +223,14 @@ impl Row {
     }
     /// `tall` is the TABLE's two-line measure — see [`TableView::tall_rows`]. A row cannot answer
     /// this alone: 92 and 98 are both correct, and which one applies is a property of the LIST.
-    fn height_in(&self, tall: f32) -> f32 {
+    fn height_in(&self, m: &Metrics, tall: f32) -> f32 {
         if self.sep && self.label.is_empty() {
             SEP_H // the hairline
         } else if self.is_note() {
             // a `note`: its wrapped CAPTION lines plus air, never shorter than a plain row
-            (f32::from(self.note_lines.get()) * NOTE_LEADING + 2.0 * NOTE_PAD).max(ROW_H)
-        } else if self.detail.is_empty() {
-            ROW_H // a plain row with no detail line
+            (f32::from(self.note_lines.get()) * NOTE_LEADING + 2.0 * NOTE_PAD).max(m.row_h)
+        } else if self.detail.is_empty() || !m.shows_detail {
+            m.row_h // a plain row with no detail line (or a style that draws none)
         } else {
             tall
         }
@@ -417,6 +420,270 @@ fn edge_alpha(ink_bot: f32, vis_bot: f32, pad: f32) -> f32 {
     ((vis_bot - ink_bot) / (pad + BOT_PAD)).clamp(0.0, 1.0)
 }
 
+/// **Which look a table wears.** [`TableStyle::Classic`] is every popover and panel menu (the
+/// player's track and More menus, the library sort/filter menus, the item and account menus): the
+/// metrics and inks the constants above name, unchanged. `Settings` and `Menu` are Litefin's Settings
+/// page (`docs/litefin-look.md` 9), opted into per table by the Settings family only; `Track` is
+/// Litefin's player track menu (10), opted into by the audio and subtitle menus only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TableStyle {
+    #[default]
+    Classic,
+    /// Litefin's setting rows in the content panel: 80-tall rows 8 apart at radius 12, the name at
+    /// 22px over a 16px description, section titles in 24px caps over a 2px divider, the focused
+    /// row tinted with the accent and switches drawn as 60x34 pills.
+    Settings,
+    /// Litefin's left category list: 13x20-padded buttons at radius 12 and 19px; the focused one
+    /// fills with the accent (lavender label, scale 1.05), the active one (the list does not hold
+    /// focus) with lavender (accent label). No headers, descriptions, read-outs or switches: the
+    /// owner shows those beside the list.
+    Menu,
+    /// Litefin's audio and subtitle menu: each section's header is a centred 25px bold title, the
+    /// options 19px bold in a 60-tall slot at radius 16 with the check column always reserved, and
+    /// the focused option fills with the accent (lavender label). No hairlines between sections.
+    Track,
+}
+
+/// One [`TableStyle`]'s geometry and type, read by every walk, measure and draw so the three can
+/// never disagree. Classic's values are the module constants.
+#[derive(Clone, Copy, Debug)]
+struct Metrics {
+    /// A plain row's slot, and a two-line row's (a style without descriptions has none).
+    row_h: f32,
+    row_h_tall: f32,
+    /// The focus fill's inset inside a slot: top/bottom, and left/right.
+    pill_inset: f32,
+    side: f32,
+    /// Text padding inside the fill.
+    pad: f32,
+    pill_rad: f32,
+    /// The label's rung and weight (a compact Classic table reads BODY regular instead).
+    label: (std::os::raw::c_int, bool),
+    detail: std::os::raw::c_int,
+    value: (std::os::raw::c_int, bool),
+    header: (std::os::raw::c_int, bool),
+    hdr_h: f32,
+    /// Header band top to the header's cap-top.
+    hdr_cap: f32,
+    /// The gap between two sections, and whether a hairline is drawn in it.
+    div_h: f32,
+    div_rule: bool,
+    /// A 2px divider under every header (Litefin's section title), this far above the band's
+    /// bottom; `None` draws none.
+    hdr_rule: Option<f32>,
+    /// Title baseline to description cap-top in a two-line row.
+    sub_gap: f32,
+    top_pad: f32,
+    bot_pad: f32,
+    /// The leading check column is reserved even when no row has a mark.
+    lead_always: bool,
+    shows_detail: bool,
+    shows_value: bool,
+    shows_header: bool,
+    /// The trailing icon (the drill-in chevron) and badge run are drawn.
+    shows_trailing: bool,
+    /// A switch is a drawn pill rather than the `On`/`Off` word.
+    switch: bool,
+    /// The focused fill, its labels' ink, and the idle label ink.
+    focus_fill: [f32; 4],
+    focus_ink: [f32; 4],
+    idle_ink: [f32; 4],
+    /// The fill and ink under the selection while the list does NOT hold focus (`None`: none).
+    active: Option<([f32; 4], [f32; 4])>,
+    /// The focused fill's pop about its centre.
+    focus_scale: f32,
+    /// Section headers: centred in their column rather than leading, upper-cased, and their ink
+    /// (`None`: the table's own [`TableView::header_ink`]).
+    header_center: bool,
+    header_caps: bool,
+    header_ink: Option<[f32; 4]>,
+}
+
+const CLASSIC: Metrics = Metrics {
+    row_h: ROW_H,
+    row_h_tall: ROW_H_TALL,
+    pill_inset: PILL_INSET,
+    side: SIDE,
+    pad: CONTENT_PAD,
+    pill_rad: PILL_RAD,
+    label: (theme::size::HEADLINE, true),
+    detail: theme::size::CAPTION,
+    value: (theme::size::LABEL, VALUE_BOLD != 0),
+    header: (theme::size::CAPTION, false),
+    hdr_h: HDR_H,
+    hdr_cap: HEADER_CAP_INSET,
+    div_h: DIV_H,
+    div_rule: true,
+    hdr_rule: None,
+    sub_gap: ROW_SUB_GAP,
+    top_pad: TOP_PAD,
+    bot_pad: BOT_PAD,
+    lead_always: true,
+    shows_detail: true,
+    shows_value: true,
+    shows_header: true,
+    shows_trailing: true,
+    switch: false,
+    focus_fill: theme::ACCENT,
+    focus_ink: theme::ACCENT_INK,
+    idle_ink: theme::TEXT_PRIMARY,
+    active: None,
+    focus_scale: 1.0,
+    header_center: false,
+    header_caps: true,
+    header_ink: None,
+};
+
+/// `docs/litefin-look.md` 9 Setting row: padding 24, min height 80 (100 with a description), 8
+/// apart, radius 12; name 22.4 -> `S22`, description 16; section titles 24/600 caps with a 2px
+/// divider and 20 above and below.
+const SETTINGS: Metrics = Metrics {
+    row_h: 80.0 + 8.0,
+    row_h_tall: 100.0 + 8.0,
+    pill_inset: 4.0,
+    side: 0.0,
+    pad: 24.0,
+    pill_rad: theme::radius::BASE,
+    label: (theme::size::lf::S22, false),
+    detail: theme::size::lf::S16,
+    value: (theme::size::lf::S19, false),
+    header: (theme::size::lf::S24, true),
+    hdr_h: 20.0 + 32.0 + 2.0 + 20.0,
+    hdr_cap: 20.0,
+    div_h: 12.0,
+    div_rule: false,
+    hdr_rule: Some(20.0),
+    sub_gap: 10.0,
+    top_pad: 0.0,
+    bot_pad: 20.0,
+    lead_always: false,
+    shows_detail: true,
+    shows_value: true,
+    shows_header: true,
+    shows_trailing: true,
+    switch: true,
+    focus_fill: theme::BRAND_ROW_FOCUS,
+    focus_ink: theme::TEXT_PRIMARY,
+    idle_ink: theme::TEXT_PRIMARY,
+    active: None,
+    focus_scale: 1.0,
+    header_center: false,
+    header_caps: true,
+    header_ink: Some(theme::TEXT_SECONDARY),
+};
+
+/// `docs/litefin-look.md` 9 Left category list: buttons padding 13x20 (a 19px line is 27 tall),
+/// margin 3x16, radius 12, 18.88/500 -> `S19`; active lavender, focused accent at 1.05.
+const MENU: Metrics = Metrics {
+    row_h: 13.0 + 27.0 + 13.0 + 6.0,
+    row_h_tall: 13.0 + 27.0 + 13.0 + 6.0,
+    pill_inset: 3.0,
+    side: 16.0,
+    pad: 20.0,
+    pill_rad: theme::radius::BASE,
+    label: (theme::size::lf::S19, false),
+    detail: theme::size::lf::S16,
+    value: (theme::size::lf::S19, false),
+    header: (theme::size::lf::S16, false),
+    hdr_h: 0.0,
+    hdr_cap: 0.0,
+    div_h: 16.0,
+    div_rule: false,
+    hdr_rule: None,
+    sub_gap: 0.0,
+    top_pad: 0.0,
+    bot_pad: 0.0,
+    lead_always: false,
+    shows_detail: false,
+    shows_value: false,
+    shows_header: false,
+    shows_trailing: false,
+    switch: false,
+    focus_fill: theme::BRAND_FILL,
+    focus_ink: theme::BRAND_INK,
+    idle_ink: theme::TEXT_SECONDARY,
+    active: Some((theme::SELECTED_FILL, theme::SELECTED_INK)),
+    focus_scale: 1.05,
+    header_center: false,
+    header_caps: true,
+    header_ink: Some(theme::TEXT_SECONDARY),
+};
+
+/// `docs/litefin-look.md` 10 Track menus: the list's padding 28.8; title 24.96 bold centred with
+/// 19.2 below it (a 37.44 line box, so the title band is 56 and its caps start 10 down); options
+/// padding 15.4 x 23 around a 19.2 bold line (a 60 slot; 84 with the codec sub-line's 24 line box),
+/// radius 16, a check column, focused accent fill with lavender text.
+const TRACK: Metrics = Metrics {
+    row_h: 60.0,
+    row_h_tall: 84.0,
+    pill_inset: 0.0,
+    side: 29.0,
+    pad: 23.0,
+    pill_rad: theme::radius::LG,
+    label: (theme::size::lf::S19, true),
+    detail: theme::size::lf::S16,
+    value: (theme::size::lf::S19, true),
+    header: (theme::size::lf::S25, true),
+    hdr_h: 37.0 + 19.0,
+    hdr_cap: 10.0,
+    div_h: 12.0,
+    div_rule: false,
+    hdr_rule: None,
+    sub_gap: 14.0,
+    top_pad: 29.0,
+    bot_pad: 29.0,
+    lead_always: true,
+    shows_detail: true,
+    shows_value: true,
+    shows_header: true,
+    shows_trailing: true,
+    switch: false,
+    focus_fill: theme::BRAND_FILL,
+    focus_ink: theme::BRAND_INK,
+    idle_ink: theme::TEXT_PRIMARY,
+    active: None,
+    focus_scale: 1.0,
+    header_center: true,
+    header_caps: false,
+    header_ink: Some(theme::TEXT_PRIMARY),
+};
+
+impl TableStyle {
+    fn metrics(self) -> &'static Metrics {
+        match self {
+            TableStyle::Classic => &CLASSIC,
+            TableStyle::Settings => &SETTINGS,
+            TableStyle::Menu => &MENU,
+            TableStyle::Track => &TRACK,
+        }
+    }
+}
+
+/// Litefin's toggle (`docs/litefin-look.md` 9): a 60x34 pill with a 2px white .20 border, a 24px
+/// knob 3px in from the left; on, the track is the accent and the knob moves 26 and turns lavender.
+pub(crate) const SWITCH_W: f32 = 60.0;
+pub(crate) const SWITCH_H: f32 = 34.0;
+const SWITCH_KNOB: f32 = 24.0;
+const SWITCH_KNOB_INSET: f32 = 3.0;
+const SWITCH_TRAVEL: f32 = 26.0;
+const SWITCH_BORDER_W: f32 = 2.0;
+/// A focused row's switch pops this much (9 Toggle: "focused scale 1.05").
+const SWITCH_FOCUS_SCALE: f32 = 1.05;
+
+/// Draw Litefin's switch with its right edge on `right` and its centre on `cy`, popped by `scale`
+/// about its own centre.
+pub(crate) fn draw_switch(p: Painter, right: f32, cy: f32, on: bool, scale: f32) {
+    let (w, h) = (SWITCH_W * scale, SWITCH_H * scale);
+    let r = Rect::new(right - SWITCH_W * 0.5 - w * 0.5, cy - h * 0.5, w, h);
+    let track = if on { theme::BRAND_FILL } else { theme::SWITCH_TRACK_OFF };
+    p.rrect(r, h * 0.5, h * 0.5, track);
+    p.rring(r, h * 0.5, SWITCH_BORDER_W, theme::ACTION_BORDER);
+    let knob = SWITCH_KNOB * scale;
+    let x = r.x + (SWITCH_KNOB_INSET + if on { SWITCH_TRAVEL } else { 0.0 }) * scale;
+    let ink = if on { theme::BRAND_INK } else { theme::TEXT_PRIMARY };
+    p.rrect(Rect::new(x, r.cy() - knob * 0.5, knob, knob), knob * 0.5, knob * 0.5, ink);
+}
+
 /// A row's two text columns as [`TableView::row_columns`] resolves them: the primary label's (and
 /// its sub-line's) width, and the trailing value's, which the value is elided to.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -531,12 +798,17 @@ pub struct TableView {
     pub compact: bool,
     /// see [`TableView::tall_rows`]
     tall: bool,
+    /// The look, see [`TableStyle`] and [`TableView::set_style`].
+    style: TableStyle,
     /// Semantic ink for section labels. Ambient routes can raise this role for contrast without
     /// replacing the shared table header renderer or changing row/detail hierarchy.
     pub header_ink: [f32; 4],
     /// The floor [`Self::menu_panel_width`] clamps to; [`MENU_MIN_W`] unless a panel family sets a
     /// wider one (the in-player popovers: [`theme::layout::PLAYER_MENU_MIN_W`]).
     pub min_panel_w: f32,
+    /// …and its ceiling: [`MENU_MAX_W`] unless a panel family sets its own (the track menus, whose
+    /// floor is wider than the shared cap: [`theme::osd::TRACK_MENU_MAX_W`]).
+    pub max_panel_w: f32,
     // the highlight pill's top and bottom edges spring INDEPENDENTLY (content coords), so moving
     // to a taller/shorter row morphs the pill smoothly instead of snapping its height.
     hl_top: Spring,
@@ -561,13 +833,14 @@ const WALK_TITLE: i32 = -3;
 /// The glyph that opens a page title: the drill-in's "back" mark, the mirror of a row's chevron.
 const TITLE_BACK_GLYPH: &str = "\u{2039}";
 impl TableView {
-    pub(crate) const MOTION_SHAPE: &'static str = "TableViewMotion{sel:i32,list_focused:bool,compact:bool,tall:bool,header_ink:[f32;4],hl_top:Spring{pos:f32,vel:f32},hl_bot:Spring{pos:f32,vel:f32},scroll:Spring{pos:f32,vel:f32}}";
+    pub(crate) const MOTION_SHAPE: &'static str = "TableViewMotion{sel:i32,list_focused:bool,compact:bool,tall:bool,style:classic|settings|menu|track,header_ink:[f32;4],hl_top:Spring{pos:f32,vel:f32},hl_bot:Spring{pos:f32,vel:f32},scroll:Spring{pos:f32,vel:f32}}";
 
     /// The owner records its row data separately. These fields determine layout, the selected
     /// face and subsequent motion; no text/texture cache or renderer pointer is traversed.
     pub(crate) fn write_motion(&self, c: &mut nj_machine::machine::Canon) {
-        let Self { sections: _, sel, list_focused, compact, tall, header_ink, hl_top, hl_bot, scroll, title: _, min_panel_w: _, rev: _ } = self;
+        let Self { sections: _, sel, list_focused, compact, tall, style, header_ink, hl_top, hl_bot, scroll, title: _, min_panel_w: _, max_panel_w: _, rev: _ } = self;
         c.u32(*sel as u32).bool(*list_focused).bool(*compact).bool(*tall);
+        c.discriminant(*style as u32);
         for component in header_ink { c.f32(*component); }
         for spring in [hl_top, hl_bot, scroll] { c.f32(spring.pos).f32(spring.vel); }
     }
@@ -585,7 +858,7 @@ impl TableView {
         if self.tall {
             ROW_H_ART
         } else {
-            ROW_H_TALL
+            self.m().row_h_tall
         }
     }
     pub const fn new() -> Self {
@@ -595,8 +868,10 @@ impl TableView {
             list_focused: true,
             compact: false,
             tall: false,
+            style: TableStyle::Classic,
             header_ink: theme::TEXT_TERTIARY,
             min_panel_w: MENU_MIN_W,
+            max_panel_w: MENU_MAX_W,
             hl_top: Spring::at(0.0),
             hl_bot: Spring::at(0.0),
             scroll: Spring::at(0.0),
@@ -622,8 +897,10 @@ impl TableView {
         t.list_focused = self.list_focused;
         t.compact = self.compact;
         t.tall = self.tall;
+        t.style = self.style;
         t.header_ink = self.header_ink;
         t.min_panel_w = self.min_panel_w;
+        t.max_panel_w = self.max_panel_w;
         t
     }
 
@@ -650,7 +927,8 @@ impl TableView {
     /// walk [`row_rect`](Self::row_rect), [`hit_row`](Self::hit_row) and `ui::geom::Table::place`
     /// share (spec §7.1). `None` for a header index, a separator, or an index out of range.
     pub fn row_frame(&self, frame: Rect, i: i32) -> Option<Rect> {
-        let top0 = frame.y + TOP_PAD;
+        let m = self.m();
+        let top0 = frame.y + m.top_pad;
         let scroll = self.scroll.pos;
         let mut out = None;
         self.walk(|cy, gi, _| {
@@ -658,8 +936,8 @@ impl TableView {
                 return;
             }
             let sy = top0 + cy - scroll;
-            let h = self.rows_at(gi).height_in(self.tall_row_h());
-            out = Some(Rect::new(frame.x + SIDE, sy, frame.w - 2.0 * SIDE, h));
+            let h = self.rows_at(gi).height_in(self.m(), self.tall_row_h());
+            out = Some(Rect::new(frame.x + m.side, sy, frame.w - 2.0 * m.side, h));
         });
         out
     }
@@ -692,7 +970,7 @@ impl TableView {
         if !frame.contains(mx, my) {
             return None;
         }
-        let top0 = frame.y + TOP_PAD;
+        let top0 = frame.y + self.m().top_pad;
         let scroll = self.scroll.pos;
         let mut hit = None;
         self.walk(|cy, gi, _| {
@@ -700,7 +978,7 @@ impl TableView {
                 return; // headers and grouping hairlines are not click targets
             }
             let sy = top0 + cy - scroll;
-            if my >= sy && my <= sy + self.rows_at(gi).height_in(self.tall_row_h()) {
+            if my >= sy && my <= sy + self.rows_at(gi).height_in(self.m(), self.tall_row_h()) {
                 hit = Some(gi);
             }
         });
@@ -725,8 +1003,9 @@ impl TableView {
         self.title = title;
         if moved && self.n_rows() > 0 {
             let top = self.row_top(self.sel);
-            self.hl_top.jump(top + PILL_INSET);
-            self.hl_bot.jump(top + self.row_height(self.sel) - PILL_INSET);
+            let inset = self.m().pill_inset;
+            self.hl_top.jump(top + inset);
+            self.hl_bot.jump(top + self.row_height(self.sel) - inset);
         }
     }
 
@@ -783,9 +1062,9 @@ impl TableView {
         self.sel = if n == 0 { 0 } else { self.settle_sel(sel) };
         if !slide {
             let top = self.row_top(self.sel);
-            self.hl_top.jump(top + PILL_INSET);
-            self.hl_bot
-                .jump(top + self.row_height(self.sel) - PILL_INSET);
+            let inset = self.m().pill_inset;
+            self.hl_top.jump(top + inset);
+            self.hl_bot.jump(top + self.row_height(self.sel) - inset);
             self.scroll.jump(0.0);
         }
     }
@@ -850,7 +1129,7 @@ impl TableView {
         if self.n_rows() == 0 {
             return 120.0;
         }
-        self.content_h() + TOP_PAD + BOT_PAD
+        self.content_h() + self.m().top_pad + self.m().bot_pad
     }
 
     /// Intrinsic panel width: the width at which EVERY header, label, sub-line and trailing value
@@ -861,13 +1140,15 @@ impl TableView {
     /// never elide a run the layout would have kept. Action menus size their panel with it.
     pub(crate) fn measured_width(&self, measure: &dyn nj_machine::machine::Measure) -> f32 {
         let h = fit::HEADROOM;
+        let m = self.m();
+        let content_x = m.side + m.pad;
         let mut width: f32 = 0.0;
         if let Some((title, x0)) = self.title_run(measure) {
-            width = 2.0 * CONTENT_X + x0 + measure.width_str(&title, theme::size::CAPTION, false) / h;
+            width = 2.0 * content_x + x0 + measure.width_str(&title, theme::size::CAPTION, false) / h;
         }
         for section in &self.sections {
-            if !section.header.is_empty() {
-                let header = measure.width_str(&section.header.to_uppercase(), theme::size::CAPTION, false);
+            if !section.header.is_empty() && m.shows_header {
+                let header = measure.width_str(&self.header_text(section), m.header.0, m.header.1);
                 let band = if section.accessory.is_empty() {
                     header / h
                 } else {
@@ -877,18 +1158,18 @@ impl TableView {
                         .max(Self::accessory_floor(section, measure));
                     (header + accessory) / h + ACCESSORY_GAP
                 };
-                width = width.max(2.0 * CONTENT_X + band);
+                width = width.max(2.0 * content_x + band);
             }
             for row in section.rows.iter().filter(|row| !row.sep) {
                 let (label, value) = self.row_runs(row, measure);
-                let detail = measure.width_str(&row.detail, theme::size::CAPTION, false);
+                let detail = if m.shows_detail { measure.width_str(&row.detail, m.detail, false) } else { 0.0 };
                 let primary = (label / h).max(detail / h);
                 let text = match value {
                     Some(value) => primary + ROW_VALUE_GAP + value / h,
                     None => primary,
                 };
-                let fixed = self.trailing_width(row, measure) - Self::value_slot(row, measure);
-                width = width.max(2.0 * CONTENT_X + CHECK_W + GAP + fixed + text);
+                let fixed = self.trailing_width(row, measure) - self.value_slot(row, measure);
+                width = width.max(2.0 * content_x + self.lead_w() + fixed + text);
             }
         }
         width.ceil()
@@ -896,22 +1177,23 @@ impl TableView {
 
     /// The shared popover-menu width rule: the table's own [`Self::measured_width`] (longest
     /// header / label / detail / trailing value plus `2 * CONTENT_X` of padding and the check
-    /// column) clamped to [[`Self::min_panel_w`] (default [`MENU_MIN_W`]), [`MENU_MAX_W`]]. Every TableView-in-popover menu sizes
-    /// its panel with this; none carries a width constant of its own.
+    /// column) clamped to [[`Self::min_panel_w`] (default [`MENU_MIN_W`]), [`Self::max_panel_w`]
+    /// (default [`MENU_MAX_W`])]. Every TableView-in-popover menu sizes its panel with this; none
+    /// carries a width constant of its own.
     ///
-    /// [`MENU_MAX_W`] is a localization CATCH, not a silent ellipsis: each menu's fit test grades
-    /// its shipped languages at the cap, and [`Self::menu_cap_failure`] flags any draft whose
+    /// The cap is a localization CATCH, not a silent ellipsis: each menu's fit test grades its
+    /// shipped languages at the cap, and [`Self::menu_cap_failure`] flags any draft whose
     /// `measured_width` exceeds it.
     pub(crate) fn menu_panel_width(&self, measure: &dyn nj_machine::machine::Measure) -> f32 {
-        self.measured_width(measure).clamp(self.min_panel_w.min(MENU_MAX_W), MENU_MAX_W)
+        self.measured_width(measure).clamp(self.min_panel_w.min(self.max_panel_w), self.max_panel_w)
     }
 
     /// Test-side half of the cap: `Err` names the offending width when this table would need a
-    /// panel wider than [`MENU_MAX_W`] (`what` = language tag + menu/row context).
+    /// panel wider than its cap, [`Self::max_panel_w`] (`what` = language tag + menu/row context).
     #[cfg(test)]
     pub(crate) fn menu_cap_failure(&self, measure: &dyn nj_machine::machine::Measure, what: &str) -> Option<String> {
-        let w = self.measured_width(measure);
-        (w > MENU_MAX_W).then(|| format!("{what}: measured_width {w} > MENU_MAX_W {MENU_MAX_W}"))
+        let (w, cap) = (self.measured_width(measure), self.max_panel_w);
+        (w > cap).then(|| format!("{what}: measured_width {w} > max_panel_w {cap}"))
     }
 
     /// Every text slot (label, detail sub-line, trailing value, section header, section accessory)
@@ -928,20 +1210,21 @@ impl TableView {
     #[cfg(test)]
     pub(crate) fn fit_report(&self, frame_w: f32, measure: &dyn nj_machine::machine::Measure, headroom: f32) -> Vec<FitIssue> {
         let (size, bold) = self.label_style();
+        let m = self.m();
         let mut out = Vec::new();
         self.fit_notes(frame_w, measure);
         if let Some((title, x0)) = self.title_run(measure) {
             let natural = measure.width_str(&title, theme::size::CAPTION, false);
-            let budget = (frame_w - 2.0 * CONTENT_X - x0).max(0.0);
+            let budget = (frame_w - 2.0 * (m.side + m.pad) - x0).max(0.0);
             if budget + FIT_EPS < natural / headroom {
                 out.push(FitIssue { role: FitRole::Title, origin: Origin::App, text: title, natural, budget });
             }
         }
         for section in &self.sections {
-            if !section.header.is_empty() {
-                let header_text = section.header.to_uppercase();
-                let header_nat = measure.width_str(&header_text, theme::size::CAPTION, false);
-                let (header_w, accessory_w) = Self::header_columns(section, frame_w, measure, headroom);
+            if !section.header.is_empty() && m.shows_header {
+                let header_text = self.header_text(section);
+                let header_nat = measure.width_str(&header_text, m.header.0, m.header.1);
+                let (header_w, accessory_w) = self.header_columns(section, frame_w, measure, headroom);
                 if header_w + FIT_EPS < header_nat / headroom {
                     out.push(FitIssue { role: FitRole::Header, origin: section.header_origin, text: header_text, natural: header_nat, budget: header_w });
                 }
@@ -960,7 +1243,7 @@ impl TableView {
             }
             for row in section.rows.iter().filter(|r| r.is_note()) {
                 // a note WRAPS, so it fits unless one unbreakable word is wider than its column
-                let budget = Self::note_column_w(frame_w) * headroom;
+                let budget = self.note_column_w(frame_w) * headroom;
                 let widest = row
                     .label
                     .split(|c: char| c.is_whitespace() && c != '\u{a0}')
@@ -977,12 +1260,12 @@ impl TableView {
                 if lw > label_budget {
                     out.push(FitIssue { role: FitRole::Label, origin: row.label_origin, text: row.label.clone(), natural: lw, budget: label_budget });
                 }
-                let dw = measure.width_str(&row.detail, theme::size::CAPTION, false);
+                let dw = if m.shows_detail { measure.width_str(&row.detail, m.detail, false) } else { 0.0 };
                 if dw > label_budget {
                     out.push(FitIssue { role: FitRole::Detail, origin: row.detail_origin, text: row.detail.clone(), natural: dw, budget: label_budget });
                 }
-                if let Some(value) = row.readout() {
-                    let value_nat = measure.width_str(value, theme::size::LABEL, VALUE_BOLD != 0);
+                if let Some(value) = self.readout(row) {
+                    let value_nat = measure.width_str(value, m.value.0, m.value.1);
                     let value_w = self.row_columns_under(row, frame_w, measure, headroom).value_w;
                     if value_w + FIT_EPS < value_nat / headroom {
                         out.push(FitIssue { role: FitRole::Value, origin: row.readout_origin(), text: value.to_string(), natural: value_nat, budget: value_w });
@@ -1030,8 +1313,9 @@ impl TableView {
 
     /// The text column a [`Row::note`] wraps in: the ROW-LABEL column (past the check column), so
     /// the note reads as attached to the rows above it rather than as a second header.
-    fn note_column_w(frame_w: f32) -> f32 {
-        (frame_w - 2.0 * CONTENT_X - CHECK_W - GAP).max(0.0)
+    fn note_column_w(&self, frame_w: f32) -> f32 {
+        let m = self.m();
+        (frame_w - 2.0 * (m.side + m.pad) - self.lead_w()).max(0.0)
     }
 
     /// **Measure every [`Row::note`] against a `frame_w`-wide table**, storing the wrapped line
@@ -1039,7 +1323,7 @@ impl TableView {
     /// place a note's height is decided; [`Self::draw`] runs it before it walks, and an owner that
     /// sizes its panel from [`Self::measured_height`] (the track menu) runs it first. Idempotent.
     pub(crate) fn fit_notes(&self, frame_w: f32, measure: &dyn nj_machine::machine::Measure) {
-        let w = Self::note_column_w(frame_w);
+        let w = self.note_column_w(frame_w);
         for row in self.sections.iter().flat_map(|s| s.rows.iter()).filter(|r| r.is_note()) {
             let lines = crate::ui::text_view::TextView::new(&row.label, theme::size::CAPTION, theme::TEXT_TERTIARY)
                 .with_measure(measure)
@@ -1049,17 +1333,87 @@ impl TableView {
     }
 
     fn label_style(&self) -> (std::os::raw::c_int, bool) {
-        if self.compact { (theme::size::BODY, false) } else { (theme::size::HEADLINE, true) }
+        match self.style {
+            TableStyle::Classic if self.compact => (theme::size::BODY, false),
+            style => style.metrics().label,
+        }
+    }
+
+    /// This table's [`Metrics`].
+    fn m(&self) -> &'static Metrics {
+        self.style.metrics()
+    }
+
+    /// A section header's text as this style draws it: upper-cased, except under a style whose
+    /// header is a title ([`TableStyle::Track`]). `to_uppercase`, not `to_ascii_uppercase`: a
+    /// header is a machine name or a library name and can be any script.
+    fn header_text(&self, section: &Section) -> String {
+        if self.m().header_caps { section.header.to_uppercase() } else { section.header.clone() }
+    }
+
+    /// The leading check column plus its gap to the label: always reserved in Classic, and in the
+    /// Litefin styles only when some row wears a mark there.
+    fn lead_w(&self) -> f32 {
+        let marked = || self.sections.iter().flat_map(|s| s.rows.iter()).any(|r| r.checked || r.licon.is_some());
+        if self.m().lead_always || marked() { CHECK_W + GAP } else { 0.0 }
+    }
+
+    /// The word a row's trailing slot shows in THIS table: [`Row::readout`], except that a style
+    /// drawing switches shows a switch's state as the pill instead, and one without read-outs none.
+    fn readout<'r>(&self, row: &'r Row) -> Option<&'r str> {
+        let m = self.m();
+        if !m.shows_value || (m.switch && row.value.is_none() && row.toggle.is_some()) {
+            None
+        } else {
+            row.readout()
+        }
+    }
+
+    /// The switch a row draws at its trailing edge in this table, if any: its state.
+    fn switch_of(&self, row: &Row) -> Option<bool> {
+        if self.m().switch && row.value.is_none() { row.toggle } else { None }
+    }
+
+    /// The look this table wears.
+    pub(crate) fn style(&self) -> TableStyle {
+        self.style
+    }
+
+    /// A row's label and read-out at their natural widths in this table's own faces (no hug).
+    #[cfg(test)]
+    pub(crate) fn natural_widths(&self, row: &Row, measure: &dyn nj_machine::machine::Measure) -> (f32, Option<f32>) {
+        let (size, bold) = self.label_style();
+        let (vsz, vbold) = self.m().value;
+        (measure.width_str(&row.label, size, bold), self.readout(row).map(|v| measure.width_str(v, vsz, vbold)))
+    }
+
+    /// Set the look (see [`TableStyle`]); the pill re-snaps to the selected row's new place.
+    pub(crate) fn set_style(&mut self, style: TableStyle) {
+        if self.style == style {
+            return;
+        }
+        self.rev = next_rev();
+        self.style = style;
+        if self.n_rows() > 0 {
+            let top = self.row_top(self.sel);
+            let inset = self.m().pill_inset;
+            self.hl_top.jump(top + inset);
+            self.hl_bot.jump(top + self.row_height(self.sel) - inset);
+        }
     }
 
     fn trailing_width(&self, row: &Row, measure: &dyn nj_machine::machine::Measure) -> f32 {
-        let mut width = row.ticon.map_or(0.0, ticon_slot_w);
-        if !row.badges.is_empty() {
+        let shows = self.m().shows_trailing;
+        let mut width = row.ticon.filter(|_| shows).map_or(0.0, ticon_slot_w);
+        if shows && !row.badges.is_empty() {
             width += row.badges.iter().map(|badge| crate::ui::widgets::badge_w(badge.text(), None, measure)).sum::<f32>()
                 + BADGE_GAP * (row.badges.len() - 1) as f32 + ACCESSORY_GAP;
         }
-        if let Some(value) = row.readout() {
-            width += measure.width_str(value, theme::size::LABEL, VALUE_BOLD != 0) + ACCESSORY_GAP;
+        if let Some(value) = self.readout(row) {
+            width += measure.width_str(value, self.m().value.0, self.m().value.1) + ACCESSORY_GAP;
+        }
+        if self.switch_of(row).is_some() {
+            width += SWITCH_W + ACCESSORY_GAP;
         }
         width
     }
@@ -1084,8 +1438,9 @@ impl TableView {
     /// [`Self::fit_report`] passes the device's headroom to model glyphs wider than the measure.
     /// The label is hugged with [`fit::HUG_MARGIN`] before dividing.
     fn row_columns_under(&self, row: &Row, frame_w: f32, measure: &dyn nj_machine::machine::Measure, headroom: f32) -> RowColumns {
-        let fixed = self.trailing_width(row, measure) - Self::value_slot(row, measure);
-        let span = (frame_w - 2.0 * CONTENT_X - CHECK_W - GAP - fixed).max(0.0);
+        let fixed = self.trailing_width(row, measure) - self.value_slot(row, measure);
+        let m = self.m();
+        let span = (frame_w - 2.0 * (m.side + m.pad) - self.lead_w() - fixed).max(0.0);
         let (label, value) = self.row_runs(row, measure);
         let Some(value) = value else {
             return RowColumns { label_w: span, value_w: 0.0 };
@@ -1105,13 +1460,14 @@ impl TableView {
         let (size, bold) = self.label_style();
         (
             (measure.width_str(&row.label, size, bold) * fit::HUG_MARGIN).ceil(),
-            row.readout().map(|v| measure.width_str(v, theme::size::LABEL, VALUE_BOLD != 0)),
+            self.readout(row).map(|v| measure.width_str(v, self.m().value.0, self.m().value.1)),
         )
     }
 
     /// The trailing value's natural slot (run + its gap), `0` for a row without one.
-    fn value_slot(row: &Row, measure: &dyn nj_machine::machine::Measure) -> f32 {
-        row.readout().map_or(0.0, |v| measure.width_str(v, theme::size::LABEL, VALUE_BOLD != 0) + ACCESSORY_GAP)
+    fn value_slot(&self, row: &Row, measure: &dyn nj_machine::machine::Measure) -> f32 {
+        let (sz, bold) = self.m().value;
+        self.readout(row).map_or(0.0, |v| measure.width_str(v, sz, bold) + ACCESSORY_GAP)
     }
 
     /// The width a server-header section guarantees its app-owned accessory text (hugged like a
@@ -1141,12 +1497,13 @@ impl TableView {
     /// [`Section::accessory_app_prefix`]), the roles swap: the accessory is the primary, guaranteed
     /// at least that app text's width (hugged, like a row label), and the server header elides
     /// first. The accessory then elides only its server tail.
-    fn header_columns(section: &Section, frame_w: f32, measure: &dyn nj_machine::machine::Measure, headroom: f32) -> (f32, f32) {
-        let span = (frame_w - 2.0 * CONTENT_X).max(0.0);
+    fn header_columns(&self, section: &Section, frame_w: f32, measure: &dyn nj_machine::machine::Measure, headroom: f32) -> (f32, f32) {
+        let m = self.m();
+        let span = (frame_w - 2.0 * (m.side + m.pad)).max(0.0);
         if section.accessory.is_empty() {
             return (span, 0.0);
         }
-        let header_nat = measure.width_str(&section.header.to_uppercase(), theme::size::CAPTION, false) / headroom;
+        let header_nat = measure.width_str(&self.header_text(section), m.header.0, m.header.1) / headroom;
         let accessory_nat = measure.width_str(&section.accessory, theme::size::MICRO, false).min(ACCESSORY_W) / headroom;
         let floor = Self::accessory_floor(section, measure) / headroom;
         if floor == 0.0 {
@@ -1225,6 +1582,7 @@ impl TableView {
     /// walk the visual layout top-to-bottom, invoking `f(content_y, global_row_index_or_-1, sec)`
     /// once per header (gi = -1) and once per row (gi >= 0). Cheap; the lists are short.
     fn walk(&self, mut f: impl FnMut(f32, i32, usize)) {
+        let m = self.m();
         let mut y = 0.0f32;
         let mut gi = 0i32;
         if self.title.is_some() {
@@ -1236,16 +1594,16 @@ impl TableView {
             // an EMPTY section (a `Form` whose items all fell through) has nothing to divide from
             // the one above: no hairline, no gap, and it must not lengthen the content
             if si > 0 && !sec.rows.is_empty() {
-                y += DIV_H;
+                y += m.div_h;
                 f(y, WALK_DIVIDER, si);
             }
-            if !sec.header.is_empty() {
+            if !sec.header.is_empty() && m.shows_header {
                 f(y, -1, si);
-                y += HDR_H;
+                y += m.hdr_h;
             }
             for row in &sec.rows {
                 f(y, gi, si);
-                y += row.height_in(self.tall_row_h());
+                y += row.height_in(self.m(), self.tall_row_h());
                 gi += 1;
             }
         }
@@ -1265,12 +1623,12 @@ impl TableView {
         for sec in &self.sections {
             for row in &sec.rows {
                 if n == target {
-                    return row.height_in(self.tall_row_h());
+                    return row.height_in(self.m(), self.tall_row_h());
                 }
                 n += 1;
             }
         }
-        ROW_H
+        self.m().row_h
     }
     fn content_h(&self) -> f32 {
         // the LAST ROW's bottom, not the last walk event's: a trailing header or divider event
@@ -1290,12 +1648,13 @@ impl TableView {
         if self.n_rows() == 0 {
             return;
         }
-        let visible_h = (frame_h - PAD_V).max(0.0);
+        let m = self.m();
+        let visible_h = (frame_h - m.top_pad - m.bot_pad).max(0.0);
         let top = self.row_top(self.sel);
         let rh = self.row_height(self.sel);
         // top and bottom edges spring independently → the pill stretches/morphs between rows
-        self.hl_top.step(top + PILL_INSET, 360.0, dt);
-        self.hl_bot.step(top + rh - PILL_INSET, 360.0, dt);
+        self.hl_top.step(top + m.pill_inset, 360.0, dt);
+        self.hl_bot.step(top + rh - m.pill_inset, 360.0, dt);
         // keep the selection (plus a row of context) inside the viewport
         let content_h = self.content_h();
         let max_scroll = (content_h - visible_h).max(0.0);
@@ -1354,16 +1713,21 @@ impl TableView {
         // faded its detail line, which read as a broken clip). A `ClipScope`, so it intersects with an
         // enclosing panel clip and restores it when this fn returns.
         let _clip = crate::ui::screen::ClipScope::open_in(p, frame);
-        let top0 = frame.y + TOP_PAD;
+        let m = self.m();
+        let classic = self.style == TableStyle::Classic;
+        let top0 = frame.y + m.top_pad;
         let scroll = self.scroll.pos;
         let vis_top = frame.y;
         let vis_bot = frame.y + frame.h;
 
-        let white = theme::TEXT_PRIMARY;
+        let white = m.idle_ink;
         let dimc = theme::TEXT_TERTIARY; // was #8a8a8e; unified onto the tertiary grey
-        let ink = crate::ui::ACCENT_INK; // text/glyph over the light pill
-        let content_x = frame.x + SIDE + CONTENT_PAD;
-        let text_right = frame.x + frame.w - SIDE - CONTENT_PAD;
+        let ink = m.focus_ink; // text/glyph over the focus fill
+        let content_x = frame.x + m.side + m.pad;
+        let text_right = frame.x + frame.w - m.side - m.pad;
+        let lead = self.lead_w();
+        // Litefin's section titles wear their style's ink; a Classic table's are its own role.
+        let header_ink = m.header_ink.unwrap_or(self.header_ink);
 
         // ---- sliding pill (under the rows) — warm off-white; top/bottom edges morph independently ----
         // It follows its GROUP's dim: the focused row of an unreachable server must not be the one
@@ -1371,18 +1735,17 @@ impl TableView {
         let py0 = top0 + self.hl_top.pos - scroll;
         let py1 = top0 + self.hl_bot.pos - scroll;
         let pill = Rect::new(
-            frame.x + SIDE,
+            frame.x + m.side,
             py0,
-            frame.w - 2.0 * SIDE,
+            frame.w - 2.0 * m.side,
             (py1 - py0).max(1.0),
         );
-        if self.list_focused && pill.y + pill.h > vis_top && pill.y < vis_bot {
-            self.group_painter(p, self.section_of_row(self.sel)).rrect(
-                pill,
-                PILL_RAD,
-                PILL_RAD,
-                crate::ui::ACCENT,
-            );
+        // The focused fill, popped about its centre; a list that does not hold focus marks its
+        // selection with the style's active fill, or not at all.
+        let fill = if self.list_focused { Some((m.focus_fill, m.focus_scale)) } else { m.active.map(|(f, _)| (f, 1.0)) };
+        if let Some((col, k)) = fill.filter(|_| pill.y + pill.h > vis_top && pill.y < vis_bot) {
+            let r = Rect::new(pill.cx() - pill.w * k * 0.5, pill.cy() - pill.h * k * 0.5, pill.w * k, pill.h * k);
+            self.group_painter(p, self.section_of_row(self.sel)).rrect(r, m.pill_rad, m.pill_rad, col);
         }
 
         // ---- headers + rows ----
@@ -1393,11 +1756,15 @@ impl TableView {
             let p = self.event_painter(p, gi, si);
             if gi == WALK_DIVIDER {
                 // the hairline between this section and the one above, headed or not, centred in
-                // the `DIV_H` gap; it fades with the group like everything else in it
-                let y = sy - DIV_H * 0.5;
+                // the `DIV_H` gap; it fades with the group like everything else in it. A style whose
+                // section titles carry their own divider draws only the gap.
+                if !m.div_rule {
+                    return;
+                }
+                let y = sy - m.div_h * 0.5;
                 if y + 2.0 > vis_top && y < vis_bot {
                     p.rect(
-                        Rect::new(content_x, y, frame.w - 2.0 * (SIDE + CONTENT_PAD), 2.0),
+                        Rect::new(content_x, y, frame.w - 2.0 * (m.side + m.pad), 2.0),
                         0.0,
                         theme::HAIRLINE,
                         theme::HAIRLINE,
@@ -1426,9 +1793,11 @@ impl TableView {
             }
             if gi == -1 {
                 // panel/section header; scissor-clipped to `frame`
-                if sy + HDR_H > vis_top && sy < vis_bot {
+                let (hsz, hbold) = m.header;
+                let ink_pad = m.hdr_h - m.hdr_cap - hsz as f32;
+                if sy + m.hdr_h > vis_top && sy < vis_bot {
                     // fades out at the bottom edge before its caps are cut (`bottom_edge_alpha`)
-                    let p = p.alpha(edge_alpha(sy + HDR_H - HDR_INK_PAD, vis_bot, HDR_INK_PAD));
+                    let p = p.alpha(edge_alpha(sy + m.hdr_h - ink_pad, vis_bot, ink_pad));
                     let sec = &self.sections[si];
                     // **CAPS at CAPTION, one size in BOTH size classes.** The caps are what make a
                     // header read as a label rather than as a row, which is why the size stops
@@ -1437,25 +1806,35 @@ impl TableView {
                     // two-line picker, so non-compact) that put the machine names on screen bigger
                     // than the libraries they name. Design system, `TableView.prompt.md`.
                     //
-                    // `to_uppercase`, not `to_ascii_uppercase`: a header is a machine name or a
-                    // library name and can be any script — the share measured here is Cyrillic.
-                    let hsz = theme::size::CAPTION;
-                    let cap_y = sy + HEADER_CAP_INSET;
-                    let (cap_top, baseline) = nj_gfx::text::text_cap_band(hsz, 0);
+                    // Upper-cased through `header_text` — any script: the share measured here is
+                    // Cyrillic. A title style ([`TableStyle::Track`]) keeps the case and centres.
+                    let cap_y = sy + m.hdr_cap;
+                    let (cap_top, baseline) = nj_gfx::text::text_cap_band(hsz, hbold as std::os::raw::c_int);
                     let header_band = Rect::new(
                         content_x,
                         cap_y,
                         (text_right - content_x).max(0.0),
                         baseline - cap_top,
                     );
-                    let (header_w, accessory_w) = Self::header_columns(sec, frame.w, measure, 1.0);
-                    let header_text = nj_gfx::text::elide_by(&sec.header.to_uppercase(), header_w, false, |t| {
-                        measure.width_str(t, hsz, false)
+                    let (header_w, accessory_w) = self.header_columns(sec, frame.w, measure, 1.0);
+                    let header_text = nj_gfx::text::elide_by(&self.header_text(sec), header_w, false, |t| {
+                        measure.width_str(t, hsz, hbold)
                     });
                     if let Ok(cs) = CString::new(header_text) {
-                        Label::new(cs.as_ptr(), hsz, self.header_ink)
-                            .v(VAlign::CapTop)
-                            .draw(p, header_band);
+                        let mut label = Label::new(cs.as_ptr(), hsz, header_ink).v(VAlign::CapTop);
+                        if hbold {
+                            label = label.bold();
+                        }
+                        if m.header_center {
+                            label = label.h(HAlign::Center);
+                            label.draw(p, Rect::new(header_band.x, header_band.y, header_w, header_band.h));
+                        } else {
+                            label.draw(p, header_band);
+                        }
+                    }
+                    if let Some(below) = m.hdr_rule {
+                        let y = sy + m.hdr_h - below - 2.0;
+                        p.rect(Rect::new(content_x, y, (text_right - content_x).max(0.0), 2.0), 0.0, theme::HAIRLINE, theme::HAIRLINE, 0.0);
                     }
                     // trailing accessory, one rung down and on the header's own baseline. Elided,
                     // because it is the run that gives way (see `Section::accessory`).
@@ -1469,7 +1848,7 @@ impl TableView {
                             measure.width_str(t, asz, false)
                         });
                         if let Ok(ac) = CString::new(a) {
-                            Label::new(ac.as_ptr(), asz, self.header_ink)
+                            Label::new(ac.as_ptr(), asz, header_ink)
                                 .h(HAlign::Right)
                                 .v(VAlign::Baseline)
                                 .draw(p, header_band);
@@ -1479,7 +1858,7 @@ impl TableView {
                 return;
             }
             let row = self.rows_at(gi);
-            let h = row.height_in(self.tall_row_h());
+            let h = row.height_in(self.m(), self.tall_row_h());
             if sy + h < vis_top || sy > vis_bot {
                 return; // fully scrolled out; a partial edge row is drawn and scissor-clipped to `frame`
             }
@@ -1496,7 +1875,7 @@ impl TableView {
                     Rect::new(
                         content_x,
                         sy + h * 0.5 - 1.0,
-                        frame.w - 2.0 * (SIDE + CONTENT_PAD),
+                        frame.w - 2.0 * (m.side + m.pad),
                         2.0,
                     ),
                     0.0,
@@ -1511,7 +1890,7 @@ impl TableView {
                 // a pill — it cannot be focused (skipped by every `sep` check above), so it never
                 // draws over the sliding highlight either. Its height is `Row::height_in`'s.
                 let nsz = theme::size::CAPTION;
-                let x = content_x + CHECK_W + GAP;
+                let x = content_x + lead;
                 let view = crate::ui::text_view::TextView::new(&row.label, nsz, dimc)
                     .with_measure(measure)
                     .leading(NOTE_LEADING);
@@ -1527,20 +1906,24 @@ impl TableView {
             // black-on-panel rows, which is what the owner saw the moment focus moved to the
             // Sources panel's level pills. The two are one decision and are read from one flag.
             let focused = gi == self.sel && self.list_focused;
+            // the selection of a list that does not hold focus, where the style marks it
+            let active = m.active.filter(|_| gi == self.sel && !self.list_focused).map(|(_, ink)| ink);
             let base = if focused {
+                ink
+            } else if let Some(ink) = active {
                 ink
             } else if row.dim {
                 dimc
             } else {
                 white
             };
-            let row_bg = if focused { crate::ui::ACCENT } else { PANEL_BG };
+            let row_bg = if focused { m.focus_fill } else { PANEL_BG };
             let cyc = sy + h * 0.5; // row vertical center
 
             // Leading column (SVG): the PICKER's tick, or an ACTION's glyph — one or the other, and
             // never a switch. A mark here says WHERE YOU ARE; what a row is SET to is a word at the
             // trailing edge (below), and no row is allowed to say both.
-            let label_x = content_x + CHECK_W + GAP;
+            let label_x = content_x + lead;
             let lead = if row.checked {
                 Some(crate::ui::icons::Icon::Check)
             } else {
@@ -1553,11 +1936,17 @@ impl TableView {
             }
             // trailing accessory (SVG)
             let mut trailing = 0.0f32;
-            if let Some(ti) = row.ticon {
+            if let Some(ti) = row.ticon.filter(|_| m.shows_trailing) {
                 let cs = ACCESSORY_ICON_W;
                 let cr = Rect::new(text_right + ticon_box_dx(ti), cyc - cs * 0.5, cs, cs);
                 crate::ui::icons::draw(p, ti, cr, base);
                 trailing = ticon_slot_w(ti);
+            }
+            // a Litefin switch, inboard of the chevron slot (a switch row has none)
+            if let Some(on) = self.switch_of(row) {
+                let pop = if focused { SWITCH_FOCUS_SCALE } else { 1.0 };
+                draw_switch(p, text_right - trailing, cyc, on, pop);
+                trailing += SWITCH_W + ACCESSORY_GAP;
             }
             // PLACE 4 — the badge run, RIGHT-ALIGNED at the trailing edge and the outermost of the
             // three trailing runs (the design system's cell is a flex row whose label block takes
@@ -1570,7 +1959,7 @@ impl TableView {
             // Centred on the ROW BOX (`cyc`), not on the title's cap band: the chip is a sibling of
             // the whole label block, so on a two-line row it sits level with the pair rather than
             // ~16px high, level with the first line.
-            if !row.badges.is_empty() {
+            if m.shows_trailing && !row.badges.is_empty() {
                 let run: f32 = row
                     .badges
                     .iter()
@@ -1598,16 +1987,18 @@ impl TableView {
             // an alpha of the pill's own ink rather than a grey, which would go muddy on it. That
             // step is the ink's ALONE — the run itself is bold (see [`VALUE_BOLD`], which all three
             // calls below take so the measure and the paint can never be two different faces).
-            if let Some(v) = row.readout() {
-                let ink = row_value_ink(row, focused);
+            if let Some(v) = self.readout(row) {
+                // over a Litefin tint the read-out keeps its idle ink; over the Classic pill it flips
+                let ink = row_value_ink(row, focused && classic);
                 // the value gives way before the label (`row_columns`): elided to its column
-                let vsz = theme::size::LABEL;
+                let (vsz, vbold) = m.value;
+                let vbold_i = vbold as std::os::raw::c_int;
                 let value_w = self.row_columns(row, frame.w, measure).value_w;
                 let v = nj_gfx::text::elide_by(v, value_w, false, |t| {
-                    measure.width_str(t, vsz, VALUE_BOLD != 0)
+                    measure.width_str(t, vsz, vbold)
                 });
                 if let Ok(vc) = std::ffi::CString::new(v) {
-                    let vy = nj_gfx::text::text_vcenter_y(vsz, VALUE_BOLD, cyc);
+                    let vy = nj_gfx::text::text_vcenter_y(vsz, vbold_i, cyc);
                     p.text(
                         vc.as_ptr(),
                         text_right - trailing,
@@ -1615,7 +2006,7 @@ impl TableView {
                         vsz,
                         ink,
                         2,
-                        VALUE_BOLD,
+                        vbold_i,
                     );
                 }
             }
@@ -1623,30 +2014,24 @@ impl TableView {
             // title over a detail sub-line: lay the pair out off both cap bands and centre it in the
             // tall row, with an explicit gap between the title baseline and the detail cap-top
             // (layout ≠ paint — the old fixed offsets left the two lines cramped after centring).
-            let two_line = !row.detail.is_empty();
-            // two-line rows follow the table's size class too (compact = BODY regular titles)
-            let (tsz, tbold) = if self.compact {
-                (theme::size::BODY, 0)
-            } else {
-                (theme::size::HEADLINE, 1)
-            };
+            let two_line = !row.detail.is_empty() && m.shows_detail;
+            // the label follows the table's size class (compact = BODY regular titles). The Menu's
+            // active button stays in the regular face: Litefin's 600 is a synthetic bold of Poppins
+            // Regular at the same advances, and the bold file here is a wider cut
+            let (lsz, lbold) = self.label_style();
+            let lbold = lbold as std::os::raw::c_int;
+            let (tsz, tbold) = (lsz, lbold);
             let (title_y, detail_y) = if two_line {
                 let (t_top, t_base) = nj_gfx::text::text_cap_band(tsz, tbold);
-                let (d_top, d_base) = nj_gfx::text::text_cap_band(theme::size::CAPTION, 0);
+                let (d_top, d_base) = nj_gfx::text::text_cap_band(m.detail, 0);
                 let (t_cap, d_cap) = (t_base - t_top, d_base - d_top); // cap heights
-                let pair_gap = ROW_SUB_GAP; // title baseline → detail cap-top
+                let pair_gap = m.sub_gap; // title baseline → detail cap-top
                 let pair_top = sy + (h - (t_cap + pair_gap + d_cap)) * 0.5; // title cap-top
                 (pair_top - t_top, pair_top + t_cap + pair_gap - d_top)
             } else {
                 (0.0, 0.0) // unused single-line; Label centres the label
             };
-            // PLACE 2 — the label over its optional sub-line. Compact tables read their single-line
-            // labels at BODY regular.
-            let (lsz, lbold) = if self.compact {
-                (theme::size::BODY, 0)
-            } else {
-                (theme::size::HEADLINE, 1)
-            };
+            // PLACE 2 — the label over its optional sub-line.
             let text_w = self.label_width(row, frame.w, measure);
             let lbl = nj_gfx::text::elide_by(&row.label, text_w, false, |t| {
                 measure.width_str(t, lsz, lbold != 0)
@@ -1667,21 +2052,25 @@ impl TableView {
             // `flex:1` box. It used to elide against the bare row width, which was harmless only
             // while the badges sat on the title's line: right-aligned and row-centred, a chip now
             // occupies the sub-line's band too, and an unbounded sub-line would run under it.
-            if !row.detail.is_empty() {
-                let sub = if focused {
+            if two_line {
+                // Classic quietens a focused sub-line on its light pill; Litefin's description is
+                // the secondary ink focused or not
+                let sub = if !classic {
+                    theme::TEXT_SECONDARY
+                } else if focused {
                     theme::scrim_black(0.6)
                 } else {
                     dimc
                 };
                 let detail = nj_gfx::text::elide_by(&row.detail, text_w, false, |t| {
-                    measure.width_str(t, theme::size::CAPTION, false)
+                    measure.width_str(t, m.detail, false)
                 });
                 if let Ok(cd) = CString::new(detail) {
                     p.text(
                         cd.as_ptr(),
                         label_x,
                         detail_y,
-                        theme::size::CAPTION,
+                        m.detail,
                         sub,
                         0,
                         0,
@@ -1804,7 +2193,7 @@ mod tests {
             c.finish()
         }
         let baseline = hash(&super::TableView::new());
-        for field in 0..7 {
+        for field in 0..8 {
             let mut table = super::TableView::new();
             match field {
                 0 => table.hl_top.vel = 1.0,
@@ -1814,6 +2203,7 @@ mod tests {
                 4 => table.list_focused = !table.list_focused,
                 5 => table.compact = !table.compact,
                 6 => table.tall = !table.tall,
+                7 => table.style = super::TableStyle::Menu,
                 _ => unreachable!(),
             }
             assert_ne!(hash(&table), baseline, "field {field}");
@@ -2057,7 +2447,7 @@ mod tests {
         ];
         for (header, accessory) in cases {
             let sec = Section::new(header).accessory(accessory);
-            let (header_w, accessory_w) = TableView::header_columns(&sec, frame_w, &FixtureMeasure, 1.0);
+            let (header_w, accessory_w) = TableView::new().header_columns(&sec, frame_w, &FixtureMeasure, 1.0);
             let span = frame_w - 2.0 * CONTENT_X;
             assert!(header_w >= 0.0 && accessory_w >= 0.0, "{header:?}/{accessory:?}: negative column");
             if accessory.is_empty() {
@@ -2186,12 +2576,12 @@ mod tests {
         t.fit_notes(620.0, &M);
         let note = &t.sections[0].rows[1];
         assert!(note.note_lines.get() >= 2, "the premise: it does not fit one line of the column");
-        let h = note.height_in(t.tall_row_h());
+        let h = note.height_in(&CLASSIC, t.tall_row_h());
         assert!(h > ROW_H, "note height {h} must grow past ROW_H");
         assert!((t.measured_height() - before - (h - ROW_H)).abs() < 0.01, "layout routes through the same height");
         let short = note_table("Nope.");
         short.fit_notes(620.0, &M);
-        assert_eq!(short.sections[0].rows[1].height_in(short.tall_row_h()), ROW_H, "one line keeps the ROW_H measure");
+        assert_eq!(short.sections[0].rows[1].height_in(&CLASSIC, short.tall_row_h()), ROW_H, "one line keeps the ROW_H measure");
     }
 
     /// **`fit_report` judges notes**: a wrapped note fits, one unbreakable word wider than the
@@ -2263,6 +2653,77 @@ mod tests {
 
     /// **A trailing empty headerless section is nothing**: no divider, no height, no over-scroll
     /// (a `Form` section whose items all fell through stays visible but empty).
+    /// **Litefin's setting rows** (`docs/litefin-look.md` 9): a switch is the drawn pill, never the
+    /// `On`/`Off` word, and the trailing slot makes room for it; the check column is only reserved
+    /// once a row has a mark in it; rows stand in 80 (100 with a description) plus the 8 between
+    /// them; and changing the look re-snaps the pill onto the selected row's new place.
+    #[test]
+    fn a_settings_table_draws_switches_and_reserves_no_unused_check_column() {
+        use crate::ui::fixture::FixtureMeasure as M;
+        let mut t = TableView::new();
+        t.set_sections(vec![Section::new("").row(Row::new("Trailers").toggle(true)).row(Row::new("Quality").detail("Highest").value("Auto"))], 1, false);
+        let classic_lead = t.lead_w();
+        assert_eq!(t.readout(&t.sections[0].rows[0]), Some(nj_platform::i18n::msg::widgets_toggle_on()));
+        t.set_style(TableStyle::Settings);
+        assert_eq!(t.readout(&t.sections[0].rows[0]), None, "a switch is drawn, not worded");
+        assert_eq!(t.switch_of(&t.sections[0].rows[0]), Some(true));
+        assert!(t.trailing_width(&t.sections[0].rows[0], &M) >= SWITCH_W, "the trailing slot holds the pill");
+        assert_eq!(t.readout(&t.sections[0].rows[1]), Some("Auto"), "a value is still its word");
+        assert_eq!(t.lead_w(), 0.0, "no row has a mark: no check column");
+        assert!(classic_lead > 0.0, "Classic always keeps it");
+        assert_eq!((t.row_height(0), t.row_height(1)), (SETTINGS.row_h, SETTINGS.row_h_tall));
+        assert_eq!(t.hl_top.pos, t.row_top(1) + SETTINGS.pill_inset, "the pill re-snapped to the new rows");
+        t.sections[0].rows[0].checked = true;
+        assert_eq!(t.lead_w(), CHECK_W + GAP, "a picker's tick brings the column back");
+    }
+
+    /// **Litefin's category list** (9 Left category list): one plain button per row — no header
+    /// band, no description, no read-out, no chevron or switch — and a list that does not hold
+    /// focus marks its selection with the lavender ACTIVE fill rather than nothing.
+    #[test]
+    fn the_category_list_is_labels_only_and_marks_its_selection_while_unfocused() {
+        use crate::ui::fixture::FixtureMeasure as M;
+        let mut t = TableView::new();
+        t.set_style(TableStyle::Menu);
+        t.set_sections(vec![
+            Section::new("Playback").row(Row::new("Video & playback").detail("Quality").chevron(true)),
+            Section::new("System").row(Row::new("Language").value("English").chevron(true)).row(Row::new("Trailers").toggle(true)),
+        ], 0, false);
+        assert_eq!(t.measured_height(), 3.0 * MENU.row_h + MENU.div_h, "no header bands; one gap between the groups");
+        for row in t.sections.iter().flat_map(|s| s.rows.iter()) {
+            assert_eq!(t.readout(row), None);
+            assert_eq!(t.switch_of(row), None);
+            assert_eq!(t.trailing_width(row, &M), 0.0, "{}: nothing trails a category", row.label);
+        }
+        assert!(t.row_opens(0), "a hidden chevron still opens its page (RIGHT, rule 8)");
+        assert_eq!(MENU.active.map(|(fill, _)| fill), Some(theme::SELECTED_FILL));
+        assert_eq!(CLASSIC.active, None, "a Classic list that loses focus marks nothing");
+    }
+
+    /// **Litefin's track menu** (10 Track menus): the section header is the menu's title, kept in
+    /// its own case at 25px bold, the options 60 tall (84 with a codec sub-line) with the check
+    /// column reserved on every one, and the panel follows the table's own floor and ceiling rather
+    /// than the shared popover cap.
+    #[test]
+    fn a_track_table_titles_its_sections_and_reserves_the_check_column() {
+        use crate::ui::fixture::FixtureMeasure as M;
+        let mut t = TableView::new();
+        t.set_style(TableStyle::Track);
+        t.set_sections(vec![Section::new("Audio").row(Row::new("English").detail("AAC Stereo").checked(true)).row(Row::new("Deutsch"))], 0, false);
+        assert_eq!(t.header_text(&t.sections[0]), "Audio", "a title keeps its case");
+        assert_eq!((t.row_height(0), t.row_height(1)), (TRACK.row_h_tall, TRACK.row_h));
+        assert_eq!(t.measured_height(), TRACK.top_pad + TRACK.hdr_h + TRACK.row_h_tall + TRACK.row_h + TRACK.bot_pad);
+        t.sections[0].rows[0].checked = false;
+        assert_eq!(t.lead_w(), CHECK_W + GAP, "the check column stands with no row checked");
+        assert_eq!((TRACK.focus_fill, TRACK.focus_ink), (theme::BRAND_FILL, theme::BRAND_INK));
+        t.min_panel_w = 750.0;
+        assert_eq!(t.menu_panel_width(&M), MENU_MAX_W, "the shared cap still wins by default");
+        t.max_panel_w = 1728.0;
+        assert_eq!(t.menu_panel_width(&M), 750.0, "a per-table ceiling lets the floor take effect");
+        t.set_style(TableStyle::Classic);
+        assert_eq!(t.header_text(&t.sections[0]), "AUDIO", "every other style keeps its caps");
+    }
+
     #[test]
     fn a_trailing_empty_section_adds_nothing() {
         let rows = || vec![Section::new("A").row(Row::new("a")), Section::new("B").row(Row::new("b"))];

@@ -17,6 +17,8 @@ fn config() -> Value {
         "PlayDefaultAudioTrack": true,
         "SubtitleLanguagePreference": "",
         "SubtitleMode": "Smart",
+        "RememberAudioSelections": true,
+        "RememberSubtitleSelections": true,
         "OrderedViews": ["a", "b"],
         "HidePlayedInLatest": false,
         "CastReceiverId": "F007D354",
@@ -208,4 +210,36 @@ fn subtitle_modes_round_trip_and_unknown_reads_as_default() {
     }
     assert_eq!(SubtitleMode::parse("smart"), SubtitleMode::Smart);
     assert_eq!(SubtitleMode::parse("Sometimes"), SubtitleMode::Default);
+}
+
+/// `RememberAudioSelections` / `RememberSubtitleSelections`: whether the server keeps each film's
+/// last track pick and serves it back as the film's default. A server that omits one keeps its own
+/// default, on.
+#[test]
+fn a_load_reads_whether_the_server_remembers_track_choices() {
+    let mut remembers = config();
+    remembers["RememberSubtitleSelections"] = json!(false);
+    let p = load(&mut Server::new(remembers)).unwrap().preferences;
+    assert!(p.remember_audio_selections);
+    assert!(!p.remember_subtitle_selections);
+    let mut silent = config();
+    silent.as_object_mut().unwrap().remove("RememberAudioSelections");
+    silent.as_object_mut().unwrap().remove("RememberSubtitleSelections");
+    let p = load(&mut Server::new(silent)).unwrap().preferences;
+    assert!(p.remember_audio_selections && p.remember_subtitle_selections, "absent reads as on");
+}
+
+#[test]
+fn a_save_turns_remembering_off_and_keeps_the_rest() {
+    let audio = PreferenceUpdate { remember_audio_selections: Some(false), ..Default::default() };
+    let subtitles = PreferenceUpdate { remember_subtitle_selections: Some(false), ..Default::default() };
+    for (update, key) in [(audio, "RememberAudioSelections"), (subtitles, "RememberSubtitleSelections")] {
+        let mut server = Server::new(config());
+        let base = load(&mut server).unwrap();
+        save(&mut server, &base, update).unwrap();
+        let mut expected = config();
+        expected[key] = json!(false);
+        expected["SubtitleLanguagePreference"] = Value::Null;
+        assert_eq!(server.calls.last().unwrap().2.clone().unwrap(), expected, "{key}");
+    }
 }

@@ -34,10 +34,13 @@ Automatically Sign In preferences belong to the whole television.
 | Where | What happens | Code |
 | --- | --- | --- |
 | Boot, more than one user kept | Installed as the last active user, landing on *Who's watching?* — unless Automatically Sign In is on | `app/boot.rs` |
+| Boot, users kept and none active (the last one signed out) | *Who's watching?*, after proving each kept server reached without encryption | `app/jf_login.rs::at_boot` |
+| Boot, the server refuses the active user's token (`GET /Users/Me` 401/403: revoked or expired) | That user is forgotten and the sign-in screen opens at *Sign in as name*; a server that does not answer boots as before | `app/jf_login.rs::at_boot` |
 | *Who's watching?* pick | The screen asks the app to check the user's token (`JfAuthCmd::CheckKept`, `GET /Users/Me`); refused → *Sign in as name* again, otherwise `PickJellyfinUser` | `screens/jf_users.rs` |
 | Pick the user already active | Straight to their Home (or first-run Favourites) | `app/jf_login.rs::pick_user` |
 | Pick another user | Active user moves, clients revoked, server installed again under their token and DeviceId through the sign-in handoff (`bridge::follow_auth_landing`), every page of the previous user dropped | `app/jf_login.rs::pick_user` |
 | Account menu → Add user | Sign-in screen opened as *Add a user* (`Opening::AddUser`): the server's `GET /Users/Public` list, *Other user*, Quick Connect | `screens/jf_login.rs` |
+| Any sign-in | Replaces the same user's older sign-in; a token it pushes out that the server still honours (the same user under another DeviceId basis, the user dropped past twelve) is revoked there | `app/jf_login.rs::adopt` |
 | Account menu → Sign out of name | Only that user is forgotten and their token revoked; *Who's watching?* if anyone is left, else the sign-in screen with *Recent* | `app/jf_login.rs::sign_out` |
 | Delete all local data | Every user forgotten, every token revoked, the record and *Recent* erased | `app/jf_login.rs::sign_out_and_forget_server` |
 

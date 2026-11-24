@@ -266,29 +266,15 @@ fn action_row(a: Action) -> Row {
         .destructive(matches!(a, Action::SignOut))
 }
 
-/// Top-left popover, tucked under the profile chip.
-///
-/// `px` is the app's own side margin: it was a literal 80, which sat 16px outside the 5% overscan
-/// frame — and the chip it hangs off is at `MARGIN_X`, so aligning the two is what the design meant
-/// anyway. `py` clears `widgets::TOP_BAR_BOTTOM` (130) by a `space::MD`.
+/// The popover beside the rail's avatar it opens from: its left edge where the rail's label pill
+/// starts (`theme::sidebar::LABEL_X`, 92) and its bottom on the avatar item's, so it grows upward
+/// from the item at Litefin's rail coordinates (`docs/litefin-look.md` 3), outside the overscan
+/// frame like the rail itself.
 fn panel_rect(table: &TableView, measure: &dyn nj_machine::machine::Measure) -> Rect {
     let pw = table.menu_panel_width(measure);
-    let px = crate::ui::consts::MARGIN_X;
-    let py = 154.0f32;
     let ph = table.measured_height().clamp(120.0, 440.0);
-    Rect::new(px, py, pw, ph)
-}
-
-/// The panel at its TALLEST, for the overscan audit ([`crate::ui::consts::SAFE`]) — the clamp
-/// ceiling rather than a measured height, since the audit grades the widest state a surface can be
-/// in and the height comes from a `TableView` no host test can measure.
-#[cfg(test)]
-pub(crate) fn overscan_rects(out: &mut Vec<(&'static str, crate::ui::Rect)>) {
-    let r = panel_rect(&TableView::new(), &crate::ui::fixture::FixtureMeasure);
-    out.push((
-        "account menu panel",
-        crate::ui::Rect::new(r.x, r.y, crate::ui::table::MENU_MAX_W, 440.0),
-    ));
+    let avatar = crate::ui::widgets::RAIL_AVATAR;
+    Rect::new(crate::ui::theme::sidebar::LABEL_X, avatar.y + avatar.h - ph, pw, ph)
 }
 
 pub(crate) struct AccountMenuScreen {
@@ -501,7 +487,7 @@ impl<H: AuthLike> Screen<H> for AccountMenuScreen {
     fn scrim(&self) -> Scrim {
         // The SHEET role: how dark the page goes behind this menu, the peak the container ramps
         // with the appear spring (`ModalStack::draw_scrims`).
-        Scrim::lifting(crate::ui::theme::underlay::DIM_SHEET, crate::ui::widgets::redraw_profile_chip)
+        Scrim::lifting(crate::ui::theme::underlay::DIM_SHEET, crate::ui::widgets::redraw_rail_avatar)
     }
     fn prepare(&mut self, _: &mut Budget, _: &Cx<'_, H>) {}
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
@@ -619,6 +605,21 @@ mod tests {
         let mut present = nj_machine::present::Present::new();
         let mut fx = Effects::new(&mut out, MachineId::Session, &mut present);
         menu.step(&ScreenEvent::Tick(Tick::default()), &cx, &mut fx);
+    }
+
+    /// The menu stands beside the rail's avatar it opens from: its left edge on the rail's label
+    /// pill line and its bottom on the avatar item's, short or tall (`docs/litefin-look.md` 3).
+    #[test]
+    fn the_menu_hangs_beside_the_rail_avatar() {
+        let avatar = crate::ui::widgets::RAIL_AVATAR;
+        for rows in [1, 4, 40] {
+            let mut table = TableView::new();
+            table.open_sections(vec![(0..rows).fold(crate::ui::table::Section::new(""), |s, i| s.row(Row::new(format!("Row {i}"))))]);
+            let r = panel_rect(&table, &crate::ui::fixture::FixtureMeasure);
+            assert_eq!(r.x, crate::ui::theme::sidebar::LABEL_X);
+            assert_eq!(r.y + r.h, avatar.y + avatar.h, "{rows} rows");
+            assert!(r.y >= 0.0, "{rows} rows: the tallest panel stays on screen");
+        }
     }
 
     /// #132's dead end, not led into: once the Session KNOWS switching is unavailable for the

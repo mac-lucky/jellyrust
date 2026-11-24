@@ -10,8 +10,9 @@
 //!
 //! # The fallback chain, and why the unit of work is a RUN
 //!
-//! Inter carries 2853 codepoints — Latin, Cyrillic, Greek — and no Hangul, Kana or Han at all, so
-//! a Korean, Japanese or Chinese Plex library used to render as tofu end to end. SDL2_ttf 2.0.x
+//! The UI face is Poppins (`appfont.ttf`, 381 codepoints: Latin-1 and most of Latin Extended-A),
+//! Inter behind it carries 2853 - Latin, Cyrillic, Greek - and neither has any Hangul, Kana or
+//! Han, so a Korean, Japanese or Chinese library used to render as tofu end to end. SDL2_ttf 2.0.x
 //! has **no fallback-font API**: one `TTF_Font` is one face, and `TTF_RenderUTF8_Blended` draws
 //! whatever that one face has, box glyphs included. So the chain has to be built here, and
 //! building it means changing the unit of work from a *string* to a **run**:
@@ -26,7 +27,8 @@
 //! `(string bytes, size, bold)` — run splitting is a pure function of the string, so the key still
 //! determines the texture — and the `ink_t`/`ink_b` cap-band machinery still measures one texture.
 //!
-//! **The chain, in order:** Inter (`appfont.ttf`) → the **bundled** `appfont-cjk.ttf` → the
+//! **The chain, in order:** Poppins (`appfont.ttf`) -> Inter (`appfont-inter.ttf`, for Cyrillic,
+//! Greek and the Latin Extended letters Poppins lacks) -> the **bundled** `appfont-cjk.ttf` -> the
 //! television's own `/usr/share/fonts/DroidSansFallback.ttf`. The bundled face is the guarantee,
 //! because a submission is graded on whatever firmware the reviewer happens to have; the system
 //! face behind it is free insurance, measured present on webOS 4.10.0 (2026-08-23: 11172/11172
@@ -43,10 +45,13 @@
 //! baseline against Inter's 0.9688 em ascent, so the `y < 0` guard in [`render_runs`] discards only
 //! blank rows. The single exception in the font is **U+3031** (a vertical-writing kana repeat mark,
 //! 1.323 em), which SDL_ttf already clips inside its own run surface before the compositor sees it.
+//! Those numbers were measured with Inter as the base face. Poppins' box is taller on both sides
+//! (ascent 1.05 em, descent 0.35 em), so it holds the CJK ink and Inter's own (0.9688 / 0.2412 em)
+//! with room to spare.
 //!
 //! One consequence of anchoring on the base face, worth knowing before anyone reports it as a bug:
-//! `text_cap_band` still measures Inter's "H", so a CJK label vertically centred through
-//! [`text_vcenter_y`] is centred on INTER's cap band, not on its own ink. CJK glyphs fill more of
+//! `text_cap_band` still measures the base face's "H", so a CJK label vertically centred through
+//! [`text_vcenter_y`] is centred on THAT cap band, not on its own ink. CJK glyphs fill more of
 //! the em than Latin caps do (at 28 px: ink 21 px above the baseline against Inter's 15), so such a
 //! label sits ~1–2 px lower than optically centred. That is deliberate, not an oversight — the cap
 //! band is string-INDEPENDENT by design (see [`text_cap_band`]), which is what makes every label of
@@ -773,13 +778,17 @@ unsafe fn font_at(sz: c_int, bold: c_int) -> *mut TtfFont {
 /// the discriminants are load-bearing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Link {
-    /// Inter — `appfont.ttf` / `appfont-bold.ttf`. The app's typeface, and the ONLY link with a
-    /// bold companion. 2853 codepoints.
+    /// Poppins - `appfont.ttf` / `appfont-bold.ttf`. The app's typeface (Litefin's,
+    /// `docs/litefin-look.md` 2.2). 381 codepoints.
     Base = 0,
+    /// Inter - `appfont-inter.ttf` / `appfont-inter-bold.ttf`, the app's typeface before Poppins.
+    /// 2853 codepoints, so Belarusian and Russian catalogs and Cyrillic or Greek titles keep a face
+    /// with a bold companion. The only link besides [`Link::Base`] with one.
+    Inter = 1,
     /// The bundled `appfont-cjk.ttf` (Noto Sans CJK KR, `tools/cut-noto-cjk.py`). 44810
     /// codepoints: all of Hangul, Kana, Han and CJK punctuation. Shipped rather than borrowed
     /// because a submission is graded on whichever firmware the reviewer has.
-    Cjk = 1,
+    Cjk = 2,
     /// The television's own `DroidSansFallback.ttf`. Free insurance behind the bundled face —
     /// measured on webOS 4.10.0 as covering the same Hangul/Han/Kana ground — and it costs
     /// nothing when it is absent, as it is on the desktop simulator and the macOS app.
@@ -788,22 +797,27 @@ enum Link {
     /// grades symbols, not filesystems, so it has nothing to say about a font PATH on the other 13
     /// releases; we have no images for them. This is precisely why link 2 is bundled rather than
     /// borrowed — this link is a bonus that may or may not exist, and the code treats it as such.
-    Sys = 2,
+    Sys = 3,
 }
-const CHAIN: [Link; 3] = [Link::Base, Link::Cjk, Link::Sys];
+const CHAIN: [Link; 4] = [Link::Base, Link::Inter, Link::Cjk, Link::Sys];
 
+/// The Inter link's two faces, cut by `tools/cut-inter.py` and staged beside the binary.
+const INTER_FONT: &str = "appfont-inter.ttf";
+const INTER_BOLD_FONT: &str = "appfont-inter-bold.ttf";
 /// The bundled fallback face, cut by `tools/cut-noto-cjk.py` and staged beside the binary.
 const CJK_FONT: &str = "appfont-cjk.ttf";
 /// The television's pan-CJK fallback. Distinct from [`DROIDSANS`], which is the *Latin* face and a
 /// defect path: reaching this one is normal and expected on a Korean library.
 const DROIDSANS_FALLBACK: &str = "/usr/share/fonts/DroidSansFallback.ttf";
 
+static mut FONTS_INTER: [*mut TtfFont; FONT_SLOTS] = [std::ptr::null_mut(); FONT_SLOTS];
+static mut FONTS_INTER_B: [*mut TtfFont; FONT_SLOTS] = [std::ptr::null_mut(); FONT_SLOTS];
 static mut FONTS_CJK: [*mut TtfFont; FONT_SLOTS] = [std::ptr::null_mut(); FONT_SLOTS];
 static mut FONTS_SYS: [*mut TtfFont; FONT_SLOTS] = [std::ptr::null_mut(); FONT_SLOTS];
 /// Per-link coverage, read from the file's cmap on FIRST NEED and never again. `None` after
 /// `COV_TRIED` means the file is absent or unreadable, i.e. the link is empty.
-static mut COV: [Option<nj_base::fontcov::Coverage>; 3] = [None, None, None];
-static mut COV_TRIED: [bool; 3] = [false; 3];
+static mut COV: [Option<nj_base::fontcov::Coverage>; 4] = [None, None, None, None];
+static mut COV_TRIED: [bool; 4] = [false; 4];
 
 /// The ONE place a link's file is named — both the coverage read and the `TTF_OpenFont` go
 /// through it, so the two can never disagree about which file a link is.
@@ -813,6 +827,7 @@ fn link_file(link: Link) -> std::path::PathBuf {
         // `bold_face_covers_exactly_what_the_regular_one_does` asserts the two are identical in
         // `make check` — the gate is not decoration here, it is what makes one read enough.
         Link::Base => nj_base::paths::in_app_dir("appfont.ttf"),
+        Link::Inter => nj_base::paths::in_app_dir(INTER_FONT),
         Link::Cjk => nj_base::paths::in_app_dir(CJK_FONT),
         Link::Sys => std::path::PathBuf::from(DROIDSANS_FALLBACK),
     }
@@ -857,10 +872,10 @@ unsafe fn link_covers(link: Link, cp: u32) -> bool {
     }
 }
 
-/// The face for one run. Bold exists only on [`Link::Base`]: the fallback ships at a single
-/// weight, and SDL_ttf's synthetic bold turns dense ideographs into solid blocks at every UI size
-/// (measured — see this module's header). So a bold CJK run renders in the regular fallback face,
-/// which is also what halves the memory below.
+/// The face for one run. Bold exists only on [`Link::Base`] and [`Link::Inter`]: the CJK fallback
+/// ships at a single weight, and SDL_ttf's synthetic bold turns dense ideographs into solid blocks
+/// at every UI size (measured - see this module's header). So a bold CJK run renders in the
+/// regular fallback face, which is also what halves the memory below.
 ///
 /// **Cost, and why it is lazy.** SDL_ttf 2.0.x opens one `FT_Face` per (file, ptsize) — there is
 /// no size sharing — and this face has 65535 glyphs, so its `loca`, `hmtx` and `cmap` are large.
@@ -873,12 +888,19 @@ unsafe fn link_font(link: Link, sz: c_int, bold: c_int) -> *mut TtfFont {
         return font_at(sz, bold);
     }
     let sz = sz.clamp(8, FONT_SLOTS as c_int - 1) as usize;
+    let inter_bold = link == Link::Inter && bold != 0;
     let arr = match link {
+        Link::Inter if inter_bold => &mut *addr_of_mut!(FONTS_INTER_B),
+        Link::Inter => &mut *addr_of_mut!(FONTS_INTER),
         Link::Cjk => &mut *addr_of_mut!(FONTS_CJK),
         _ => &mut *addr_of_mut!(FONTS_SYS),
     };
     if arr[sz].is_null() {
-        let file = link_file(link);
+        let file = if inter_bold {
+            nj_base::paths::in_app_dir(INTER_BOLD_FONT)
+        } else {
+            link_file(link)
+        };
         let Ok(c) = CString::new(file.into_os_string().into_encoded_bytes()) else {
             return std::ptr::null_mut();
         };
@@ -1201,7 +1223,7 @@ unsafe fn text_tex_miss(
     hash: u64,
 ) -> (c_uint, c_int, c_int, c_int, c_int) {
     // A string the base face cannot draw on its own goes through the run compositor; everything
-    // else — every ASCII string, and every string Inter fully covers — takes the single
+    // else - every ASCII string, and every string Poppins fully covers - takes the single
     // `TTF_RenderUTF8_Blended` it always did, byte for byte. A compositor FAILURE also falls
     // through to that path, which renders the base face's .notdef boxes: the pre-chain result,
     // which is a worse picture but never a missing one.
@@ -2098,9 +2120,10 @@ mod tests {
     /// The real shipped cmaps, parsed once for the whole test binary (see `fontcov::shipped`).
     /// `Link::Sys` is `None` on purpose: the television's DroidSansFallback does not exist on a
     /// build host, so this is also the "the chain is SHORT" configuration under test.
-    fn chain() -> [Option<&'static fontcov::Coverage>; 3] {
+    fn chain() -> [Option<&'static fontcov::Coverage>; 4] {
         [
             fontcov::shipped("appfont.ttf").as_ref().ok(),
+            fontcov::shipped("appfont-inter.ttf").as_ref().ok(),
             fontcov::shipped("appfont-cjk.ttf").as_ref().ok(),
             None,
         ]
@@ -2145,17 +2168,16 @@ mod tests {
         assert_eq!(joined, s, "the runs do not reassemble the string");
     }
 
-    /// Anything Inter fully covers must return `None`, which is the caller's signal to take the
+    /// Anything Poppins fully covers must return `None`, which is the caller's signal to take the
     /// single-render path byte for byte. This is the performance contract of the whole feature:
-    /// an English or Russian library pays nothing, and never even opens the 21 MB fallback.
+    /// an English or Spanish library pays nothing, and never even opens the 21 MB fallback.
     #[test]
     fn strings_the_base_face_covers_take_the_untouched_fast_path() {
         for s in [
             "Breaking Bad",                     // pure ASCII — decided before any cmap is read
             "Amélie",                           // Latin-1
-            "Ирония судьбы",                    // Cyrillic
-            "Ο Θίασος",                         // Greek
-            "\u{266A} It seems today \u{266B}", // the ♪ regression: Inter carries U+2669..U+266C
+            "Łódź · Kraków",                    // Latin Extended-A Poppins carries
+            "\u{266A} It seems today \u{266B}", // the ♪ regression: cut-poppins draws U+2669..U+266C
             "S1 · E1 — 47 min",                 // the punctuation the UI composes by hand
         ] {
             assert!(
@@ -2163,6 +2185,24 @@ mod tests {
                 "{s:?} should not need the fallback chain"
             );
         }
+    }
+
+    /// Poppins has no Cyrillic or Greek: those letters go to Inter, and the spaces and digits
+    /// between them come back to Poppins (first covering link wins), so a Russian title is Inter
+    /// words on Poppins punctuation rather than a box per letter.
+    #[test]
+    fn cyrillic_and_greek_split_onto_inter() {
+        assert_eq!(
+            runs_of("Ирония судьбы (1975)"),
+            vec![
+                (Link::Inter, "Ирония"),
+                (Link::Base, " "),
+                (Link::Inter, "судьбы"),
+                (Link::Base, " (1975)")
+            ],
+        );
+        assert_eq!(runs_of("Θίασος"), vec![(Link::Inter, "Θίασος")]);
+        assert_partitions("Ο Θίασος · Ирония");
     }
 
     #[test]

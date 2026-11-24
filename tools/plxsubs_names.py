@@ -1,6 +1,6 @@
 """The name-record aliases that make libass find the subtitle fonts (plan D6).
 
-Shared by `tools/cut-inter.py` (which writes `pkg/appfont-bold.ttf`) and `tools/cut-noto-subs.py`
+Shared by `tools/cut-inter.py` (which writes `pkg/appfont-inter-bold.ttf`) and `tools/cut-noto-subs.py`
 (which writes `pkg/fonts/subs/*.ttf` and re-applies the Inter alias idempotently), so a re-cut of
 either cannot silently drop it. `rust-modules/src/player/ass/fonts.rs` asserts the result on
 the shipped files.

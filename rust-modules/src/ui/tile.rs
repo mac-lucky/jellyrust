@@ -25,6 +25,10 @@ pub enum TileKind {
     Season,
     Episode,
     Collection,
+    /// An actor's credit on a Cast & Crew card: worded "as {role}" under the name.
+    Person,
+    /// A crew member's credit: the job under the name, as it is.
+    Crew,
     Other,
 }
 
@@ -58,6 +62,9 @@ pub struct TileFacts<'a> {
     pub title: &'a str,
     /// An episode's show / a season's show; empty on everything else.
     pub show_title: &'a str,
+    /// A person card's credit — the character an actor plays, or a crew member's job; empty on
+    /// everything else.
+    pub role: &'a str,
     /// The portrait poster's path.
     pub thumb: &'a str,
     /// The item's OWN landscape art where `thumb` holds a substitute (an episode's 16:9 still);
@@ -72,6 +79,9 @@ pub struct TileFacts<'a> {
     pub ep_index: i32,
     /// A collection's member count; 0 on every other kind.
     pub child_count: i64,
+    /// A show's or a season's episodes not watched yet — Litefin's unplayed-count badge; 0 on
+    /// every other kind.
+    pub unplayed: i64,
     /// `Some` while the item is in progress — see [`Resume`].
     pub resume: Option<Resume>,
     /// Finished — the corner tick's fact (see [`Tile::watched`]).

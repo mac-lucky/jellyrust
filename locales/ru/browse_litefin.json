@@ -1,0 +1,8 @@
+{
+  "browse.litefin.genres": "Жанры",
+  "browse.litefin.shuffle": "Перемешать",
+  "browse.litefin.view_mode": "Режим просмотра",
+  "browse.litefin.paging": "{first}-{last} из {total}",
+  "browse.litefin.genres_empty": "В этой библиотеке нет жанров",
+  "browse.litefin.start_typing": "Начните вводить для поиска"
+}

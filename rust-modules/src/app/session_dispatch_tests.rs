@@ -1,13 +1,16 @@
-//! Session/browse dispatch mechanics: chrome tab generation ownership, per-bridge browse
-//! isolation, and the auth owner's queued commit-reply/carry machinery.
+//! Session/browse dispatch mechanics: the rail's library rows read the owned directory, per-bridge
+//! browse isolation, and the auth owner's queued commit-reply/carry machinery.
 
 use super::*;
 #[allow(unused_imports)]
 use super::test_support::*;
 use super::test_support::{frame, frame_with_results};
 
+/// The rail's Libraries popover lists every library the owned directory publishes — a library the
+/// profile left out of Home is still a library (Litefin lists them all) — and a recapture keeps
+/// every row's key.
 #[test]
-fn browse_tab_generation_is_owned_and_chrome_never_replays_a_stale_shape() {
+fn the_rails_library_rows_are_the_owned_directorys_and_keep_their_keys() {
     let _guard = nj_base::testlock::serial();
     let session = crate::catalog::session::TempSession::new("bridge-browse-tabs");
     session.watching("u-bridge-browse-tabs");
@@ -19,26 +22,21 @@ fn browse_tab_generation_is_owned_and_chrome_never_replays_a_stale_shape() {
     let mut rig = Bridge::for_test(|| 0);
     rig.stores.browse.borrow_mut().seed_registered_table_for_test([own, shared]);
     let mut pages = Dispatcher::<AppHost>::new();
-    rig.capture_views(&mut pages);
-    rig.capture_chrome(&mut pages);
-    let before = rig.chrome.labels();
-    assert!(before.labels.iter().any(|label| label == "TV Shows"));
-    let before_gen = before.generation;
+    frame(&mut pages, &mut rig, AppArg::Home, tick(0), vec![]);
+    frame(&mut pages, &mut rig, AppArg::Home, tick(1), vec![]);
+    let rows = |rig: &Bridge| (0..).map_while(|n| rig.library_at(n)).collect::<Vec<_>>();
+    let before = rows(&rig);
+    let sections = rig.browse_directory().sections().len();
+    assert!(before.len() >= 2 && before.len() == sections, "one row per published library");
+    let keys = |rig: &Bridge| before.iter().map(|s| rig.chrome.library_key(s)).collect::<Vec<_>>();
+    let before_keys = keys(&rig);
 
     rig.stores.browse.borrow_mut().run(
         crate::stores::browse::BrowseCmd::ApplyPins(vec![(1, false)]));
-    rig.capture_views(&mut pages);
-    rig.capture_chrome(&mut pages);
-    let changed = rig.chrome.labels();
-    assert!(changed.generation > before_gen);
-    assert!(!changed.labels.iter().any(|label| label == "TV Shows"));
-    let changed_gen = changed.generation;
-
-    rig.capture_views(&mut pages);
-    rig.capture_chrome(&mut pages);
-    assert_eq!(rig.chrome.labels().generation, changed_gen,
-        "capturing again must not republish the owner's old tab generation");
-    assert!(!rig.chrome.labels().labels.iter().any(|label| label == "TV Shows"));
+    frame(&mut pages, &mut rig, AppArg::Home, tick(2), vec![]);
+    assert_eq!(rows(&rig), before, "unpinning a library from Home leaves it on the rail");
+    frame(&mut pages, &mut rig, AppArg::Home, tick(3), vec![]);
+    assert_eq!(keys(&rig), before_keys, "capturing again must not mint new keys");
     crate::catalog::reset_servers_for_test();
 }
 

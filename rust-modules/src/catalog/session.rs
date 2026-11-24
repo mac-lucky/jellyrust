@@ -175,7 +175,7 @@ pub(crate) fn plex_tv_credential(snapshot_user: &UserRef) -> Option<String> {
 /// every boot, with a fresh `X-Plex-Client-Identifier` each time.
 ///
 /// The first entry is still deliberately OUTSIDE the app install dir: appinstalld replaces
-/// `applications/com.sostk.nativejelly/` wholesale on every ipk (re)install, which silently signed the
+/// `applications/com.macluckylab.jellyrust/` wholesale on every ipk (re)install, which silently signed the
 /// user out when the file lived there.
 #[cfg(not(test))]
 fn auth_paths() -> Vec<std::path::PathBuf> {
@@ -635,6 +635,10 @@ pub struct Session {
     pub(crate) instant_dpad_seeking: InstantDpadSeeking,
     #[serde(default, deserialize_with = "de_soft_episode_navigation", skip_serializing_if = "is_default_episode_navigation")]
     pub(crate) episode_navigation: EpisodeNavigation,
+    /// **Dubbing or lektor** — see [`VoicePreference`]. Install-wide, skipped at the default like
+    /// [`Session::skip_interval`]: Jellyfin has no field for it, so it lives on this television.
+    #[serde(default, deserialize_with = "de_soft_voice_preference", skip_serializing_if = "is_default_voice_preference")]
+    pub(crate) voice_preference: VoicePreference,
     /// **Device-wide ambient memory**: the last hero `UltraBlurColors` envelope Home actually
     /// rendered on this television, so a route in the Settings/first-run family that opens
     /// BEFORE Home has fetched anything this boot — first-run consent moved ahead of the
@@ -759,6 +763,8 @@ struct CanonicalSessionPreferences {
     instant_dpad_seeking: InstantDpadSeeking,
     #[serde(default, deserialize_with = "de_soft_episode_navigation", skip_serializing_if = "is_default_episode_navigation")]
     episode_navigation: EpisodeNavigation,
+    #[serde(default, deserialize_with = "de_soft_voice_preference", skip_serializing_if = "is_default_voice_preference")]
+    voice_preference: VoicePreference,
     #[serde(default, deserialize_with = "de_soft_vec", skip_serializing_if = "Vec::is_empty")]
     plaintext_consent: Vec<PlaintextConsent>,
     #[serde(default, deserialize_with = "de_soft_vec", skip_serializing_if = "Vec::is_empty")]
@@ -801,6 +807,7 @@ impl Default for CanonicalSessionPreferences {
             root_back: RootBack::PlatformHome,
             instant_dpad_seeking: InstantDpadSeeking::Off,
             episode_navigation: EpisodeNavigation::On,
+            voice_preference: VoicePreference::Any,
             plaintext_consent: Vec::new(),
             server_key_pins: Vec::new(),
             audio_enhancements: crate::catalog::AudioEnhancements::NONE,
@@ -866,6 +873,7 @@ fn split_public(session: &Session) -> Result<nj_platform::storage::state::Public
         root_back: session.root_back.clone(),
         instant_dpad_seeking: session.instant_dpad_seeking,
         episode_navigation: session.episode_navigation,
+        voice_preference: session.voice_preference,
         plaintext_consent: session.plaintext_consent.clone(),
         server_key_pins: session.server_key_pins.clone(),
         audio_enhancements: session.audio_enhancements,
@@ -943,6 +951,7 @@ pub(crate) fn join_canonical(
         root_back: preferences.root_back,
         instant_dpad_seeking: preferences.instant_dpad_seeking,
         episode_navigation: preferences.episode_navigation,
+        voice_preference: preferences.voice_preference,
         plaintext_consent: preferences.plaintext_consent,
         server_key_pins: preferences.server_key_pins,
         audio_enhancements: preferences.audio_enhancements,
@@ -979,6 +988,7 @@ fn public_session(public: &nj_platform::storage::state::PublicPayload) -> Sessio
         root_back: preferences.root_back,
         instant_dpad_seeking: preferences.instant_dpad_seeking,
         episode_navigation: preferences.episode_navigation,
+        voice_preference: preferences.voice_preference,
         plaintext_consent: preferences.plaintext_consent,
         server_key_pins: preferences.server_key_pins,
         audio_enhancements: preferences.audio_enhancements,
@@ -1476,6 +1486,35 @@ fn de_soft_episode_navigation<'de, D: Deserializer<'de>>(d: D) -> Result<Episode
     Ok(serde_json::from_value(v).unwrap_or_default())
 }
 fn is_default_episode_navigation(value: &EpisodeNavigation) -> bool { *value == EpisodeNavigation::default() }
+
+/// **Which kind of voice an automatic audio pick prefers**: dubbing, a voice-over (Polish lektor)
+/// or an AI voice-over, as each track's title names it (`route::voice_kind`). Install-wide; absence
+/// is `Any`, the pick every build before this preference made. A track picked in the player's
+/// track menu always wins over it, and when it would exclude every track it excludes none.
+#[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum VoicePreference {
+    #[default]
+    Any,
+    /// Within one language: dubbing, then a track the title does not name, then a lektor, then an
+    /// AI lektor.
+    DubbingFirst,
+    /// Never a lektor or an AI lektor; dubbing first within its language.
+    DubbingNoLektor,
+    /// Never an AI lektor; nothing else changes.
+    NoAiLektor,
+}
+impl VoicePreference {
+    /// Every option, the order the picker lists them in.
+    pub(crate) const LADDER: [Self; 4] = [Self::Any, Self::DubbingFirst, Self::DubbingNoLektor, Self::NoAiLektor];
+    pub(crate) fn from_index(i: u8) -> Self { Self::LADDER.get(i as usize).copied().unwrap_or_default() }
+    pub(crate) fn index(self) -> u8 { Self::LADDER.iter().position(|&v| v == self).unwrap_or(0) as u8 }
+}
+fn de_soft_voice_preference<'de, D: Deserializer<'de>>(d: D) -> Result<VoicePreference, D::Error> {
+    let Ok(v) = serde_json::Value::deserialize(d) else { return Ok(VoicePreference::default()); };
+    Ok(serde_json::from_value(v).unwrap_or_default())
+}
+fn is_default_voice_preference(value: &VoicePreference) -> bool { *value == VoicePreference::default() }
 
 /// One profile's search history.
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, Eq)]
@@ -2682,6 +2721,11 @@ impl Session {
     pub(crate) fn episode_navigation(&self) -> EpisodeNavigation { self.episode_navigation }
     pub(crate) fn with_episode_navigation(&self, value: EpisodeNavigation) -> Self {
         let mut next = self.clone(); next.episode_navigation = value; next
+    }
+
+    pub(crate) fn voice_preference(&self) -> VoicePreference { self.voice_preference }
+    pub(crate) fn with_voice_preference(&self, value: VoicePreference) -> Self {
+        let mut next = self.clone(); next.voice_preference = value; next
     }
 
     pub(crate) fn instant_dpad_seeking(&self) -> InstantDpadSeeking { self.instant_dpad_seeking }
@@ -6344,6 +6388,25 @@ mod playback_navigation_preferences_tests {
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap()] {
             assert_eq!(restored.instant_dpad_seeking(), InstantDpadSeeking::On);
             assert_eq!(restored.episode_navigation(), EpisodeNavigation::Off);
+        }
+    }
+    /// The dubbing/lektor preference is local like the two above: absent and unreadable values
+    /// are Any, Any is not written, and every option survives the public/protected split.
+    #[test]
+    fn the_voice_preference_defaults_omits_and_survives_split_and_join() {
+        for raw in ["null", "42", "\"future\""] {
+            let s: Session = serde_json::from_str(&format!("{{\"voice_preference\":{raw}}}")).unwrap();
+            assert_eq!(s.voice_preference(), VoicePreference::Any, "{raw}");
+        }
+        assert!(!serde_json::to_string(&Session::default()).unwrap().contains("voice_preference"));
+        for value in VoicePreference::LADDER {
+            let s = Session::default().with_voice_preference(value);
+            let (public, protected) = split_canonical(&s).unwrap();
+            for restored in [join_canonical(&public, &protected).unwrap(), public_session(&public),
+                serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap()] {
+                assert_eq!(restored.voice_preference(), value);
+            }
+            assert_eq!(VoicePreference::from_index(value.index()), value);
         }
     }
 }

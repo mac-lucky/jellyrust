@@ -76,7 +76,7 @@ impl LibraryScreen {
         fx: &mut Effects<'_, H>,
     ) -> bool {
         let group = self.pair.groups_config().detail;
-        if self.wanted_kind.is_some() || cx.focus.remembered(group).is_some() {
+        if self.wanted.is_some() || cx.focus.remembered(group).is_some() {
             return true;
         }
         let Some(cursor) = H::listing(cx).cursor() else {

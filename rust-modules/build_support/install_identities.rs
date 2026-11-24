@@ -13,7 +13,12 @@ use std::path::{Path, PathBuf};
 /// IDs are global across every kind on the TV, so an install that reuses one cannot read or write
 /// its state while PlxNative is also installed (issue #39: `get` refused with -3963). They may only
 /// appear here as a `legacy_object_id`, the id an older Native Jelly build migrates away from.
-const UPSTREAM_OBJECT_IDS: [&str; 3] = ["plxstate.stable", "plxstate.debug", "plxstate.night"];
+/// Native Jelly (`com.sostk.nativejelly*`) owns `njstate.*` the same way, and JellyRust can be
+/// installed beside it.
+const UPSTREAM_OBJECT_IDS: [&str; 6] = [
+    "plxstate.stable", "plxstate.debug", "plxstate.night",
+    "njstate.stable", "njstate.debug", "njstate.night",
+];
 
 /// Packaging owns the identities; generating the schema here makes adding an install update
 /// the client and helper together, without a Python interpreter in the Rust build or on the TV.

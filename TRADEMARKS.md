@@ -9,23 +9,22 @@ is stated in `LICENSING.md`; this trademark guidance remains separate.
 
 ## Trademarks and brand assets
 
-The name **Native Jelly** and its logo and splash artwork — `assets/logo-master.png`,
-`assets/splash-master.png`, and the `pkg/icon*.png` / `pkg/largeIcon.png` / `pkg/splash.png` cut
-from them — identify this project. They are **not** licensed for use as the identity of a derived
-or redistributed work.
+The name **JellyRust** and its icon and splash artwork (`pkg/icon*.png`, `pkg/largeIcon.png`,
+`pkg/splash.png`) identify this fork, maintained by macluckylab (https://macluckylab.com). They are
+not licensed for use as the identity of a derived or redistributed work: if you fork this, please
+ship it under your own name and mark. This rests on trademark, not copyright, and restricts nothing
+else the GPL allows.
 
-You may fork and redistribute this software under the GPL-3.0-or-later terms; please do so under your own name
-and mark, so that users can tell the two apart. This is the usual reservation made by projects that
-ship an identity along with their code, and it restricts nothing else. It rests on **trademark** —
-on the marks identifying the origin of this application — and is deliberately not framed as a
-copyright claim.
+## Native Jelly and PlxNative
 
-## PlxNative
+JellyRust is a modified version of [Native Jelly](https://github.com/sostk/native-jelly) by sostk,
+which is a fork of [PlxNative](https://github.com/GLinnik21/plx-native) by Gleb Linnik. Their
+copyright notices stay in this project as the GPL requires. Native Jelly reserves its name, logo and
+splash artwork and asks forks to use their own; PlxNative does the same. JellyRust uses neither as
+its identity and is not produced, endorsed or supported by the Native Jelly or PlxNative developers.
 
-Native Jelly is a fork of [PlxNative](https://github.com/GLinnik21/plx-native) by Gleb Linnik, whose
-copyright notices this project keeps as the GPL requires. PlxNative reserves its own name, logo and
-splash artwork in the same way; Native Jelly does not use them as its identity. Native Jelly is not
-produced, endorsed or supported by the PlxNative developer.
+The look follows [Litefin](https://github.com/MoazSalem/litefin) by MoazSalem; JellyRust is not
+produced or endorsed by the Litefin project and does not use its name or logo as its identity.
 
 ## Third-party components
 

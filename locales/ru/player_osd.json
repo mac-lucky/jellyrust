@@ -1,0 +1,5 @@
+{
+  "player_osd.ends_at": "Закончится в {time}",
+  "player_osd.up_next": "Далее",
+  "player_osd.starts_in": "Начнётся через {seconds} с"
+}

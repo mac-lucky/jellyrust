@@ -76,7 +76,8 @@ fn leaving_after_query_commit_before_arrival_cannot_restore_the_old_query_bookma
     assert_eq!(snapshot.view().total(), -1, "no new page has arrived");
     assert!(snapshot.view().cursor().is_none_or(|cursor| matches!(cursor.at, crate::stores::browse::CursorAt::SlotIndex(0))),
         "the carried WillLeave save must not overwrite the new query with an old deep bookmark: {:?}", snapshot.view().cursor());
-    rig.enter_library(crate::stores::browse::SecKind::Movie);
+    let current = rig.current_library_for_test();
+    rig.enter_library(current);
     for i in 81..86 {
         frame(&mut d, &mut rig, AppArg::Library, tick(i), vec![]);
     }
@@ -112,11 +113,13 @@ fn leaving_after_query_commit_before_arrival_cannot_restore_the_old_query_bookma
         tick(167),
         script_key(Key::Down, tick(167)),
     );
+    // The centred controls hand DOWN to the column under them: what matters is the first row.
+    let page = d.top_screen().unwrap().as_any().unwrap()
+        .downcast_ref::<crate::screens::library::LibraryScreen>().unwrap();
+    let (row, col) = page.grid_position(d.focus()).expect("DOWN reaches the grid");
+    assert_eq!(row, 0, "the new entry starts the accepted query at its first row");
     let (item, _) = rig.library_selection(&d, new_entry, d.focus()).unwrap();
-    assert_eq!(
-        item.rk, "1",
-        "the new entry starts the accepted query at its first item"
-    );
+    assert_eq!(item.rk, (col + 1).to_string(), "…on the query's own items, not an old bookmark");
 }
 
 #[test]

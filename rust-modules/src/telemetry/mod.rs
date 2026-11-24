@@ -527,6 +527,7 @@ mod tests {
     /// grades the same thing through the real sign-out tail.
     #[test]
     fn forgetting_the_tenure_clears_both_identifiers_and_the_file() {
+        let _endpoint = crate::telemetry::consent::as_if_configured(); // upstream's configured-build gates
         /// The redirects and the snapshot, handed back on drop, so a failed assertion cannot leave
         /// the next test writing into this directory.
         struct Redirects {
@@ -567,6 +568,46 @@ mod tests {
         let reopened = persistence::load(std::slice::from_ref(&file));
         assert!(!reopened.answered() && reopened.install_id.is_none() && reopened.errors_id.is_none());
         assert!(!file.exists(), "the decision file survived");
+    }
+
+    /// litefin: a stored decision saying yes to both (the file stock Native Jelly leaves under the
+    /// same app id) opens no producer in this fork: nothing is collected, spooled or read, because
+    /// no build carries an endpoint (`docs/litefin-fork.md`).
+    #[test]
+    fn an_inherited_yes_to_both_opens_no_producer() {
+        let _g = nj_base::testlock::serial();
+        let dir = std::env::temp_dir().join(format!("nativejelly-inherited-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let saved = consent::current();
+        let file = dir.join("telemetry.json");
+        redirect_for_test(Some(file.clone()));
+        spool::set_test_path(Some(dir.join("spool.jsonl")));
+        let yes = consent::apply(&Consent::default(), true, true, || Some("a".repeat(32)));
+        let _ = persistence::record(&yes);
+        let stored = load_from(std::slice::from_ref(&file));
+        consent::install(stored.clone());
+
+        let open = (
+            consent::allows_errors(),
+            consent::allows_usage(),
+            consent::errors_id(),
+            consent::report_permission_now(consent::ONBOARDING_REPORT_SCOPE),
+            crashreport::may_read_crash_data(),
+            spool::append_if(&watched_record("inherited", queue::Category::Errors), consent::allows_errors),
+            spool::append_if(&watched_record("inherited-usage", queue::Category::Usage), consent::allows_usage),
+            spool::read().len(),
+        );
+        delivery::forget();
+        spool::set_test_path(None);
+        redirect_for_test(None);
+        if let Some(c) = saved {
+            consent::install(c);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(stored.answered() && stored.errors && stored.usage, "the stored file says yes to both");
+        assert_eq!(open, (false, false, None, consent::Permission::Declined, false, None, None, 0));
     }
 
     /// An unreadable or corrupt file is the DEFAULT decision, never a partial one — a file we

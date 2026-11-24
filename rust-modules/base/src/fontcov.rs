@@ -7,8 +7,9 @@
 //!
 //! ## Why the gate exists
 //!
-//! `pkg/appfont.ttf` covers 2853 codepoints — Latin, Cyrillic, Greek — and **zero** Hangul, Kana
-//! or Han. A Plex library with Korean, Japanese or Chinese titles rendered 100 % tofu, and every
+//! The UI face `pkg/appfont.ttf` is Poppins (381 codepoints: Latin-1 and most of Latin
+//! Extended-A); Inter, `pkg/appfont-inter.ttf`, behind it carries 2853 - Latin, Cyrillic, Greek -
+//! and neither has a single Hangul, Kana or Han codepoint. A Plex library with Korean, Japanese or Chinese titles rendered 100 % tofu, and every
 //! test tier this project has was structurally blind to it: the host suite draws nothing, the
 //! simulator renders through a different rasterizer, and the device FPS scenes grade `loop=`.
 //! Coverage is not a rendering question at all — it is a property of a file on disk — so it
@@ -386,12 +387,16 @@ pub fn shipped(name: &str) -> &'static Result<Coverage, String> {
     use std::sync::OnceLock;
     static REG: OnceLock<Result<Coverage, String>> = OnceLock::new();
     static BOLD: OnceLock<Result<Coverage, String>> = OnceLock::new();
+    static INTER: OnceLock<Result<Coverage, String>> = OnceLock::new();
+    static INTER_BOLD: OnceLock<Result<Coverage, String>> = OnceLock::new();
     static CJK: OnceLock<Result<Coverage, String>> = OnceLock::new();
     let slot = match name {
         "appfont.ttf" => &REG,
         "appfont-bold.ttf" => &BOLD,
+        "appfont-inter.ttf" => &INTER,
+        "appfont-inter-bold.ttf" => &INTER_BOLD,
         "appfont-cjk.ttf" => &CJK,
-        other => panic!("no shipped-font slot for {other:?} — add one beside the other three"),
+        other => panic!("no shipped-font slot for {other:?} - add one beside the other four"),
     };
     slot.get_or_init(|| {
         // The fonts are repository payload, not crate data — `pkg/` sits beside `rust-modules/`.
@@ -403,7 +408,8 @@ pub fn shipped(name: &str) -> &'static Result<Coverage, String> {
 /// **The shipped faces' horizontal advances, as a host-test text measure.** Unit tests have no
 /// SDL_ttf, so every other test `Measure` is a per-character guess — and a guess cannot say whether
 /// a translated line fits its row. This one reads `cmap`, `head`, `hhea` and `hmtx` out of
-/// `pkg/appfont*.ttf` and sums one advance per character, each rounded to a WHOLE pixel at the
+/// `pkg/appfont*.ttf` and sums one advance per character from the face the chain draws it with
+/// (Poppins, else Inter: `gfx/text.rs`'s first two links), each rounded to a WHOLE pixel at the
 /// requested size: the faces are opened with hinting on (`TTF_HINTING_LIGHT`), so FreeType hands
 /// SDL2_ttf 2.0.x (the only versions any television ships) pixel-rounded advances, which it caches
 /// per glyph (`FT_CEIL(horiAdvance)`), and `TTF_SizeUTF8` is a plain left-to-right sum of them. The
@@ -488,25 +494,57 @@ pub mod advances {
             Some(Face { upem, glyph, advance })
         }
 
-        /// `s` at pixel size `size`, one whole-pixel advance per character (see the item doc).
+        fn has(&self, cp: u32) -> bool {
+            self.glyph.get(&cp).is_some_and(|&g| g != 0)
+        }
+
+        /// One character at pixel size `size`, a whole-pixel advance (see the item doc).
+        fn advance(&self, ch: char, size: i32) -> f32 {
+            let g = self.glyph.get(&(ch as u32)).copied().unwrap_or(0) as usize;
+            // Glyphs past `numberOfHMetrics` share the last advance (the `hmtx` rule).
+            let units = self.advance.get(g).or(self.advance.last()).copied().unwrap_or(0);
+            (units as f32 * size as f32 / self.upem).round()
+        }
+
+        /// `s` at pixel size `size` in this face alone, one whole-pixel advance per character.
         pub fn width(&self, s: &str, size: i32) -> f32 {
-            s.chars()
-                .map(|ch| {
-                    let g = self.glyph.get(&(ch as u32)).copied().unwrap_or(0) as usize;
-                    // Glyphs past `numberOfHMetrics` share the last advance (the `hmtx` rule).
-                    let units = self.advance.get(g).or(self.advance.last()).copied().unwrap_or(0);
-                    (units as f32 * size as f32 / self.upem).round()
-                })
-                .sum()
+            s.chars().map(|ch| self.advance(ch, size)).sum()
         }
     }
 
-    /// One of the two shipped text faces, parsed once for the test binary.
+    /// `s` at pixel size `size` as the UI chain draws it: each character from Poppins when it has
+    /// the glyph, else from Inter, else Poppins' `.notdef` (the box `gfx/text.rs` draws too). CJK
+    /// runs are not modelled; no app catalog carries them.
+    pub fn width(s: &str, size: i32, bold: bool) -> f32 {
+        let (base, inter) = (shipped(bold), shipped_inter(bold));
+        s.chars()
+            .map(|ch| {
+                let face = if !base.has(ch as u32) && inter.has(ch as u32) { inter } else { base };
+                face.advance(ch, size)
+            })
+            .sum()
+    }
+
+    /// One of the two shipped UI faces (Poppins), parsed once for the test binary.
     pub fn shipped(bold: bool) -> &'static Face {
         use std::sync::OnceLock;
         static REG: OnceLock<Face> = OnceLock::new();
         static BOLD: OnceLock<Face> = OnceLock::new();
         let (slot, name) = if bold { (&BOLD, "appfont-bold.ttf") } else { (&REG, "appfont.ttf") };
+        parse_once(slot, name)
+    }
+
+    /// The chain's second link (Inter), parsed once for the test binary.
+    pub fn shipped_inter(bold: bool) -> &'static Face {
+        use std::sync::OnceLock;
+        static REG: OnceLock<Face> = OnceLock::new();
+        static BOLD: OnceLock<Face> = OnceLock::new();
+        let (slot, name) =
+            if bold { (&BOLD, "appfont-inter-bold.ttf") } else { (&REG, "appfont-inter.ttf") };
+        parse_once(slot, name)
+    }
+
+    fn parse_once(slot: &'static std::sync::OnceLock<Face>, name: &str) -> &'static Face {
         slot.get_or_init(|| {
             let p = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../pkg")).join(name);
             let bytes = std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
@@ -546,10 +584,12 @@ mod tests {
 
     // --- the declared set ------------------------------------------------------------------------
     //
-    // LINK 1 — `appfont.ttf` / `appfont-bold.ttf` (Inter, cut by tools/cut-inter.py). Every
-    // codepoint the product chrome itself can emit, plus the scripts the Plex libraries this
-    // client is built for actually contain. Whole blocks, not samples: a partial block is how
-    // "Cyrillic works" and "Ё is a box" coexist.
+    // LINKS 1 AND 2 - `appfont*.ttf` (Poppins, tools/cut-poppins.py) and behind it
+    // `appfont-inter*.ttf` (Inter, tools/cut-inter.py). Every codepoint the product chrome itself
+    // can emit, plus the scripts the libraries this client is built for actually contain, held
+    // against the two together at each weight: Poppins has no Cyrillic or Greek, and Inter draws
+    // them. Whole blocks, not samples: a partial block is how "Cyrillic works" and "Ё is a box"
+    // coexist.
     const LINK1_BLOCKS: &[(&str, u32, u32)] = &[
         ("ASCII printable", 0x0020, 0x007E),
         ("Latin-1 letters", 0x00C0, 0x00FF),
@@ -569,7 +609,7 @@ mod tests {
         ("musical symbols (subtitle convention)", 0x2669, 0x266C),
     ];
 
-    /// Individual codepoints link 1 must carry: the typographic punctuation the UI composes by
+    /// Individual codepoints links 1-2 must carry: the typographic punctuation the UI composes by
     /// hand (`elide` appends U+2026; headings join with U+00B7; PMS metadata is full of curly
     /// quotes and en/em dashes) and the marks drawn beside ratings.
     const LINK1_CHARS: &[(&str, char)] = &[
@@ -589,9 +629,9 @@ mod tests {
         ("registered", '\u{00AE}'),
     ];
 
-    // LINK 2 — `appfont-cjk.ttf` (Noto Sans CJK KR, cut by tools/cut-noto-cjk.py). Checklist #6
+    // LINK 3 - `appfont-cjk.ttf` (Noto Sans CJK KR, cut by tools/cut-noto-cjk.py). Checklist #6
     // and #48 are unreachable without these: a Korean, Japanese or Chinese title is 100 % tofu
-    // in link 1.
+    // in links 1-2.
     const LINK2_BLOCKS: &[(&str, u32, u32)] = &[
         ("Hangul syllables", 0xAC00, 0xD7A3),
         ("Hangul Jamo", 0x1100, 0x11FF),
@@ -634,53 +674,83 @@ mod tests {
         );
     }
 
+    /// The UI face and the Inter link behind it, at one weight.
+    const WEIGHTS: [(&str, &str); 2] = [
+        ("appfont.ttf", "appfont-inter.ttf"),
+        ("appfont-bold.ttf", "appfont-inter-bold.ttf"),
+    ];
+
     #[test]
-    fn shipped_regular_font_covers_the_declared_latin_set() {
-        let c = cov("appfont.ttf");
-        let mut gaps = Vec::new();
-        for &(name, lo, hi) in LINK1_BLOCKS {
-            let m = missing(&c, lo, hi);
-            if !m.is_empty() {
-                gaps.push(format!(
-                    "{name} (U+{lo:04X}..U+{hi:04X}) is missing {m:04X?}"
-                ));
+    fn shipped_chain_covers_the_declared_latin_set_at_both_weights() {
+        for (base, inter) in WEIGHTS {
+            let (b, i) = (cov(base), cov(inter));
+            let mut gaps = Vec::new();
+            for &(name, lo, hi) in LINK1_BLOCKS {
+                let m: Vec<u32> = (lo..=hi)
+                    .filter(|&cp| !b.contains(cp) && !i.contains(cp))
+                    .take(12)
+                    .collect();
+                if !m.is_empty() {
+                    gaps.push(format!(
+                        "{name} (U+{lo:04X}..U+{hi:04X}) is missing {m:04X?}"
+                    ));
+                }
             }
-        }
-        for &(name, ch) in LINK1_CHARS {
-            if !c.contains(ch as u32) {
-                gaps.push(format!("{name} (U+{:04X})", ch as u32));
+            for &(name, ch) in LINK1_CHARS {
+                if !b.contains(ch as u32) && !i.contains(ch as u32) {
+                    gaps.push(format!("{name} (U+{:04X})", ch as u32));
+                }
             }
+            report(&format!("{base} + {inter}"), gaps);
         }
-        report("appfont.ttf", gaps);
+    }
+
+    /// The UI face draws the chrome's own text itself: English and Spanish catalogs, the
+    /// punctuation the UI composes and the subtitle notes never fall through to Inter, so they
+    /// render in the one typeface the look is drawn in.
+    #[test]
+    fn the_ui_face_itself_draws_ascii_latin1_and_the_composed_punctuation() {
+        for (base, _) in WEIGHTS {
+            let c = cov(base);
+            let mut gaps = Vec::new();
+            for &(name, lo, hi) in &LINK1_BLOCKS[..2] {
+                let m = missing(c, lo, hi);
+                if !m.is_empty() {
+                    gaps.push(format!("{name} (U+{lo:04X}..U+{hi:04X}) is missing {m:04X?}"));
+                }
+            }
+            if !missing(c, 0x2669, 0x266C).is_empty() {
+                gaps.push("musical symbols U+2669..U+266C".into());
+            }
+            for &(name, ch) in LINK1_CHARS {
+                if !c.contains(ch as u32) {
+                    gaps.push(format!("{name} (U+{:04X})", ch as u32));
+                }
+            }
+            report(base, gaps);
+        }
     }
 
     /// The bold face is a separate cut and can rot on its own. A bold-only hole is invisible in
     /// every other tier — the same string renders fine as body text and tofus as a heading.
+    /// `text.rs` also reads a link's coverage from its REGULAR file only, which this makes sound.
     #[test]
     fn bold_face_covers_exactly_what_the_regular_one_does() {
-        let (r, b) = (cov("appfont.ttf"), cov("appfont-bold.ttf"));
-        assert_eq!(
-            r.len(),
-            b.len(),
-            "appfont.ttf covers {} codepoints, appfont-bold.ttf {}",
-            r.len(),
-            b.len()
-        );
-        for &(name, lo, hi) in LINK1_BLOCKS {
-            for cp in lo..=hi {
-                assert_eq!(
-                    r.contains(cp),
-                    b.contains(cp),
-                    "regular/bold disagree on U+{cp:04X} ({name})"
-                );
-            }
-        }
-        for &(name, ch) in LINK1_CHARS {
-            assert!(
-                b.contains(ch as u32),
-                "pkg/appfont-bold.ttf is missing {name} (U+{:04X})",
-                ch as u32
+        for (regular, bold) in [
+            ("appfont.ttf", "appfont-bold.ttf"),
+            ("appfont-inter.ttf", "appfont-inter-bold.ttf"),
+        ] {
+            let (r, b) = (cov(regular), cov(bold));
+            assert_eq!(
+                r.len(),
+                b.len(),
+                "{regular} covers {} codepoints, {bold} {}",
+                r.len(),
+                b.len()
             );
+            for cp in 0..=0xFFFF {
+                assert_eq!(r.contains(cp), b.contains(cp), "{regular}/{bold} disagree on U+{cp:04X}");
+            }
         }
     }
 
@@ -725,7 +795,7 @@ mod tests {
     /// failed on 2026-08-22 and passed on 2026-08-23.
     #[test]
     fn the_shipped_chain_can_draw_every_sample_string() {
-        let links = [cov("appfont.ttf"), cov("appfont-cjk.ttf")];
+        let links = [cov("appfont.ttf"), cov("appfont-inter.ttf"), cov("appfont-cjk.ttf")];
         for &(script, s) in SAMPLES {
             let bad: Vec<char> = s
                 .chars()
@@ -753,12 +823,12 @@ mod tests {
     /// So this test asserts the ABSENCE, deliberately: it fails the moment someone adds an RTL
     /// face, and the failure message is the reason not to. **Checklist #6 / #48 must not be marked
     /// Pass for RTL content on the strength of this unit.**
-    /// This is about the UI chain (`appfont.ttf`, `appfont-cjk.ttf`) only. The subtitle faces
+    /// This is about the UI chain (`appfont.ttf`, `appfont-inter.ttf`, `appfont-cjk.ttf`) only. The subtitle faces
     /// (`pkg/fonts/subs/`, Arabic, Hebrew, Thaana) do carry RTL scripts, safely: libass runs
     /// HarfBuzz and a bidi pass over them, which `text.rs` does not.
     #[test]
     fn rtl_is_out_of_scope_and_stays_that_way() {
-        for name in ["appfont.ttf", "appfont-cjk.ttf"] {
+        for name in ["appfont.ttf", "appfont-inter.ttf", "appfont-cjk.ttf"] {
             let c = cov(name);
             for (script, lo, hi) in [("Hebrew", 0x05D0u32, 0x05EAu32), ("Arabic", 0x0620, 0x064A)] {
                 let n = count(&c, lo, hi);

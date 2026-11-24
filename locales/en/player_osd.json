@@ -1,0 +1,20 @@
+{
+  "player_osd.ends_at": {
+    "value": "Ends at {time}",
+    "description": "Player controls: the local clock time at which the playing item will end, shown beside the playback buttons. {time} is a 24-hour time such as 21:45.",
+    "args": {
+      "time": "str"
+    }
+  },
+  "player_osd.up_next": {
+    "value": "Up Next",
+    "description": "Player: label over the next episode on the card offered during the credits. Drawn in capitals."
+  },
+  "player_osd.starts_in": {
+    "value": "Starts in {seconds}s",
+    "description": "Player: countdown on the next-episode card before the next episode starts by itself. {seconds} is a whole number of seconds; keep the unit as short as the source.",
+    "args": {
+      "seconds": "str"
+    }
+  }
+}

@@ -13,8 +13,8 @@ pub(crate) const SEASON_GROUP: GroupId = GroupId(1);
 pub(crate) const ROW_H: f32 = crate::ui::widgets::StatusOverlay::CTRL_H;
 pub(crate) const SETTLE_S: f32 = 0.2;
 /// Content-space x of the first season's LABEL — one pill padding in from the content edge, so the
-/// first pill's frame starts exactly on `MARGIN_X` at scroll 0.
-const LEAD_LABEL_X: f32 = crate::ui::consts::MARGIN_X + widgets::STRIP_PAD;
+/// first pill's frame starts exactly on `section::ROW_X` at scroll 0.
+const LEAD_LABEL_X: f32 = super::section::ROW_X + widgets::STRIP_PAD;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RestoreStep {
@@ -119,11 +119,9 @@ impl Metrics {
                     season.title.clone()
                 }
             }),
-            // The LABEL origin: the first pill's FRAME then starts on the page's content edge
-            // (`MARGIN_X`), the same leading edge as the hero buttons above it and the season
-            // group's own focus extent — the Library's strip lays out from the same origin.
-            // Passing `MARGIN_X` here put the first pill's plate `STRIP_PAD` outside that edge
-            // (issue 19).
+            // The LABEL origin: the first pill's FRAME then starts on the rows' edge
+            // (`section::ROW_X`), the line every row title below stands on. Passing the edge itself
+            // here put the first pill's plate `STRIP_PAD` outside it (issue 19).
             LEAD_LABEL_X,
             theme::size::BODY,
             widgets::STRIP_GAP,
@@ -148,7 +146,7 @@ impl Metrics {
         };
         let lo = r.x + r.w + widgets::STRIP_ADVANCE
             - (crate::ui::consts::SCR_W - crate::ui::consts::MARGIN_X);
-        let hi = r.x - widgets::STRIP_ADVANCE - crate::ui::consts::MARGIN_X;
+        let hi = r.x - widgets::STRIP_ADVANCE - super::section::ROW_X;
         crate::ui::card_row::reveal(current, lo, hi, f32::MAX)
     }
 }
@@ -265,7 +263,7 @@ mod tests {
         let mut metrics = Metrics::new();
         metrics.update(&detail(), &crate::ui::fixture::FixtureMeasure);
         let first = metrics.rect(0, 0.0, 0.0).expect("a first pill");
-        assert_eq!(first.x, crate::ui::consts::MARGIN_X, "first pill plate x at scroll 0");
+        assert_eq!(first.x, super::super::section::ROW_X, "first pill plate x at scroll 0");
         // and the scroll target for that pill leaves the row where it is
         assert_eq!(metrics.scroll_target(0.0, 0), 0.0);
     }

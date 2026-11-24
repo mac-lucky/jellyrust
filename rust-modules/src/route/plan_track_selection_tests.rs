@@ -7,7 +7,7 @@ use super::*;
 use super::test_support::*;
 
 fn lang(l: &'static str) -> AudioLangPrefs<'static> {
-    AudioLangPrefs { language: Some(l), prefer_default: false }
+    AudioLangPrefs { language: Some(l), prefer_default: false, ..Default::default() }
 }
 
 fn subs_mode(mode: SubtitleMode, language: Option<&'static str>) -> SubtitleLangPrefs<'static> {
@@ -74,7 +74,7 @@ fn the_users_audio_language_selects_its_track_for_every_cold_play_path() {
 /// language preference only decides when the file flags nothing.
 #[test]
 fn play_default_audio_track_outranks_the_language_preference() {
-    let prefs = AudioLangPrefs { language: Some("fra"), prefer_default: true };
+    let prefs = AudioLangPrefs { language: Some("fra"), prefer_default: true, ..Default::default() };
     let tracks = [trk(1, "ac3", "eng", true), trk(2, "ac3", "fre", false)];
     assert_eq!(pick_dp_audio_pref(&tracks, "ac3", prefs), Some((0, "ac3".into(), 1)));
     assert_eq!(encode_audio_id(1, 0, &tracks, prefs), 1);
@@ -152,6 +152,42 @@ fn a_conversion_keeps_the_session_pick_then_the_default() {
 fn a_conversion_keeps_a_direct_play_pick_already_in_the_preferred_language() {
     let tracks = [trk(1, "truehd", "eng", true), trk(2, "ac3", "eng", false)];
     assert_eq!(encode_audio_id(2, 0, &tracks, lang("eng")), 2);
+}
+
+/// The server's pick (`DefaultAudioStreamIndex`, `selected`) comes first on both paths, ahead of
+/// the file's default and the user's language.
+#[test]
+fn the_servers_audio_pick_comes_first() {
+    let tracks = [trk(1, "ac3", "eng", true), server_selected(trk(2, "ac3", "pol", false))];
+    let prefs = AudioLangPrefs { language: Some("eng"), prefer_default: true, ..Default::default() };
+    assert_eq!(pick_dp_audio_pref(&tracks, "ac3", prefs), Some((1, "ac3".into(), 2)));
+    assert_eq!(encode_audio_id(2, 0, &tracks, prefs), 2);
+}
+
+/// A server pick the panel cannot decode is carried by a conversion; direct play falls through,
+/// to a track in the same language first, so a remembered English choice does not turn into the
+/// Polish default.
+#[test]
+fn an_undecodable_server_pick_falls_through_to_its_own_language() {
+    let tracks = [trk(1, "ac3", "pol", true), server_selected(trk(2, "truehd", "eng", false)), trk(3, "ac3", "eng", false)];
+    let prefs = AudioLangPrefs { language: Some("pol"), prefer_default: true, ..Default::default() };
+    let (_, _, dp) = pick_dp_audio_pref(&tracks, "ac3", prefs).unwrap();
+    assert_eq!(dp, 3, "the English AC-3 sibling");
+    assert_eq!(encode_audio_id(dp, 0, &tracks, prefs), 2, "a conversion carries the TrueHD pick itself");
+}
+
+/// An external text subtitle the client draws itself is a candidate for the automatic pick, ranked
+/// ahead of an embedded one as the server ranks it; it comes back with the sidecar's ordinal (-1).
+#[test]
+fn an_automatic_pick_takes_a_drawable_external_subtitle_first() {
+    let external = |id, index, lang| crate::metadata::Stream { key: format!("/Videos/x/x/Subtitles/{index}/0/Stream.srt"), ..sub(id, index, lang, true) };
+    let subs = [sub(10, 3, "pol", false), external(11, 4, "pol")];
+    assert_eq!(pick_dp_subtitle_pref(&subs, subs_mode(SubtitleMode::Always, Some("pol")), "eng"), Some((11, -1)));
+    assert_eq!(pick_dp_subtitle_pref(&subs, SubtitleLangPrefs::default(), "eng"), Some((11, -1)),
+        "Default turns an external track on, as the server's own Default mode does");
+    let unreachable = [sub(10, 3, "pol", false), sub(11, 4, "pol", true)];
+    assert_eq!(pick_dp_subtitle_pref(&unreachable, subs_mode(SubtitleMode::Always, Some("pol")), "eng"), Some((10, 0)),
+        "an external track with no file to fetch is never picked");
 }
 
 #[test]
@@ -277,9 +313,9 @@ fn known_audio_channels_cannot_fall_back_to_an_unknown_codec_default() {
     let mut track = trk(1, "aac", "eng", false);
     track.channels = 8;
     assert!(caps.audio_supports("aac", 0), "legacy unknown remains compatible");
-    assert_eq!(pick_dp_audio_eligible(&[track.clone()], "aac", AudioLangPrefs::default(), |c, n| caps.audio_supports(c, n)), None);
+    assert_eq!(pick_dp_audio_eligible(&[track.clone()], "aac", AudioLangPrefs::default(), |c, n| caps.audio_supports(c, n), true), None);
     track.channels = 6;
-    assert_eq!(pick_dp_audio_eligible(&[track], "aac", AudioLangPrefs::default(), |c, n| caps.audio_supports(c, n)), Some((0, "aac".into(), 1)));
+    assert_eq!(pick_dp_audio_eligible(&[track], "aac", AudioLangPrefs::default(), |c, n| caps.audio_supports(c, n), true), Some((0, "aac".into(), 1)));
 }
 
 /// The catalog spells DTS `dca` (`jf::convert::codec`) and the device table `dts`: both modes
@@ -307,4 +343,218 @@ fn only_an_eac3_atmos_track_is_logged_as_declared_immersive() {
         assert!(!line.contains("declaring"), "{codec}: {line}");
         assert!(line.contains(codec) && line.contains("not declared"), "{codec}: {line}");
     }
+}
+
+// ---- Dubbing and lektor: the voice preference over the same ladder ----
+
+fn titled(title: &str, s: crate::metadata::Stream) -> crate::metadata::Stream {
+    crate::metadata::Stream { title: title.into(), ..s }
+}
+
+/// A Polish speaker with Jellyfin's default `PlayDefaultAudioTrack`, under `voice`.
+fn voice(voice: VoicePreference) -> AudioLangPrefs<'static> {
+    AudioLangPrefs { language: Some("pol"), prefer_default: true, voice }
+}
+
+/// Both cold-play paths: (the direct-play pick's id, the id a conversion of it carries).
+fn picks(tracks: &[crate::metadata::Stream], prefs: AudioLangPrefs<'_>) -> (i64, i64) {
+    let dp = pick_dp_audio_pref(tracks, "ac3", prefs).map_or(0, |(_, _, id)| id);
+    (dp, encode_audio_id(dp, 0, tracks, prefs))
+}
+
+/// `ai-lektor`'s track the way the household's library has it: an external sidecar
+/// (`<video>.pl.lektor.mka`, one stereo AAC stream) that Jellyfin lists after every embedded
+/// stream, `pol`, titled "Lektor AI", not default.
+fn sidecar(id: i64) -> crate::metadata::Stream {
+    crate::metadata::Stream { external: true, ..titled("Lektor AI", trk(id, "aac", "pol", false)) }
+}
+
+/// The household's shape: the English original (the file's default), a Polish human lektor, and
+/// the AI lektor sidecar.
+fn household() -> Vec<crate::metadata::Stream> {
+    vec![
+        titled("English", trk(1, "ac3", "eng", true)),
+        titled("Polish - Lektor - AC3", trk(2, "ac3", "pol", false)),
+        sidecar(9),
+    ]
+}
+
+#[test]
+fn a_tracks_title_names_its_voice_kind() {
+    for (title, kind) in [
+        ("Lektor AI", VoiceKind::AiLektor),
+        ("ai lektor", VoiceKind::AiLektor),
+        ("POLISH - LEKTOR AI - AAC - Stereo", VoiceKind::AiLektor),
+        ("Polish - Lektor - AC3", VoiceKind::Lektor),
+        ("LEKTOR PL", VoiceKind::Lektor),
+        ("Voice-over", VoiceKind::Lektor),
+        ("voiceover", VoiceKind::Lektor),
+        ("Polish Voice Over", VoiceKind::Lektor),
+        ("Dubbing PL", VoiceKind::Dubbing),
+        ("PL Dub", VoiceKind::Dubbing),
+        ("Polish [DUB] 5.1", VoiceKind::Dubbing),
+        ("English", VoiceKind::Unknown),
+        ("", VoiceKind::Unknown),
+        ("Dubstep commentary", VoiceKind::Unknown),
+    ] {
+        assert_eq!(voice_kind(&titled(title, trk(1, "ac3", "pol", false))), kind, "{title:?}");
+    }
+}
+
+/// Any is the ladder as it was: the server's pick, AI lektor or not, then the file's default. The
+/// AI lektor is a sidecar the file direct play reads does not hold, so landing on it is a
+/// conversion that carries it (the server's remux of an `AudioIsExternal` track), never a
+/// direct play of something else under its name.
+#[test]
+fn any_voice_keeps_the_ladder_unchanged() {
+    let mut tracks = household();
+    tracks[2].selected = true;
+    assert_eq!(picks(&tracks, voice(VoicePreference::Any)), (0, 9));
+    assert_eq!(picks(&household(), voice(VoicePreference::Any)), (1, 1));
+}
+
+/// "Dubbing first" moves a landing on the AI sidecar to a better-ranked track in its language that
+/// direct-plays, so the preference costs no conversion when the file already holds the better track.
+#[test]
+fn a_better_ranked_embedded_track_spares_the_sidecars_conversion() {
+    let mut tracks = household();
+    tracks[2].selected = true;
+    assert_eq!(picks(&tracks, voice(VoicePreference::DubbingFirst)), (2, 2));
+}
+
+/// Force Direct Play has no conversion to carry a sidecar, so its rungs pass over one the way they
+/// pass over a codec the panel cannot decode; and when the voice preference leaves nothing it can
+/// force-play while an excluded track could play, the exclusion is ignored, as when it excludes
+/// every track. Auto converts instead (the English TrueHD).
+#[test]
+fn force_direct_play_passes_over_a_sidecar_and_drops_an_exclusion_it_cannot_honour() {
+    let caps = nj_platform::devcaps::Caps::assumed();
+    let mut tracks = household();
+    tracks[2].selected = true;
+    assert_eq!(pick_dp_audio_mode(&caps, &tracks, "ac3", voice(VoicePreference::Any), DirectPlayMode::Forced).map(|p| p.2), Some(2));
+    let lektor_only_playable = [
+        titled("English", trk(1, "truehd", "eng", true)),
+        server_selected(titled("Lektor", trk(2, "ac3", "pol", false))),
+    ];
+    let never = voice(VoicePreference::DubbingNoLektor);
+    assert_eq!(pick_dp_audio_mode(&caps, &lektor_only_playable, "truehd", never, DirectPlayMode::Forced).map(|p| p.2), Some(2));
+    assert_eq!(pick_dp_audio_mode(&caps, &lektor_only_playable, "truehd", never, DirectPlayMode::Auto), None);
+}
+
+/// "No AI lektor": a server pick of the AI track (remembered, or the server ranking the Polish
+/// preference) is skipped, and its language rung takes the human lektor rather than the same AI
+/// track again; with no human lektor the ladder goes on to the file's default. A human lektor the
+/// server picked still plays: nothing else changes.
+#[test]
+fn no_ai_lektor_skips_a_server_pick_of_the_ai_track() {
+    let no_ai = voice(VoicePreference::NoAiLektor);
+    let mut tracks = household();
+    tracks[2].selected = true;
+    assert_eq!(picks(&tracks, no_ai), (2, 2));
+    let no_human = [tracks[0].clone(), tracks[2].clone()];
+    assert_eq!(picks(&no_human, no_ai), (1, 1));
+    let mut human = household();
+    human[1].selected = true;
+    assert_eq!(picks(&human, no_ai), (2, 2));
+}
+
+/// "Dubbing, never lektor" with no Polish dub: a server pick of the human lektor is skipped, no
+/// Polish track is left, and the English original plays, whichever rung comes first.
+#[test]
+fn never_lektor_skips_a_server_pick_of_a_human_lektor_for_the_original() {
+    let mut tracks = household();
+    tracks[1].selected = true;
+    assert_eq!(picks(&tracks, voice(VoicePreference::DubbingNoLektor)), (1, 1));
+    let language_first = AudioLangPrefs { prefer_default: false, ..voice(VoicePreference::DubbingNoLektor) };
+    assert_eq!(picks(&tracks, language_first), (1, 1));
+}
+
+/// "Dubbing, never lektor" with a Polish dub: the dub plays, ahead of the lektor the server picked
+/// and ahead of an untitled Polish track the server picked.
+#[test]
+fn never_lektor_plays_the_dub_first_in_its_language() {
+    let never = voice(VoicePreference::DubbingNoLektor);
+    let mut tracks = household();
+    tracks.push(titled("Dubbing PL", trk(4, "ac3", "pol", false)));
+    tracks[1].selected = true;
+    assert_eq!(picks(&tracks, never), (4, 4));
+    let untitled = [
+        titled("English", trk(1, "ac3", "eng", true)),
+        server_selected(trk(2, "ac3", "pol", false)),
+        titled("PL Dub", trk(3, "ac3", "pol", false)),
+    ];
+    assert_eq!(picks(&untitled, never), (3, 3));
+}
+
+/// "Dubbing first" ranks inside the language the ladder chose: dubbing, an unnamed track, a
+/// lektor, the AI lektor. Another language is never a step up, so a remembered English pick stays.
+#[test]
+fn dubbing_first_ranks_within_the_language_only() {
+    let first = voice(VoicePreference::DubbingFirst);
+    let all = vec![
+        titled("English", trk(1, "ac3", "eng", true)),
+        server_selected(titled("Lektor AI", trk(2, "ac3", "pol", false))),
+        titled("Lektor", trk(3, "ac3", "pol", false)),
+        titled("Polski", trk(4, "ac3", "pol", false)),
+        titled("Dubbing", trk(5, "ac3", "pol", false)),
+    ];
+    assert_eq!(picks(&all, first), (5, 5), "dubbing");
+    assert_eq!(picks(&all[..4], first), (4, 4), "then the unnamed track");
+    assert_eq!(picks(&all[..3], first), (3, 3), "then the human lektor");
+    assert_eq!(picks(&all[..2], first), (2, 2), "the AI lektor when it is the only Polish track");
+    let mut english = all.clone();
+    english[1].selected = false;
+    english[0].selected = true;
+    assert_eq!(picks(&english, first), (1, 1));
+}
+
+/// Direct play re-ranks only among tracks the panel decodes; a conversion carries the better-ranked
+/// track whatever its codec.
+#[test]
+fn a_conversion_re_ranks_without_the_codec_limit() {
+    let tracks = [
+        titled("English", trk(1, "ac3", "eng", true)),
+        server_selected(titled("Lektor", trk(2, "ac3", "pol", false))),
+        titled("Dubbing", trk(3, "truehd", "pol", false)),
+    ];
+    assert_eq!(picks(&tracks, voice(VoicePreference::DubbingFirst)), (2, 3));
+}
+
+/// A preference that would exclude every track excludes none: something always plays, picked as
+/// Any would pick it.
+#[test]
+fn a_preference_that_would_exclude_every_track_excludes_none() {
+    let lektors = [
+        titled("Lektor", trk(1, "ac3", "pol", true)),
+        server_selected(titled("Lektor AI", trk(2, "ac3", "pol", false))),
+    ];
+    assert_eq!(picks(&lektors, voice(VoicePreference::DubbingNoLektor)), (2, 2));
+    let only_ai = [titled("Lektor AI", trk(1, "ac3", "pol", true))];
+    assert_eq!(picks(&only_ai, voice(VoicePreference::NoAiLektor)), (1, 1));
+}
+
+/// The conversion obeys the same rule when nothing direct-plays: it names an allowed track rather
+/// than sending none, which would let the server choose its own default, the excluded one.
+#[test]
+fn a_conversion_never_leaves_an_excluded_track_to_the_server() {
+    let tracks = [
+        server_selected(titled("Lektor", trk(1, "truehd", "pol", true))),
+        titled("English", trk(2, "truehd", "eng", false)),
+    ];
+    let never = voice(VoicePreference::DubbingNoLektor);
+    assert_eq!(pick_dp_audio_pref(&tracks, "truehd", never), None);
+    assert_eq!(encode_audio_id(0, 0, &tracks, never), 2);
+    assert_eq!(encode_audio_id(0, 0, &tracks, voice(VoicePreference::Any)), 1);
+    let unflagged = [titled("Lektor AI", trk(1, "truehd", "pol", false)), titled("Polski", trk(2, "truehd", "pol", false))];
+    let bare = |voice| AudioLangPrefs { voice, ..Default::default() };
+    assert_eq!(encode_audio_id(0, 0, &unflagged, bare(VoicePreference::NoAiLektor)), 2);
+    assert_eq!(encode_audio_id(0, 0, &unflagged, bare(VoicePreference::Any)), 0, "Any still leaves it to the server");
+}
+
+/// A track picked by hand (the player's menu, the Detail page's chooser, a retry's carry) is
+/// carried whatever the preference says about it.
+#[test]
+fn a_hand_picked_track_is_carried_whatever_the_preference() {
+    assert_eq!(encode_audio_id(1, 9, &household(), voice(VoicePreference::NoAiLektor)), 9);
+    assert_eq!(encode_audio_id(1, 2, &household(), voice(VoicePreference::DubbingNoLektor)), 2);
 }

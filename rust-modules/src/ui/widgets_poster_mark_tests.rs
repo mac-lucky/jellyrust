@@ -1,4 +1,5 @@
-//! The poster watch-state mark and its write-verb twin (`poster_mark` vs. `row_watch_state`).
+//! The poster watch-state mark and its write-verb twin (`poster_mark` vs. `row_watch_state`), and
+//! the Litefin badges a card draws from them (`card_badges`).
 //!
 //! These grade the mark's CHOICE over plain [`TileFacts`]: the library names no application row.
 //! The half that needs a real catalog row — that its resume rule (an offset past the end is
@@ -145,4 +146,48 @@ fn only_a_thumbless_collection_draws_the_neutral_tile() {
     assert_eq!(neutral_collection_name(Some(&TileFacts { title: "Film", ..Default::default() })), None,
         "a film without art keeps the ordinary skeleton");
     assert_eq!(neutral_collection_name(None), None);
+}
+
+// ── Litefin's card badges ─────────────────────────────────────────────────────────────────
+
+/// The episode code is two zero-padded numbers in the catalog's letters, on numbered episodes
+/// only; the household's Polish keeps Litefin's own `S01E05`.
+#[test]
+fn an_episode_badge_reads_its_zero_padded_code_in_every_language() {
+    let _serial = nj_base::testlock::serial();
+    let ep = TileFacts { kind: TileKind::Episode, season_index: 1, ep_index: 5, ..Default::default() };
+    for (lang, want) in [
+        (nj_platform::i18n::Preference::En, "S01E05"),
+        (nj_platform::i18n::Preference::Pl, "S01E05"),
+        (nj_platform::i18n::Preference::Es, "T01E05"),
+        (nj_platform::i18n::Preference::Ru, "С01Э05"),
+        (nj_platform::i18n::Preference::Be, "С01Э05"),
+    ] {
+        let _lang = nj_platform::i18n::language_on_this_thread_for_test(lang);
+        assert_eq!(episode_code(&ep).as_deref(), Some(want), "{}", lang.tag());
+    }
+    let _lang = nj_platform::i18n::language_on_this_thread_for_test(nj_platform::i18n::Preference::En);
+    assert_eq!(episode_code(&TileFacts { season_index: 12, ep_index: 104, ..ep }).as_deref(), Some("S12E104"));
+    assert_eq!(episode_code(&TileFacts { ep_index: 0, ..ep }), None, "an unnumbered episode has no code");
+    assert_eq!(episode_code(&TileFacts { kind: TileKind::Movie, ..ep }), None);
+}
+
+/// Badges sit 12 in from their corners at a fixed 40px height, so the focus pop carries them with
+/// the picture's corner without resizing them.
+#[test]
+fn badges_hug_their_corners_at_a_fixed_size_through_the_pop() {
+    let card = Rect::new(178.0, 300.0, 228.0, 351.0);
+    for s in [1.0, CARD_FOCUS_SCALE] {
+        let r = card.scaled(s);
+        let code = badge_rect(r, 70.0, BadgeCorner::TopLeft);
+        assert_eq!((code.x - r.x, code.y - r.y, code.w, code.h), (12.0, 12.0, 70.0, 40.0));
+        let count = badge_rect(r, count_badge_w(30.0), BadgeCorner::TopRight);
+        assert!((r.x + r.w - (count.x + count.w) - 12.0).abs() < 1e-3);
+        assert_eq!((count.y - r.y, count.w, count.h), (12.0, 46.0, 40.0));
+        let check = badge_rect(r, 40.0, BadgeCorner::BottomRight);
+        assert!((r.x + r.w - (check.x + check.w) - 12.0).abs() < 1e-3);
+        assert!((r.y + r.h - (check.y + check.h) - 12.0).abs() < 1e-3);
+        assert_eq!((check.w, check.h), (40.0, 40.0));
+    }
+    assert_eq!(count_badge_w(9.0), 40.0, "a one-digit count is a square");
 }

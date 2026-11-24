@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::OnceLock;
 
 pub const CONTRIBUTE_URL: &str =
-    "https://github.com/sostk/native-jelly/blob/main/docs/localization.md";
+    "https://github.com/mac-lucky/jellyrust/blob/main/docs/localization.md";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -17,10 +17,12 @@ pub enum Preference {
     Es,
     Be,
     Ru,
+    Pl,
 }
 /// Every language the app ships, `System` excluded — the grid a text-fit test sums over.
 #[cfg(any(test, feature = "test-support"))]
-pub const SHIPPED: [Preference; 4] = [Preference::En, Preference::Es, Preference::Be, Preference::Ru];
+pub const SHIPPED: [Preference; 5] =
+    [Preference::En, Preference::Es, Preference::Be, Preference::Ru, Preference::Pl];
 impl<'de> Deserialize<'de> for Preference {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let v = serde_json::Value::deserialize(d)?;
@@ -34,6 +36,7 @@ impl Preference {
             "es" => Self::Es,
             "be" => Self::Be,
             "ru" => Self::Ru,
+            "pl" => Self::Pl,
             _ => Self::System,
         }
     }
@@ -44,6 +47,7 @@ impl Preference {
             Self::Es => "es",
             Self::Be => "be",
             Self::Ru => "ru",
+            Self::Pl => "pl",
         }
     }
     /// Serde's `skip_serializing_if`: System is what an absent preference already means.
@@ -57,6 +61,7 @@ impl Preference {
             Self::Es => "Español",
             Self::Be => "Беларуская",
             Self::Ru => "Русский",
+            Self::Pl => "Polski",
         }
     }
 }
@@ -66,6 +71,7 @@ pub enum Language {
     Es,
     Be,
     Ru,
+    Pl,
     /// Generated expanded labels; selectable only by the host simulator.
     #[cfg_attr(not(any(test, feature = "test-support", feature = "hostsim")), allow(dead_code))]
     Pseudo,
@@ -77,6 +83,7 @@ impl Language {
             Self::Es => "es",
             Self::Be => "be",
             Self::Ru => "ru",
+            Self::Pl => "pl",
         }
     }
     fn regional(self) -> &'static str {
@@ -85,6 +92,7 @@ impl Language {
             Self::Es => "es-ES",
             Self::Be => "be-BY",
             Self::Ru => "ru-RU",
+            Self::Pl => "pl-PL",
         }
     }
     fn parse(s: &str) -> Self {
@@ -95,6 +103,7 @@ impl Language {
             "es" if l.id.script.is_none_or(|s| s.as_str() == "Latn") => Self::Es,
             "be" if l.id.script.is_none_or(|s| s.as_str() == "Cyrl") => Self::Be,
             "ru" if l.id.script.is_none_or(|s| s.as_str() == "Cyrl") => Self::Ru,
+            "pl" if l.id.script.is_none_or(|s| s.as_str() == "Latn") => Self::Pl,
             _ => Self::En,
         }
     }
@@ -249,6 +258,7 @@ pub fn saved_preference() -> Preference {
         2 => Preference::Es,
         3 => Preference::Be,
         4 => Preference::Ru,
+        5 => Preference::Pl,
         _ => Preference::System,
     }
 }
@@ -260,6 +270,7 @@ pub fn set_saved_preference(value: Preference) {
         Preference::Es => 2,
         Preference::Be => 3,
         Preference::Ru => 4,
+        Preference::Pl => 5,
     };
     SAVED_PREFERENCE.store(value, std::sync::atomic::Ordering::Release);
 }
@@ -295,10 +306,12 @@ pub fn language_on_this_thread_for_test(preference: Preference) -> ThreadLocaleG
     static ES: OnceLock<LocaleContext> = OnceLock::new();
     static BE: OnceLock<LocaleContext> = OnceLock::new();
     static RU: OnceLock<LocaleContext> = OnceLock::new();
+    static PL: OnceLock<LocaleContext> = OnceLock::new();
     let slot = match preference {
         Preference::Es => &ES,
         Preference::Be => &BE,
         Preference::Ru => &RU,
+        Preference::Pl => &PL,
         Preference::En | Preference::System => &EN,
     };
     let cx = slot.get_or_init(|| LocaleContext::resolve(preference, None, None, None, None));

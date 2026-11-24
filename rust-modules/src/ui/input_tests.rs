@@ -281,83 +281,8 @@ fn a_control_that_handles_a_direction_keeps_it_from_the_engine() {
     assert!(s.contains("keys=10"), "the control took it: {s}");
 }
 
-/// §6.2: the strip is the CONTAINER's group, contributed above the page's — UP from the row
-/// lands on the nearest pill — and the page gates it: a page snapped to its grid has no strip
-/// to reach.
-#[test]
-fn the_strip_is_the_containers_group_and_the_page_gates_it() {
-    let (mut d, mut rig, _) = booted();
-    d.nav.tabs.strip = vec![
-        StripMember::new(STRIP_BASE, Rect::new(100.0, 10.0, 160.0, 48.0)),
-        StripMember::new(STRIP_BASE + 1, Rect::new(280.0, 10.0, 160.0, 48.0)),
-        StripMember::new(STRIP_BASE + 2, Rect::new(460.0, 10.0, 160.0, 48.0)),
-    ];
-    let home = d.nav.top_page().unwrap().id;
-    d.set_focus(Some(FocusKey { entry: home, elem: 2 })); // the tile at x 400..580
-    d.frame(&mut rig, tick(16), vec![key(Key::Up, tick(16))], vec![], &mut NoTap);
-    assert_eq!(elem(&d), Some(STRIP_BASE + 2), "the pill over the tile");
-    d.frame(&mut rig, tick(32), vec![key(Key::Left, tick(32))], vec![], &mut NoTap);
-    assert_eq!(elem(&d), Some(STRIP_BASE + 1), "LEFT walks the strip");
-    d.frame(&mut rig, tick(48), vec![key(Key::Down, tick(48))], vec![], &mut NoTap);
-    assert_eq!(elem(&d), Some(1), "DOWN returns to the row under the pill");
-    let ev = events_of(&d, 0);
-    assert!(ev.matches("\"focus_moved\"").count() >= 3, "the owner heard every move: {ev}");
 
-    // the gate: a snapped page contributes no strip
-    let (mut d, mut rig) = boot(FixtureArg::Snapped);
-    d.nav.tabs.strip = vec![StripMember::new(STRIP_BASE, Rect::new(100.0, 10.0, 160.0, 48.0))];
-    let e = d.nav.top_page().unwrap().id;
-    d.set_focus(Some(FocusKey { entry: e, elem: 0 }));
-    d.frame(&mut rig, tick(16), vec![key(Key::Up, tick(16))], vec![], &mut NoTap);
-    assert_eq!(elem(&d), Some(0), "nothing above a snapped grid");
-}
 
-#[test]
-fn the_home_strip_walks_both_endpoints_for_every_type_composition() {
-    for types in [vec![], vec![1], vec![2], vec![1, 2]] {
-        let (mut d, mut rig) = boot(FixtureArg::Home);
-        let entry = d.nav.top_page().unwrap().id;
-        let mut keys = vec![STRIP_BASE + 4, STRIP_BASE]; // chip, Home
-        keys.extend(types.into_iter().map(|id| STRIP_BASE + id));
-        keys.push(STRIP_BASE + 3); // Search is always the last destination
-        d.nav.tabs.strip = keys.iter().enumerate().map(|(i, &key)|
-            StripMember::new(key, Rect::new(100.0 + i as f32 * 180.0, 10.0, 160.0, 48.0))).collect();
-        d.set_focus(Some(FocusKey { entry, elem: STRIP_BASE }));
-        let mut ms = 0;
-        let mut walk = |dir, expected| {
-            ms += 16;
-            d.frame(&mut rig, tick(ms), vec![key(dir, tick(ms))], vec![], &mut NoTap);
-            assert_eq!(d.focus(), Some(FocusKey { entry, elem: expected }));
-        };
-        walk(Key::Left, keys[0]);
-        walk(Key::Left, keys[0]);
-        for &expected in &keys[1..] { walk(Key::Right, expected); }
-        walk(Key::Right, *keys.last().unwrap());
-        for &expected in keys[..keys.len() - 1].iter().rev() { walk(Key::Left, expected); }
-        walk(Key::Left, keys[0]);
-    }
-}
-
-#[test]
-fn removing_a_preceding_tab_keeps_the_same_destination_focused() {
-    let (mut d, mut rig) = boot(FixtureArg::Home);
-    d.nav.tabs.strip = vec![
-        StripMember::new(STRIP_BASE, Rect::new(100.0, 10.0, 160.0, 48.0)),
-        StripMember::new(STRIP_BASE + 1, Rect::new(280.0, 10.0, 160.0, 48.0)),
-        StripMember::new(STRIP_BASE + 2, Rect::new(460.0, 10.0, 160.0, 48.0)),
-    ];
-    let home = d.nav.top_page().unwrap().id;
-    let search = FocusKey { entry: home, elem: STRIP_BASE + 2 };
-    d.set_focus(Some(search));
-    // The middle destination disappears (its last favourite library was removed).
-    d.nav.tabs.strip.remove(1);
-    d.frame(&mut rig, tick(16), vec![], vec![], &mut NoTap);
-    assert_eq!(d.focus(), Some(search), "position changed, destination identity did not");
-    d.frame(&mut rig, tick(32), vec![key(Key::Left, tick(32))], vec![], &mut NoTap);
-    assert_eq!(elem(&d), Some(STRIP_BASE), "LEFT walks surviving visual order, not key arithmetic");
-    d.frame(&mut rig, tick(48), vec![key(Key::Right, tick(48))], vec![], &mut NoTap);
-    assert_eq!(d.focus(), Some(search));
-}
 
 #[test]
 fn strip_identity_is_logical_but_its_animation_geometry_is_not() {
@@ -378,7 +303,7 @@ fn strip_pointer_stops_use_drawn_geometry_and_stable_keys() {
     let drawn = Rect::new(100.0, 10.0, 160.0, 48.0);
     let target = Rect::new(140.0, 10.0, 160.0, 48.0);
     let clip = Rect::new(110.0, 0.0, 150.0, 100.0);
-    d.nav.tabs.strip = vec![StripMember { elem: STRIP_BASE + 3, drawn, target, clip }];
+    d.nav.tabs.strip = vec![StripMember { elem: STRIP_BASE + 3, drawn, target, clip, group: super::containers::tabs::STRIP }];
     d.draw(&mut rig, true);
     let stop = d.input.hit.front().iter().find(|s| s.key.elem == STRIP_BASE + 3)
         .expect("the container must register its own drawn strip in the hit map");
@@ -389,20 +314,6 @@ fn strip_pointer_stops_use_drawn_geometry_and_stable_keys() {
     assert_eq!(bounds(stop.clip), bounds(clip));
 }
 
-#[test]
-fn a_folded_page_keeps_visible_strip_clicks_without_hover_reseating() {
-    let (mut d, mut rig) = boot(FixtureArg::Snapped);
-    d.nav.tabs.strip = vec![StripMember::new(STRIP_BASE, Rect::new(100.0, 10.0, 160.0, 48.0))];
-    let before = d.focus();
-    d.draw(&mut rig, true);
-    assert!(d.input.hit.front().iter().any(|s| s.key.elem == STRIP_BASE),
-        "a visible strip is still clickable when directional entry is disabled");
-    d.frame(&mut rig, tick(16), vec![pointer(150.0, 30.0, tick(16))], vec![], &mut NoTap);
-    assert_eq!(d.focus(), before, "hovering the strip cannot fold the page");
-    d.frame(&mut rig, tick(32), vec![click(150.0, 30.0, tick(32))], vec![], &mut NoTap);
-    assert_eq!(d.focus(), before);
-    assert!(events_of(&d, 0).contains("\"activate\""));
-}
 
 #[test]
 fn a_covered_strip_cannot_focus_or_activate_the_modal_and_counts_as_an_outside_click() {
@@ -873,4 +784,142 @@ fn resolve_mode_reports_every_mismatch_and_continues_from_the_recording() {
     assert!(report.safe_lines().iter().any(|l| l.starts_with("focus f=2 recorded=Some((1, 0")), "{:?}", report.safe_lines());
     let silent = replay(&rec, false);
     assert!(silent.focus_diffs.is_empty(), "targets mode does not grade the engine");
+}
+
+/// The rail's column at x 0..100, one 72-tall slot per key from y 400 (the shape `app::chrome`
+/// publishes).
+fn rail(keys: &[u32]) -> Vec<StripMember<u32>> {
+    keys.iter().enumerate().map(|(i, &key)| StripMember::new(key, Rect::new(0.0, 400.0 + 72.0 * i as f32, 100.0, 72.0))).collect()
+}
+
+/// §6.2: the rail is the CONTAINER's group beside the page's, and the dispatcher is its one door:
+/// a LEFT the page has no answer for enters it on the page's own item, UP/DOWN walk it, RIGHT
+/// returns to the seat the LEFT came from — and the page gates it: a page that declines the rail
+/// keeps its own focus on that LEFT.
+#[test]
+fn the_rail_is_the_containers_group_entered_on_a_left_the_page_has_no_answer_for() {
+    let (mut d, mut rig, _) = booted();
+    d.nav.tabs.strip = rail(&[STRIP_BASE, STRIP_BASE + 3, STRIP_BASE + 1, STRIP_BASE + 2, STRIP_BASE + 4]);
+    d.nav.tabs.strip_active = Some(STRIP_BASE);
+    let home = d.nav.top_page().unwrap().id;
+    d.set_focus(Some(FocusKey { entry: home, elem: 2 }));
+    d.frame(&mut rig, tick(16), vec![key(Key::Left, tick(16))], vec![], &mut NoTap);
+    assert_eq!(elem(&d), Some(1), "LEFT inside the row is the page's own");
+    for ms in [32, 48] {
+        d.frame(&mut rig, tick(ms), vec![key(Key::Left, tick(ms))], vec![], &mut NoTap);
+    }
+    assert_eq!(elem(&d), Some(STRIP_BASE), "LEFT at the first column enters the rail on the page's own item");
+    d.frame(&mut rig, tick(64), vec![key(Key::Down, tick(64))], vec![], &mut NoTap);
+    assert_eq!(elem(&d), Some(STRIP_BASE + 3), "DOWN walks the rail");
+    d.frame(&mut rig, tick(80), vec![key(Key::Up, tick(80))], vec![], &mut NoTap);
+    d.frame(&mut rig, tick(96), vec![key(Key::Up, tick(96))], vec![], &mut NoTap);
+    assert_eq!(elem(&d), Some(STRIP_BASE), "UP stops at the first item");
+    d.frame(&mut rig, tick(112), vec![key(Key::Right, tick(112))], vec![], &mut NoTap);
+    assert_eq!(elem(&d), Some(0), "RIGHT returns to the seat the LEFT came from");
+    let ev = events_of(&d, 0);
+    assert!(ev.matches("\"focus_moved\"").count() >= 5, "the owner heard every move: {ev}");
+
+    // the gate: a page that declines the rail keeps its focus
+    let (mut d, mut rig) = boot(FixtureArg::Snapped);
+    d.nav.tabs.strip = rail(&[STRIP_BASE]);
+    let e = d.nav.top_page().unwrap().id;
+    d.set_focus(Some(FocusKey { entry: e, elem: 0 }));
+    d.frame(&mut rig, tick(16), vec![key(Key::Left, tick(16))], vec![], &mut NoTap);
+    assert_eq!(elem(&d), Some(0), "no rail beside a page that declines it");
+}
+
+/// The column's two ends are terminal whatever the rail holds, and a member that disappears
+/// renumbers nothing: UP walks the surviving order, by identity.
+#[test]
+fn the_rail_walks_both_ends_and_survives_a_removed_member_by_identity() {
+    for keys in [vec![STRIP_BASE, STRIP_BASE + 4], vec![STRIP_BASE, STRIP_BASE + 3, STRIP_BASE + 2, STRIP_BASE + 4],
+        vec![STRIP_BASE, STRIP_BASE + 3, STRIP_BASE + 1, STRIP_BASE + 2, STRIP_BASE + 4]] {
+        let (mut d, mut rig) = boot(FixtureArg::Home);
+        let entry = d.nav.top_page().unwrap().id;
+        d.nav.tabs.strip = rail(&keys);
+        d.set_focus(Some(FocusKey { entry, elem: keys[0] }));
+        let mut ms = 0;
+        let mut walk = |dir, expected| {
+            ms += 16;
+            d.frame(&mut rig, tick(ms), vec![key(dir, tick(ms))], vec![], &mut NoTap);
+            assert_eq!(d.focus(), Some(FocusKey { entry, elem: expected }));
+        };
+        walk(Key::Up, keys[0]);
+        for &expected in &keys[1..] { walk(Key::Down, expected); }
+        walk(Key::Down, *keys.last().unwrap());
+        for &expected in keys[..keys.len() - 1].iter().rev() { walk(Key::Up, expected); }
+        walk(Key::Left, keys[0]);
+    }
+    let (mut d, mut rig) = boot(FixtureArg::Home);
+    d.nav.tabs.strip = rail(&[STRIP_BASE, STRIP_BASE + 1, STRIP_BASE + 2]);
+    let home = d.nav.top_page().unwrap().id;
+    let settings = FocusKey { entry: home, elem: STRIP_BASE + 2 };
+    d.set_focus(Some(settings));
+    // The middle destination disappears (a library row whose library left the server).
+    d.nav.tabs.strip = rail(&[STRIP_BASE, STRIP_BASE + 2]);
+    d.frame(&mut rig, tick(16), vec![], vec![], &mut NoTap);
+    assert_eq!(d.focus(), Some(settings), "position changed, destination identity did not");
+    d.frame(&mut rig, tick(32), vec![key(Key::Up, tick(32))], vec![], &mut NoTap);
+    assert_eq!(elem(&d), Some(STRIP_BASE), "UP walks surviving visual order, not key arithmetic");
+    d.frame(&mut rig, tick(48), vec![key(Key::Down, tick(48))], vec![], &mut NoTap);
+    assert_eq!(d.focus(), Some(settings));
+}
+
+/// A rail control's activation is the application's: OK or a click goes to `Rig::strip_activate`,
+/// never to the page under it — even a page that declines directional entry keeps its visible
+/// rail clickable, and hovering it cannot move the page's focus.
+#[test]
+fn a_rail_press_goes_to_the_application_never_to_the_page() {
+    let (mut d, mut rig) = boot(FixtureArg::Snapped);
+    d.nav.tabs.strip = rail(&[STRIP_BASE]);
+    let before = d.focus();
+    d.draw(&mut rig, true);
+    assert!(d.input.hit.front().iter().any(|s| s.key.elem == STRIP_BASE),
+        "a visible rail is still clickable when directional entry is disabled");
+    d.frame(&mut rig, tick(16), vec![pointer(50.0, 430.0, tick(16))], vec![], &mut NoTap);
+    assert_eq!(d.focus(), before, "hovering the rail cannot fold the page");
+    d.frame(&mut rig, tick(32), vec![click(50.0, 430.0, tick(32))], vec![], &mut NoTap);
+    assert_eq!(d.focus(), before);
+    assert_eq!(rig.strip_activations, vec![STRIP_BASE], "the click is the application's");
+    assert!(!events_of(&d, 0).contains("\"activate\""), "the page never sees a rail press");
+
+    let (mut d, mut rig) = boot(FixtureArg::Home);
+    d.nav.tabs.strip = rail(&[STRIP_BASE, STRIP_BASE + 3]);
+    let home = d.nav.top_page().unwrap().id;
+    d.set_focus_in(Some(FocusKey { entry: home, elem: STRIP_BASE + 3 }), Some(super::containers::tabs::STRIP));
+    d.frame(&mut rig, tick(16), vec![key(Key::Ok, tick(16))], vec![], &mut NoTap);
+    assert_eq!(rig.strip_activations, vec![STRIP_BASE + 3], "OK on a rail item activates on the down edge");
+    assert!(!events_of(&d, 0).contains("\"activate\""));
+}
+
+/// The Libraries popover with the pointer: its rows hang beside the item that opened it, so the
+/// pointer crosses that item to reach them. Hovering it must not pull focus off the rows (the
+/// application closes the popover once focus leaves them); a row takes hover and its click is
+/// the application's, and the opener is a hover target again once the popover has closed.
+#[test]
+fn the_pointer_crosses_the_popovers_opener_to_reach_its_rows() {
+    use super::containers::tabs::POPOVER;
+    let (mut d, mut rig) = boot(FixtureArg::Home);
+    let home = d.nav.top_page().unwrap().id;
+    let opener = STRIP_BASE + 1;
+    let rows = [STRIP_BASE + 10, STRIP_BASE + 11];
+    // The opener's slot is y 472..544; its rows start at x=100, where the rail ends.
+    let mut strip = rail(&[STRIP_BASE, opener, STRIP_BASE + 2]);
+    strip.extend(rows.iter().enumerate()
+        .map(|(j, &key)| StripMember::new(key, Rect::new(100.0, 474.0 + 48.0 * j as f32, 254.0, 48.0)).in_popover()));
+    d.nav.tabs.strip = strip;
+    d.nav.tabs.popover_opener = Some(opener);
+    d.set_focus_in(Some(FocusKey { entry: home, elem: rows[0] }), Some(POPOVER));
+    d.draw(&mut rig, true);
+    d.frame(&mut rig, tick(16), vec![pointer(60.0, 500.0, tick(16))], vec![], &mut NoTap);
+    assert_eq!(elem(&d), Some(rows[0]), "hovering the opener leaves focus on the row");
+    d.frame(&mut rig, tick(32), vec![pointer(200.0, 540.0, tick(32))], vec![], &mut NoTap);
+    assert_eq!(elem(&d), Some(rows[1]), "a row takes hover");
+    d.frame(&mut rig, tick(48), vec![click(200.0, 540.0, tick(48))], vec![], &mut NoTap);
+    assert_eq!(rig.strip_activations, vec![rows[1]], "the row's click is the application's");
+
+    d.nav.tabs.close_popover();
+    d.draw(&mut rig, true);
+    d.frame(&mut rig, tick(64), vec![pointer(60.0, 500.0, tick(64))], vec![], &mut NoTap);
+    assert_eq!(elem(&d), Some(opener), "a closed popover's opener takes hover like any item");
 }

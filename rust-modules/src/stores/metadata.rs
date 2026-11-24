@@ -62,6 +62,8 @@
 //! - `SetNowPlaying(Option<NowPlaying>)` → `metadata::set_now_playing`.
 //! - `SetWatchedLocal{sid, rk, on}` → `metadata::set_watched_local` — the optimistic half of a
 //!   view-state write, answers whether it actually changed anything.
+//! - `SetFavoriteLocal{sid, rk, on}` → the loaded item's `Detail::favorite` — the optimistic half
+//!   of a favourite write, answering likewise.
 //! - `SelectVersion{sid, rk, part}` → `Detail::select_version` on the loaded item — the version
 //!   chooser; answers whether the page now describes a different version.
 //! - `SelectTracks{sid, rk, part, choice}` → `Detail::select_tracks` on the loaded item — the
@@ -171,6 +173,8 @@ pub(crate) enum MetadataCmd {
     SetNowPlaying(Option<crate::metadata::NowPlaying>),
     /// The optimistic half of a view-state write on the loaded item, its episodes and Related.
     SetWatchedLocal { sid: ServerId, rk: String, on: bool },
+    /// The optimistic half of a favourite write on the loaded item.
+    SetFavoriteLocal { sid: ServerId, rk: String, on: bool },
     /// The version chooser: describe and play the version of the loaded `(sid, rk)` whose part is
     /// `part` (`Detail::select_version`).
     SelectVersion { sid: ServerId, rk: String, part: String },

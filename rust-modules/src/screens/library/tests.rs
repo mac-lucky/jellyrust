@@ -48,7 +48,7 @@ fn page_memory_shares_1200_keys_and_preserves_older_snapshots() {
     let _guard = nj_base::testlock::serial();
     let sid = crate::catalog::ServerId::from_raw(1);
     let section = LibrarySectionIdentity { sid, key: 7 };
-    let mut page = LibraryScreen::new(ENTRY, InstanceId(20), SecKind::Movie);
+    let mut page = LibraryScreen::new(ENTRY, InstanceId(20), None);
     for index in 0..1200 {
         page.keys.register(LibraryIdentity::Grid {
             section: section.clone(), sid, rk: format!("fixture-{index}"),
@@ -117,7 +117,7 @@ fn all_grid_caption_band_restores_with_the_saved_viewport() {
     page.relayout(Some(key));
     let before = page.place(&key.elem, &fixture.cx(Some(key)), At::Drawn).unwrap();
     let PageMemory::Library(memory) = <LibraryScreen as Screen<HostFixture>>::memory(&page) else { panic!() };
-    let mut restored = LibraryScreen::new(ENTRY, InstanceId(20), SecKind::Movie);
+    let mut restored = LibraryScreen::new(ENTRY, InstanceId(20), None);
     restored.restore(&memory);
     restored.sync(&fixture.cx(Some(key)));
     let after = restored.place(&key.elem, &fixture.cx(Some(key)), At::Drawn).unwrap();
@@ -155,7 +155,7 @@ fn all_grid_moves_open_only_the_destination_band_and_use_settled_reveal() {
     let mut page = fixture.screen();
     page.initial = false;
     let mut engine = FocusEngine::new();
-    let first = page.key(page.pair.detail.elem_at(12).unwrap());
+    let first = page.key(page.pair.detail.elem_at(2 * COLS).unwrap());
     page.relayout(Some(first));
     engine.set(OWNER, first, Some(page.pair.groups_config().detail), By::Restore);
     direction(&mut page, &mut engine, &fixture, Dir::Down);
@@ -174,17 +174,17 @@ fn all_grid_moves_open_only_the_destination_band_and_use_settled_reveal() {
 }
 
 #[test]
-fn grid_paint_window_keeps_cards_above_the_centered_tab_track() {
+fn grid_paint_window_keeps_cards_poking_in_at_the_top_edge() {
     let _guard = nj_base::testlock::serial();
     let fixture = Fixture::new();
     let mut page = fixture.screen();
     let layout = page.layout;
     let index = 2 * COLS;
-    let y = crate::ui::widgets::TOP_BAR_BOTTOM - crate::ui::consts::CARD_H - 8.0;
+    let y = 8.0 - layout.card_h();
     let scroll = layout.row_y(2, 0.0) - y;
     page.pair.detail.set_geometry(layout, scroll, layout, scroll);
     let rect = page.pair.detail.rect_at(index, false, 1.0);
-    assert!(rect.y + rect.h > 0.0 && rect.y + rect.h < crate::ui::widgets::TOP_BAR_BOTTOM);
+    assert!(rect.y < 0.0 && rect.y + rect.h > 0.0, "the card straddles the top edge: {rect:?}");
     let (lo, hi) = page.pair.detail.visible_window();
     assert!((lo..hi).contains(&index), "the real paint iterator must include this visible card");
 
@@ -328,7 +328,7 @@ fn derived_grid_indexes_survive_reorder_truncation_clear_and_restore() {
     assert_eq!(page.pair.detail.index_of(stable), None);
 
     fixture.listing = original.with_total(10);
-    let mut restored = LibraryScreen::new(ENTRY, InstanceId(20), SecKind::Movie);
+    let mut restored = LibraryScreen::new(ENTRY, InstanceId(20), None);
     restored.restore(&memory);
     restored.sync(&fixture.cx(None));
     assert_eq!(restored.pair.detail.elem_at(5), Some(stable),
@@ -355,63 +355,43 @@ fn down_from_a_missing_final_row_column_clamps_to_the_last_item() {
     assert_eq!(engine.current(OWNER), Some(page.key(page.pair.detail.elems[7])), "the last row remains an edge");
 }
 
+/// The alphabet bar is a block of the document (Litefin 6): the controls above it, the grid below
+/// it, reached by UP and DOWN only - the grid's right edge is an edge, not a door into it.
 #[test]
-fn rail_eligibility_and_last_producer_hold_over_a_long_shelf() {
+fn the_alphabet_bar_stands_between_the_controls_and_the_grid() {
     let _guard = nj_base::testlock::serial();
-    let session = crate::catalog::session::TempSession::new("library-rail-layer");
-    session.watching("u-library-rail-layer");
-    let mut fixture = Fixture::shelves(&["movie.inprogress.1", "movie.recentlyadded.1"], 12);
-    let view = fixture.listing.view();
-    let id = view.id().unwrap();
-    let items = (0..view.total() as usize).map(|i| view.item(i).cloned()).collect();
-    fixture.listing = crate::browse::view::ListingSnapshot::fixture(id.sid, items,
-        (0..9).map(|i| (format!("{i}"), 14)).collect()).with_section(id.epoch, id.section);
+    let fixture = Fixture::new();
     let mut page = fixture.screen();
-    assert!(page.layout.row_y(0, page.scroll.pos) > SCR_H, "the fixture grid starts below the viewport");
-    let shelf = page.key(*page.shelves[0].elems.last().unwrap());
-    let mut engine = FocusEngine::new();
-    engine.set(OWNER, shelf, Some(page.shelves[0].group), By::Restore);
+    let master = page.pair.groups_config().master;
+    let detail = page.pair.groups_config().detail;
+    let mut links = Vec::new();
+    <LibraryScreen as Screen<HostFixture>>::links(&page, &mut links);
+    let link = |from: GroupId, dir: Dir| links.iter().find(|link| link.from == from && link.dir == dir).map(|link| link.to);
+    eprintln!("LINKS {:?} toolbar {:?} tabs {:?} master {master:?} detail {detail:?}", links.iter().map(|l| (l.from, l.dir, l.to)).collect::<Vec<_>>(), page.toolbar_group(), page.tabs);
+    assert_eq!(link(page.toolbar_group(), Dir::Down), Some(master));
+    assert_eq!(link(master, Dir::Down), Some(detail));
+    assert_eq!(link(detail, Dir::Up), Some(master));
+    assert_eq!(link(master, Dir::Left), None, "no side door out of the bar");
     let mut groups = Vec::new();
-    page.groups(&fixture.cx(Some(shelf)), &mut groups);
-    assert!(!groups.iter().any(|group| group.id == page.pair.groups_config().master));
-    direction(&mut page, &mut engine, &fixture, Dir::Right);
-    assert_eq!(engine.current(OWNER), Some(shelf), "the shelf edge cannot enter an ineligible rail");
+    page.groups(&fixture.cx(None), &mut groups);
+    let bar = groups.iter().find(|group| group.id == master).expect("the bar is always a group under a grid");
+    assert_eq!(bar.extent.y, page.target_layout.alpha_y(page.scroll_target));
+    assert_eq!(bar.len, layout::ALPHABET.len());
 
-    let grid = page.key(page.pair.detail.elems[0]);
-    engine.set(OWNER, grid, Some(page.pair.groups_config().detail), By::Restore);
-    let cx = fixture.cx(Some(grid));
-    page.pair.master.advance(&cx, Some(0), true, 0.05);
-    let rail = page.key(page.pair.master.elems[0]);
-    let placed = page.place(&rail.elem, &cx, At::Drawn).unwrap();
-    assert!(placed.clip.h > 0.0);
+    let mut engine = FocusEngine::new();
+    let last = page.key(page.pair.detail.elem_at(COLS - 1).unwrap());
+    engine.set(OWNER, last, Some(detail), By::Restore);
+    direction(&mut page, &mut engine, &fixture, Dir::Right);
+    assert_eq!(engine.current(OWNER), Some(last), "the grid's right edge does not enter the bar");
+    let cx = fixture.cx(Some(last));
+    let letter = page.key(page.pair.master.elems[0]);
+    let placed = page.place(&letter.elem, &cx, At::Drawn).unwrap();
     let mut draw = DrawFrame::new(&cx, crate::ui::Painter::root());
     page.record_stops(&mut draw);
-    let stops = draw.into_stops();
-    assert!(stops.iter().any(|stop| region_of_elem(stop.key.elem) == Some(KeyRegion::Shelf)
-        && stop.rect.intersect(stop.clip).contains(placed.rect.cx(), placed.rect.cy())), "the producer-order assertion needs actual overlap");
     let mut hit = crate::ui::hit::HitMap::new();
-    hit.fill(stops); hit.swap();
-    assert_eq!(hit.top_at(placed.rect.cx(), placed.rect.cy()).map(|stop| stop.key), Some(rail),
-        "the eligible rail must paint and register after the document's wide shelf");
-}
-
-#[test]
-fn owned_rail_keeps_the_fixed_legacy_origin_and_short_window() {
-    let _guard = nj_base::testlock::serial();
-    for n in [9, 30] {
-        let mut fixture = Fixture::new();
-        let sid = crate::catalog::ServerId::from_raw(0);
-        fixture.listing = crate::browse::view::ListingSnapshot::fixture(sid,
-            (0..36).map(|i| Some(crate::catalog_fetch::PmsMovie { sid, rk: format!("{i}"), ..Default::default() })).collect(),
-            (0..n).map(|i| (format!("{i}"), 1)).collect());
-        let page = fixture.screen();
-        let mut groups = Vec::new();
-        page.pair.master.groups(&fixture.cx(Some(page.key(page.pair.detail.elems[0]))), &mut groups);
-        let rail = groups.first().expect("the fixture has a real rail").extent;
-        assert_eq!(rail.y, 240.0, "the rail is not attached to the scrolling first grid row");
-        if n == 9 { assert_eq!(rail.h, 9.0 * layout::RAIL_PITCH); }
-        else { assert!(rail.h < n as f32 * layout::RAIL_PITCH, "long alphabets scroll at the same pitch"); }
-    }
+    hit.fill(draw.into_stops()); hit.swap();
+    assert_eq!(hit.top_at(placed.rect.cx(), placed.rect.cy()).map(|stop| stop.key), Some(letter),
+        "the bar paints and registers its letters");
 }
 
 #[test]
@@ -611,7 +591,9 @@ fn a_fully_discovered_missing_kind_finishes_its_fade_and_has_no_foreign_grid() {
         crate::browse::view::SectionView { sid: Some(crate::catalog::ServerId::from_raw(0)), key: 1,
             kind: SecKind::Movie, row: crate::browse::SrcRow { section: 0, title: "Cinema".into(),
                 pinned: true, current: true, ..Default::default() } }]);
-    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Show);
+    // A library the fully discovered table does not list (the rail named one that has gone).
+    let gone = crate::screens::registry::LibrarySectionIdentity { sid: crate::catalog::ServerId::from_raw(0), key: 9 };
+    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), Some(gone.clone()));
     page.page_fade.mount();
     let mut out = Vec::new();
     let mut present = nj_machine::present::Present::new();
@@ -621,7 +603,7 @@ fn a_fully_discovered_missing_kind_finishes_its_fade_and_has_no_foreign_grid() {
     }
     assert_eq!(page.readout, Readout::Empty);
     assert_eq!(page.page_fade.alpha(), 1.0, "a terminal absent type must not hold the page at black");
-    assert_eq!(page.kind, SecKind::Show, "the requested type is not silently replaced by Movies");
+    assert_eq!(page.wanted, Some(gone), "the requested library is not silently replaced by the current one");
     assert_eq!(page.status_text(&fixture.cx(None)).0.to_str().unwrap(), "Nothing here matches");
     assert!(!out.iter().any(|effect| matches!(&effect.fx, Fx::App(AppFx::Store(StoreId::Browse,
         StoreCmd::Browse(BrowseCmd::Addressed { work: LibraryWork::Want { .. }, .. }))))),
@@ -641,8 +623,8 @@ fn owned_card_stops_clip_pointer_hits_and_hold_the_engine_item() {
     let fixture = Fixture::new();
     let mut page = fixture.screen();
     page.initial = false;
-    page.scroll.jump(400.0);
-    page.scroll_target = 400.0;
+    page.scroll.jump(500.0);
+    page.scroll_target = 500.0;
     let first = page.key(page.pair.detail.elems[0]);
     let chosen = page.key(page.pair.detail.elems[1]);
     page.relayout(Some(first));
@@ -708,7 +690,7 @@ fn a_compact_menu_keeps_the_host_store_pump_and_deferred_commit_live() {
     let _guard = nj_base::testlock::serial();
     let fixture = Fixture::new();
     let mut page = fixture.screen();
-    page.wanted_kind = None;
+    page.wanted = None;
     let target = page.address(&fixture.cx(None)).unwrap();
     let mut out = Vec::new();
     let mut present = nj_machine::present::Present::new();
@@ -738,28 +720,21 @@ fn published_library_projection_and_layout_enter_canonical_state() {
     page.target_layout.rows += 1;
     assert_ne!(prior, hash(&page), "target document geometry determines reveal and placement");
     let prior = hash(&page);
-    page.libraries.push((MORE, usize::MAX));
-    assert_ne!(prior, hash(&page), "bounded favorite window determines available controls");
-    let prior = hash(&page);
     page.readout = Readout::Failed;
     assert_ne!(prior, hash(&page), "failure control availability is logical state");
 }
 
 #[test]
-fn library_capsule_and_control_motion_enter_canonical_state() {
+fn head_pill_motion_enters_canonical_state() {
     let hash = |page: &LibraryScreen| {
         let mut c = Canon::new();
         page.write(&mut c);
         c.finish()
     };
-    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Movie);
+    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), None);
     let initial = hash(&page);
-    page.library_capsules.update(0, 0, |_| Some((120.0, 180.0)),
-        crate::ui::widgets::SelMark::Travels, 0.016);
-    let capsule = hash(&page);
-    assert_ne!(initial, capsule, "held capsule geometry affects subsequent frames");
-    page.library_pop.step(Some(0), 0.016);
-    assert_ne!(capsule, hash(&page), "control focus and spring velocity affect subsequent frames");
+    page.head_pop.step(Some(0), 0.016);
+    assert_ne!(initial, hash(&page), "control focus and spring velocity affect subsequent frames");
 }
 
 #[test]
@@ -769,24 +744,15 @@ fn pending_semantic_commits_change_the_library_state_hash() {
         page.write(&mut canon);
         canon.finish()
     }
-    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Movie);
+    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), None);
     let empty = hash(&page);
-    let section = SectionTarget { epoch: 1, index: 0,
-        identity: LibrarySectionIdentity { sid: crate::catalog::ServerId::from_raw(0), key: 1 }, kind: SecKind::Movie };
-    page.pending.request_section(section.clone());
-    let with_section = hash(&page);
-    assert_ne!(empty, with_section, "a next-frame section commit must enter canonical state");
-    page.pending.request_section(SectionTarget { epoch: 2, ..section.clone() });
-    assert_ne!(with_section, hash(&page), "epoch refusal changes the next commit");
-    page.pending.request_section(SectionTarget { identity: LibrarySectionIdentity {
-        sid: crate::catalog::ServerId::from_raw(1), key: 1 }, ..section });
-    assert_ne!(with_section, hash(&page), "same section key on another server is a different commit");
     let target = GridTarget { epoch: 1, sid: crate::catalog::ServerId::from_raw(0), section: 1, query: 1 };
     let actions = [GridAction::Unwatched { desired: true }, GridAction::Unwatched { desired: false },
         GridAction::Sort { key: "titleSort".into(), desc: false }, GridAction::Sort { key: "titleSort".into(), desc: true },
         GridAction::Sort { key: "addedAt".into(), desc: true }, GridAction::Genre { id: None },
-        GridAction::Genre { id: Some("7".into()) }];
-    let mut hashes = vec![empty, with_section];
+        GridAction::Genre { id: Some("7".into()) }, GridAction::Drill { id: None },
+        GridAction::Drill { id: Some("7".into()) }];
+    let mut hashes = vec![empty];
     for action in actions {
         page.pending.request_grid(target.clone(), action);
         let next = hash(&page);
@@ -795,12 +761,10 @@ fn pending_semantic_commits_change_the_library_state_hash() {
     }
 }
 
-// `pub(super)`, not private: `selector_matrix_tests.rs` (a sibling test module) reuses this
-// harness wholesale rather than duplicating it, per the guide at the top of that file.
-pub(super) struct Fixture {
+struct Fixture {
     stores: Option<crate::stores::Stores>,
     listing: crate::stores::browse::ListingSnapshot,
-    pub(super) directory: crate::stores::browse::DirectorySnapshot,
+    directory: crate::stores::browse::DirectorySnapshot,
     hubs: crate::stores::browse::HubsSnapshot,
     measure: FixtureMeasure,
 }
@@ -939,16 +903,20 @@ fn foreign_section_replacement_upgrades_a_grid_fade_once() {
 }
 
 #[test]
-fn toolbar_stops_use_the_shared_value_chip_measurement() {
+fn control_stops_use_the_pills_own_measurement() {
     let _guard = nj_base::testlock::serial();
     let fixture = Fixture::new();
     let page = fixture.screen();
     let cx = fixture.cx(None);
     let sort = page.place(&SORT, &cx, At::Drawn).unwrap().rect;
     let filter = page.place(&FILTER, &cx, At::Drawn).unwrap().rect;
-    assert_eq!(sort.w, crate::ui::value_chip::ValueChip::width(cx.measure, c"Sort", c" · Title", None));
-    assert_eq!(filter.w, crate::ui::value_chip::ValueChip::width(cx.measure, c"Filter", c" · All", None));
-    assert_eq!(filter.x, sort.x + sort.w + 16.0);
+    assert_eq!(sort.w, page.control_pill(SORT, &cx).width(cx.measure));
+    assert_eq!(filter.w, page.control_pill(FILTER, &cx).width(cx.measure));
+    assert_eq!(filter.x, sort.x + sort.w + 20.0, "Litefin's controls stand 20 apart");
+    for tab in page.tab_elems() {
+        let rect = page.place(&tab, &cx, At::Drawn).unwrap().rect;
+        assert_eq!(rect.h, layout::TAB_H);
+    }
 }
 
 #[test]
@@ -974,9 +942,9 @@ fn section_grid_memories_do_not_overwrite_one_another() {
     assert!(engine.remembered_for(ENTRY).contains(&(group_b, card_b.elem)));
     engine.enter(OWNER, &page, FocusTarget::ContainerGroup(group_a), None, &fixture.cx(engine.current(OWNER)));
     assert_eq!(engine.current(OWNER), Some(card_a), "Remembered seating restores the exact section card");
-    // Enter the rail through a toolbar: projection must consult only this section's grid memory.
+    // Enter the bar from the controls: projection must consult only this section's grid memory.
     engine.set(OWNER, page.key(FILTER), Some(page.toolbar_group()), By::Dir);
-    direction(&mut page, &mut engine, &fixture, Dir::Right);
+    direction(&mut page, &mut engine, &fixture, Dir::Down);
     assert_eq!(page.pair.master.start_for_elem(engine.current(OWNER).unwrap().elem), Some(0));
 }
 
@@ -993,7 +961,7 @@ fn section_viewport_bookmarks_survive_switch_and_evicted_body() {
     page.sync(&fixture.cx(None));
     assert_eq!(page.scroll.pos, 0.0, "a new section starts at its own head");
     let PageMemory::Library(memory) = <LibraryScreen as Screen<HostFixture>>::memory(&page) else { panic!() };
-    let mut evicted = LibraryScreen::new(ENTRY, InstanceId(20), SecKind::Movie);
+    let mut evicted = LibraryScreen::new(ENTRY, InstanceId(20), None);
     evicted.restore(&memory);
     evicted.sync(&fixture.cx(None));
     fixture.listing = first;
@@ -1064,7 +1032,7 @@ impl Fixture {
             press: PressRead::default(), owner: OWNER }
     }
     pub(super) fn screen(&self) -> LibraryScreen {
-        let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Movie);
+        let mut page = LibraryScreen::new(ENTRY, InstanceId(19), None);
         page.sync(&self.cx(None));
         page
     }
@@ -1124,7 +1092,7 @@ fn shelf_horizontal_viewport_and_engine_item_survive_body_eviction() {
     let mut engine = FocusEngine::new();
     engine.set(OWNER, key, Some(page.shelves[0].group), By::Restore);
     let memory = page.page_memory();
-    let mut restored = LibraryScreen::new(ENTRY, InstanceId(20), SecKind::Movie);
+    let mut restored = LibraryScreen::new(ENTRY, InstanceId(20), None);
     restored.restore(&memory);
     restored.sync(&fixture.cx(Some(key)));
     engine.enter(OWNER, &restored, FocusTarget::ContainerGroup(restored.shelves[0].group), Some(key), &fixture.cx(Some(key)));
@@ -1152,7 +1120,7 @@ fn shelf_return_follows_the_film_then_its_last_published_slot() {
             let publication = stores.capture_browse(&mut fixture.directory);
             fixture.hubs = publication.section_hubs;
             if evict {
-                page = LibraryScreen::new(ENTRY, InstanceId(20), SecKind::Movie);
+                page = LibraryScreen::new(ENTRY, InstanceId(20), None);
                 page.restore(&memory);
             }
             page.sync(&fixture.cx(Some(key)));
@@ -1169,27 +1137,7 @@ fn shelf_return_follows_the_film_then_its_last_published_slot() {
 }
 
 #[test]
-fn projected_entry_preserves_the_last_item_within_a_letter_then_live_move_jumps() {
-    let _guard = nj_base::testlock::serial();
-    let fixture = Fixture::new();
-    let mut page = fixture.screen();
-    let mut engine = FocusEngine::new();
-    let exact = page.key(page.pair.detail.elem_at(17).unwrap());
-    engine.set(OWNER, exact, Some(page.pair.groups_config().detail), By::Restore);
-    assert_eq!(direction(&mut page, &mut engine, &fixture, Dir::Right), 0);
-    assert_eq!(engine.current_group(OWNER), Some(page.pair.groups_config().master));
-    assert_eq!(page.pair.master.start_for_elem(engine.current(OWNER).unwrap().elem), Some(0));
-    assert_eq!(engine.remembered_for(ENTRY).iter().find(|(g, _)| *g == page.pair.groups_config().detail).unwrap().1, exact.elem);
-    direction(&mut page, &mut engine, &fixture, Dir::Left);
-    assert_eq!(engine.current(OWNER), Some(exact));
-    direction(&mut page, &mut engine, &fixture, Dir::Right);
-    assert_eq!(direction(&mut page, &mut engine, &fixture, Dir::Down), 1);
-    direction(&mut page, &mut engine, &fixture, Dir::Left);
-    assert_eq!(page.grid_position(engine.current(OWNER)), Some((3, 0)));
-}
-
-#[test]
-fn toolbar_rail_entry_uses_engine_grid_memory_and_returns_to_toolbar() {
+fn the_bar_seats_the_letter_of_the_remembered_title_and_returns_to_the_controls() {
     let _guard = nj_base::testlock::serial();
     let fixture = Fixture::new();
     let mut page = fixture.screen();
@@ -1197,9 +1145,9 @@ fn toolbar_rail_entry_uses_engine_grid_memory_and_returns_to_toolbar() {
     let exact = page.key(page.pair.detail.elem_at(23).unwrap());
     engine.set(OWNER, exact, Some(page.pair.groups_config().detail), By::Restore);
     engine.set(OWNER, page.key(FILTER), Some(page.toolbar_group()), By::Dir);
-    assert_eq!(direction(&mut page, &mut engine, &fixture, Dir::Right), 0);
+    assert_eq!(direction(&mut page, &mut engine, &fixture, Dir::Down), 0, "moving along the bar jumps nothing");
     assert_eq!(page.pair.master.start_for_elem(engine.current(OWNER).unwrap().elem), Some(18));
-    direction(&mut page, &mut engine, &fixture, Dir::Left);
+    direction(&mut page, &mut engine, &fixture, Dir::Up);
     assert_eq!(engine.current(OWNER), Some(page.key(FILTER)));
     assert_eq!(engine.remembered_for(ENTRY).iter().find(|(g, _)| *g == page.pair.groups_config().detail).unwrap().1, exact.elem);
 }
@@ -1217,119 +1165,63 @@ fn removed_grid_key_keeps_its_typed_master_detail_reconciliation_path() {
     page.sync(&fixture.cx(Some(original)));
     assert_eq!(<LibraryScreen as Focusable<HostFixture>>::group_of(&page, &original.elem, &fixture.cx(Some(original))), None);
     let recovered = <LibraryScreen as Focusable<HostFixture>>::reconcile(&page, original, &fixture.cx(Some(original)));
-    assert_eq!(page.grid_position(Some(recovered)), Some((2, 5)));
+    assert_eq!(page.grid_position(Some(recovered)), Some((17 / COLS, 17 % COLS)));
 }
 
 #[test]
-fn direct_rail_activation_jumps_even_when_the_letter_was_already_selected() {
+fn a_letter_jumps_the_grid_to_its_first_title_on_activation_only() {
     let _guard = nj_base::testlock::serial();
     let fixture = Fixture::new();
     let mut page = fixture.screen();
     let mut engine = FocusEngine::new();
     let exact = page.key(page.pair.detail.elem_at(17).unwrap());
     engine.set(OWNER, exact, Some(page.pair.groups_config().detail), By::Restore);
-    direction(&mut page, &mut engine, &fixture, Dir::Right);
+    let first_row = page.key(page.pair.detail.elem_at(5).unwrap());
+    engine.set(OWNER, first_row, Some(page.pair.groups_config().detail), By::Dir);
+    direction(&mut page, &mut engine, &fixture, Dir::Up);
     let letter = engine.current(OWNER).unwrap().elem;
-    assert_eq!(deliver(&mut page, &mut engine, &fixture, ScreenEvent::Activate(letter)), 1);
-    direction(&mut page, &mut engine, &fixture, Dir::Left);
-    assert_eq!(page.grid_position(engine.current(OWNER)), Some((0, 0)));
-}
-
-#[test]
-fn sort_chosen_during_section_fade_commits_to_the_incoming_library() {
-    let _guard = nj_base::testlock::serial();
-    let mut fixture = Fixture::new();
-    let sid = crate::catalog::ServerId::from_raw(0);
-    fixture.directory = crate::browse::view::DirectorySnapshot::fixture(1, 0, (0..2).map(|i|
-        crate::browse::view::SectionView { sid: Some(sid), key: i as i64 + 1, kind: SecKind::Movie,
-            row: crate::browse::SrcRow { section: i, title: format!("s{i:04x}"), pinned: true, current: i == 0, ..Default::default() } }).collect());
-    let mut page = fixture.screen();
+    assert_eq!(page.pair.master.start_for_elem(letter), Some(0), "the bar seats the letter in view");
+    direction(&mut page, &mut engine, &fixture, Dir::Right);
+    let b = engine.current(OWNER).unwrap().elem;
+    assert_eq!(page.pair.master.start_for_elem(b), Some(18), "B..Y are absent and jump on to Z");
+    assert_eq!(page.grid_position(engine.read(OWNER).remembered(page.pair.groups_config().detail)
+        .map(|elem| page.key(elem))), Some((0, 5)), "moving along the bar jumps nothing");
     let mut output = Vec::new();
     let mut present = nj_machine::present::Present::new();
-    let mut fx = Effects::new(&mut output, MachineId::Instance(InstanceId(19)), &mut present);
-    page.activate(page.libraries[1].0, false, &fixture.cx(None), &mut fx);
-    page.activate(SORT, false, &fixture.cx(None), &mut fx);
-    drop(fx);
-    let incoming = SectionAddress { epoch: 1, sid, section: 2 };
-    let target = output.iter().find_map(|effect| match &effect.fx {
-        Fx::App(AppFx::Library(LibraryReq::Menu { target, .. })) => Some(*target), _ => None,
-    }).unwrap();
-    assert_eq!(target, incoming, "menu intent follows the requested page during its outgoing fade");
-    output.clear();
-    let mut fx = Effects::new(&mut output, MachineId::Instance(InstanceId(19)), &mut present);
-    page.step(&ScreenEvent::App(AppMsg::LibraryEdit { target,
-        edit: crate::stores::browse::QueryEdit::Sort { key: "titleSort".into(), desc: true } }), &fixture.cx(None), &mut fx);
-    page.step(&ScreenEvent::WillLeave(nj_machine::machine::Leave::Deeper), &fixture.cx(None), &mut fx);
-    drop(fx);
-    assert!(output.iter().any(|effect| matches!(&effect.fx,
-        Fx::App(AppFx::Store(StoreId::Browse, StoreCmd::Browse(BrowseCmd::Addressed {
-            target, work: LibraryWork::Commit { select: true, query: Some(crate::stores::browse::QueryEdit::Sort { key, desc: true }), .. }
-        }))) if *target == incoming && key == "titleSort")), "leaving flushes selection and semantic sort in one addressed store command");
+    page.step(&ScreenEvent::Activate(b), &fixture.cx(Some(page.key(b))),
+        &mut Effects::new(&mut output, MachineId::Instance(InstanceId(19)), &mut present));
+    let mut seat = None;
+    for effect in output {
+        match effect.fx {
+            Fx::Remember { group, elem } => engine.remember_projected(ENTRY, group, elem),
+            Fx::Deliver(_, Delivery::Screen(ScreenEvent::Enter(Enter::Fresh { focus }))) => seat = Some(focus),
+            _ => {}
+        }
+    }
+    engine.enter(OWNER, &page, seat.expect("the letter goes into the grid"), None, &fixture.cx(Some(page.key(b))));
+    assert_eq!(page.grid_position(engine.current(OWNER)), Some((18 / COLS, 18 % COLS)));
 }
 
-/// Issue #100/#165: a Guest or managed profile's own household server always arrives from
-/// `/resources` with `owned: false` (`plex/account.rs:1128-1157`), so on such a profile EVERY
-/// section it sees would once have read as `borrowed`. The 0.6.x server picker's old singleton
-/// exception — carried forward wholesale into the restructure by `3c2de7ad` — read that as "still
-/// ambiguous" and left the legacy `Library · <name> ⌄` chip up, opening the old Sources popover.
-/// That is exactly the symptom the owner saw on a real TV's TV Shows page under `--guest`, and
-/// exactly the gap the maintainer named on #100: "the picker only handles multiple servers, not
-/// multiple libraries per section."
-///
-/// The fix is stronger than "ownership no longer decides this": `SectionView` carries no
-/// ownership bit at all any more, so there is nothing left FOR ownership to decide — a lone
-/// favourite clears the selector unconditionally, on every profile, because the published view
-/// has no field left to ask the old exception's question. Before the `borrowed` field's deletion
-/// this test proved the weaker claim by looping over `[true, false]`; with the field gone the loop
-/// has nothing to vary, so this now asserts the one remaining case directly.
+/// Every grid card wears its title and year at rest, not only the focused one (spec 6): the
+/// card names itself from its row through `card_row::draw_cell`.
 #[test]
-fn a_single_favourite_library_draws_no_selector() {
+fn every_grid_card_wears_its_title_and_year_at_rest() {
     let _guard = nj_base::testlock::serial();
-    let mut fixture = Fixture::new();
-    fixture.directory = crate::browse::view::DirectorySnapshot::fixture(1, 0, vec![
-        crate::browse::view::SectionView { sid: Some(crate::catalog::ServerId::from_raw(0)), key: 1,
-            kind: SecKind::Movie, row: crate::browse::SrcRow { section: 0, title: "Cinema".into(),
-                pinned: true, current: true, ..Default::default() } }]);
-    let page = fixture.screen();
-    assert!(page.libraries.is_empty(), "a lone favourite must clear the selector");
-    assert!(!page.layout.libraries, "no row height is reserved for it");
-    let cx = fixture.cx(None);
-    let mut groups = Vec::new();
-    page.groups(&cx, &mut groups);
-    assert!(!groups.iter().any(|group| group.id == LIBRARY_GROUP),
-        "no selector focus group is offered");
-    let mut draw = DrawFrame::new(&cx, crate::ui::Painter::root());
-    page.record_stops(&mut draw);
-    let stops = draw.into_stops();
-    assert!(!stops.iter().any(|stop| region_of_elem(stop.key.elem) == Some(KeyRegion::Library)),
-        "no pointer stop is registered for the selector row");
-}
-
-#[test]
-fn favorite_library_row_uses_shared_strip_geometry_and_incoming_type() {
-    let _guard = nj_base::testlock::serial();
-    let mut fixture = Fixture::new();
     let sid = crate::catalog::ServerId::from_raw(0);
-    fixture.directory = crate::browse::view::DirectorySnapshot::fixture(1, 0, (0..4).map(|i|
-        crate::browse::view::SectionView { sid: Some(sid), key: i as i64 + 1,
-            kind: if i < 2 { SecKind::Movie } else { SecKind::Show },
-            row: crate::browse::SrcRow { section: i, title: format!("Library {i}"), pinned: true,
-                current: i == 0, ..Default::default() } }).collect());
+    let mut fixture = Fixture::new();
+    fixture.listing = crate::browse::view::ListingSnapshot::fixture(sid, (0..2 * COLS).map(|i|
+        Some(crate::catalog_fetch::PmsMovie { sid, rk: format!("{}", i + 1), title: format!("Film {i}"),
+            year: 2000 + i as i32, ..Default::default() })).collect(), Vec::new());
     let mut page = fixture.screen();
     let cx = fixture.cx(None);
-    let lays = crate::ui::widgets::strip_layout_measured(["Library 0".into(), "Library 1".into()].into_iter(),
-        MARGIN_X + crate::ui::widgets::STRIP_PAD, crate::ui::theme::size::BODY,
-        crate::ui::widgets::STRIP_GAP_WIDE, cx.measure);
-    for (i, lay) in lays.iter().enumerate() {
-        let expected = crate::ui::widgets::strip_pill_rect(lay, CONTENT_TOP, crate::ui::widgets::StatusOverlay::CTRL_H);
-        let actual = page.library_rect(i, &cx);
-        assert_eq!([actual.x, actual.y, actual.w, actual.h], [expected.x, expected.y, expected.w, expected.h]);
+    let runs = crate::ui::draw_census::capture_runs(|| {
+        let mut frame = DrawFrame::new(&cx, crate::ui::Painter::recording());
+        page.pair.detail.draw(&mut frame, Rect::FULL);
+    });
+    for i in 0..COLS {
+        assert!(runs.iter().any(|run| run.text == format!("Film {i}")), "card {i} wears its title: {runs:?}");
+        assert!(runs.iter().any(|run| run.text == (2000 + i).to_string()), "card {i} wears its year: {runs:?}");
     }
-    page.pending.request_section(SectionTarget { epoch: 1, index: 3,
-        identity: LibrarySectionIdentity { sid, key: 4 }, kind: SecKind::Show });
-    page.sync(&cx);
-    assert_eq!(page.libraries.iter().map(|(_, section)| *section).collect::<Vec<_>>(), vec![2, 3],
-        "the favorite row must not keep movie libraries beneath the incoming Shows type");
 }
 
 #[test]
@@ -1391,62 +1283,30 @@ fn shelf_publication_request_distinguishes_page_fade_from_grid_fade_and_head_foc
     assert_eq!(request(&mut page), (true, false), "only the full-page fade permits publication away from the head");
 }
 
-/// **The page glyph and the Library's own live tab strip never overlap.** They used to (measured
-/// 254-216 = 38px, `status.rs`'s own comment: "the Library keeps its chrome live ABOVE the
-/// read-out" while the glyph box sat fixed at 216..328, anchor 372) whenever a failed section's
-/// page still carried other, populated tabs; with the anchor at 540 the natural box starts at 384,
-/// clear of the strip with room to spare. `status_overlay` still passes `glyph_ceiling` at the tab strip's
-/// bottom (`CONTENT_TOP..CONTENT_TOP+CTRL_H` = library/layout's `CONTENT_TOP` =
-/// `ui::consts::GRID_TOP_Y` = 194, height `StatusOverlay::CTRL_H` = 60, so screen y 194..254)
-/// whenever `self.libraries` — the tabs — is non-empty, and `StatusOverlay::glyph_rect` would shrink
-/// the glyph box to clear it rather than let the two overlap. At this anchor it never has to: with
-/// or without a live strip the glyph draws at its natural, unshrunk 384..496 box.
+/// **The page glyph and the Library's own live head never overlap** (the title and the tab
+/// pills stay live above a failed section's read-out). `status_overlay` passes `glyph_ceiling` at
+/// the tab pills' bottom (`CONTENT_TOP + TABS_DY + TAB_H`), and `StatusOverlay::glyph_rect` would
+/// shrink the glyph box to clear it rather than let the two overlap. At the read-out's anchor it
+/// never has to: the glyph draws at its natural, unshrunk box.
 #[test]
-fn the_page_glyph_and_the_librarys_live_tab_strip_never_overlap() {
+fn the_page_glyph_and_the_librarys_live_head_never_overlap() {
     use crate::ui::widgets::StatusOverlay;
     let _guard = nj_base::testlock::serial();
-    let tab_strip_bottom = CONTENT_TOP + StatusOverlay::CTRL_H;
-    assert_eq!(tab_strip_bottom, 254.0, "the tab strip band moved — re-measure the fix against it");
-
-    // A live strip: two pinned sections of the current kind. `favorite_sections_for` only
-    // populates `self.libraries` for 2+ candidates (see
-    // `favorite_library_row_uses_shared_strip_geometry_and_incoming_type` above; a single
-    // favourite clears it), so this is the minimal fixture that actually turns the strip on.
-    let sid = crate::catalog::ServerId::from_raw(0);
-    let sections = vec![
-        crate::browse::view::SectionView { sid: Some(sid), key: 1, kind: SecKind::Movie,
-            row: crate::browse::SrcRow { section: 0, title: "Cinema".into(), pinned: true, current: true, ..Default::default() } },
-        crate::browse::view::SectionView { sid: Some(sid), key: 2, kind: SecKind::Movie,
-            row: crate::browse::SrcRow { section: 1, title: "Anime".into(), pinned: true, ..Default::default() } },
-    ];
+    let tabs_bottom = layout::CONTENT_TOP + layout::TABS_DY + layout::TAB_H;
+    assert_eq!(tabs_bottom, 187.0, "the head band moved - re-measure the fix against it");
     let mut fixture = Fixture::new();
-    fixture.directory = crate::browse::view::DirectorySnapshot::fixture(1, 0, sections);
     fixture.listing = fixture.listing.clone().with_fetch(SecFetch::Failed, -1);
     let page = fixture.screen();
     assert_eq!(page.readout, Readout::Failed);
-    assert!(!page.libraries.is_empty(), "fixture must actually produce a live tab strip, or this test proves nothing");
     let cx = fixture.cx(Some(page.key(RETRY)));
     let (caption, reason) = page.status_text(&cx);
     let overlay = page.status_overlay(&cx, &caption, reason.as_deref());
-    let glyph = overlay.glyph_frame().expect("a live strip never omits the glyph at this anchor");
-    assert!(glyph.y >= tab_strip_bottom + StatusOverlay::GLYPH_CEILING_MARGIN,
-        "the glyph box (top y={}) must start clear of the tab strip's bottom (y={tab_strip_bottom})", glyph.y);
-    assert_eq!(glyph.h, StatusOverlay::GLYPH_SIZE, "the anchor sits low enough that the strip no longer reaches \
-        the glyph, so a live strip costs it nothing — the ceiling is only a guard now");
-
-    // No live strip (`Fixture::new`'s single, un-favourited-enough section clears
-    // `self.libraries`): the glyph is unaffected, at its natural, unshrunk position.
-    let mut solo = Fixture::new();
-    solo.listing = solo.listing.clone().with_fetch(SecFetch::Failed, -1);
-    let page = solo.screen();
-    assert!(page.libraries.is_empty(), "fixture must NOT have a live strip, or this half proves nothing");
-    let cx = solo.cx(Some(page.key(RETRY)));
-    let (caption, reason) = page.status_text(&cx);
-    let overlay = page.status_overlay(&cx, &caption, reason.as_deref());
-    let glyph = overlay.glyph_frame().expect("no ceiling at all must never omit the glyph");
+    let glyph = overlay.glyph_frame().expect("the live head never omits the glyph at this anchor");
+    assert!(glyph.y >= tabs_bottom + StatusOverlay::GLYPH_CEILING_MARGIN,
+        "the glyph box (top y={}) must start clear of the tab pills' bottom (y={tabs_bottom})", glyph.y);
     assert_eq!(glyph.y, StatusOverlay::FULL_ANCHOR_TOP - StatusOverlay::GLYPH_GAP - StatusOverlay::GLYPH_SIZE,
-        "without a live strip the glyph keeps its natural, unshrunk position");
-    assert_eq!(glyph.h, StatusOverlay::GLYPH_SIZE, "without a live strip the glyph keeps its natural, unshrunk size");
+        "the glyph keeps its natural, unshrunk position");
+    assert_eq!(glyph.h, StatusOverlay::GLYPH_SIZE, "the glyph keeps its natural, unshrunk size");
 }
 
 mod type_tests { include!("type_tests.rs"); }
@@ -1570,7 +1430,7 @@ fn a_hover_moves_no_grid_and_a_click_brings_it_to_its_card() {
     let mut page = fixture.screen();
     page.initial = false;
     let mut engine = FocusEngine::new();
-    let elems: Vec<u32> = [12, 18, 24].iter().map(|&i| page.pair.detail.elem_at(i).unwrap()).collect();
+    let elems: Vec<u32> = [2 * COLS, 3 * COLS, 4 * COLS].iter().map(|&i| page.pair.detail.elem_at(i).unwrap()).collect();
     let keys: Vec<_> = elems.iter().map(|&e| page.key(e)).collect();
     let (row2, row3, row4) = (keys[0], keys[1], keys[2]);
     page.relayout(Some(row2));

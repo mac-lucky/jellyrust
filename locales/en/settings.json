@@ -24,7 +24,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.privacy.title"
   },
   "settings.privacy.detail": {
-    "value": "Optional reports, privacy information and local data.",
+    "value": "Local data and privacy information.",
     "description": "Settings, account, onboarding or privacy UI: settings.privacy.detail"
   },
   "settings.legal.title": {
@@ -56,7 +56,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.trailers.detail"
   },
   "settings.about.title": {
-    "value": "About Native Jelly",
+    "value": "About JellyRust",
     "description": "Settings, account, onboarding or privacy UI: settings.about.title"
   },
   "settings.about.section": {
@@ -212,7 +212,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.language.title"
   },
   "settings.language.detail": {
-    "value": "Choose the language used by Native Jelly.",
+    "value": "Choose the language used by JellyRust.",
     "description": "Settings, account, onboarding or privacy UI: settings.language.detail"
   },
   "settings.language.system": {
@@ -220,11 +220,11 @@
     "description": "Settings, account, onboarding or privacy UI: settings.language.system"
   },
   "settings.language.copy": {
-    "value": "Choose the app language for everyone on this television. Changes apply after restarting Native Jelly.",
+    "value": "Choose the app language for everyone on this television. Changes apply after restarting JellyRust.",
     "description": "Settings, account, onboarding or privacy UI: settings.language.copy"
   },
   "settings.language.pending": {
-    "value": "Restart Native Jelly to apply this change.",
+    "value": "Restart JellyRust to apply this change.",
     "description": "Settings, account, onboarding or privacy UI: settings.language.pending"
   },
   "settings.language.save_failed": {
@@ -256,11 +256,11 @@
     "description": "Settings, account, onboarding or privacy UI: settings.consent.product.title"
   },
   "settings.consent.crash.body": {
-    "value": "If Native Jelly crashes, or signing in fails, it can send technical details that help find and fix the problem. Reports may include the signal, code addresses, thread information and device compatibility details, or which sign-in step failed and how the connection answered, plus a random crash report identifier, created when you turn this on and deleted when you turn it off or delete all local data, so that repeated crashes under one crash report identifier are counted once rather than once each. They never include titles, account names, searches, server names or addresses, tokens, subtitle text, or the product analytics identifier.",
+    "value": "If JellyRust crashes, or signing in fails, it can send technical details that help find and fix the problem. Reports may include the signal, code addresses, thread information and device compatibility details, or which sign-in step failed and how the connection answered, plus a random crash report identifier, created when you turn this on and deleted when you turn it off or delete all local data, so that repeated crashes under one crash report identifier are counted once rather than once each. They never include titles, account names, searches, server names or addresses, tokens, subtitle text, or the product analytics identifier.",
     "description": "Settings, account, onboarding or privacy UI: settings.consent.crash.body"
   },
   "settings.consent.product.body": {
-    "value": "Native Jelly can share which screens and features are used and broad sign-in and playback outcomes. Reports carry a random Analytics ID, created when you turn this on and deleted when you turn it off or delete all local data, and can include the app version, webOS version, television model and SoC, and whether a selected server is local, remote or relayed. They never include titles, account names, searches, server names or addresses, tokens, subtitle text, or exact viewing history.",
+    "value": "JellyRust can share which screens and features are used and broad sign-in and playback outcomes. Reports carry a random Analytics ID, created when you turn this on and deleted when you turn it off or delete all local data, and can include the app version, webOS version, television model and SoC, and whether a selected server is local, remote or relayed. They never include titles, account names, searches, server names or addresses, tokens, subtitle text, or exact viewing history.",
     "description": "Settings, account, onboarding or privacy UI: settings.consent.product.body"
   },
   "settings.consent.crash.row": {
@@ -308,11 +308,11 @@
     "description": "Settings, account, onboarding or privacy UI: settings.consent.delete"
   },
   "settings.consent.delete_scope": {
-    "value": "This signs out and removes Native Jelly data stored on this television. It does not delete data already sent to your Jellyfin server, Sentry or PostHog.",
+    "value": "This signs out and removes JellyRust data stored on this television. It does not delete anything your Jellyfin server keeps, such as watch progress.",
     "description": "Settings, account, onboarding or privacy UI: settings.consent.delete_scope"
   },
   "settings.consent.settings_copy": {
-    "value": "Control optional reporting, review exactly what may be shared, and manage data stored by Native Jelly on this television.",
+    "value": "JellyRust sends nothing anywhere except to your own Jellyfin server, and keeps only local data on this television. You can remove that data here.",
     "description": "Settings, account, onboarding or privacy UI: settings.consent.settings_copy"
   },
   "settings.consent.reporting": {
@@ -336,7 +336,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.consent.preview_usage"
   },
   "settings.consent.preview_policy": {
-    "value": "The complete Native Jelly privacy policy for this build.",
+    "value": "The complete JellyRust privacy policy for this build.",
     "description": "Settings, account, onboarding or privacy UI: settings.consent.preview_policy"
   },
   "settings.consent.preview_errors_id": {
@@ -348,7 +348,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.consent.preview_analytics_id"
   },
   "settings.consent.delete_detail": {
-    "value": "Sign out and remove Native Jelly data from this TV.",
+    "value": "Sign out and remove JellyRust data from this TV.",
     "description": "Settings, account, onboarding or privacy UI: settings.consent.delete_detail"
   },
   "settings.consent.errors_subtitle": {
@@ -360,7 +360,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.consent.analytics_subtitle"
   },
   "settings.consent.policy_subtitle": {
-    "value": "How Native Jelly handles local data, your Jellyfin server and optional reporting.",
+    "value": "How JellyRust handles local data, your Jellyfin server and optional reporting.",
     "description": "Settings, account, onboarding or privacy UI: settings.consent.policy_subtitle"
   },
   "settings.consent.crash_subtitle": {
@@ -408,7 +408,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.ffmpeg.title"
   },
   "settings.legal.source.title": {
-    "value": "Native Jelly source code",
+    "value": "JellyRust source code",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.source.title"
   },
   "settings.legal.trademarks.title": {
@@ -420,7 +420,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.contact.title"
   },
   "settings.legal.privacy.subtitle": {
-    "value": "How Native Jelly handles local data and optional reports.",
+    "value": "JellyRust talks only to your Jellyfin server and keeps only local data.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.subtitle"
   },
   "settings.legal.opensource.subtitle": {
@@ -460,7 +460,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.responsible"
   },
   "settings.legal.privacy.responsible_body": {
-    "value": "sostk is responsible only for data Native Jelly stores locally and for optional reports you choose to share.",
+    "value": "macluckylab is responsible only for the data JellyRust stores locally on this television.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.responsible_body"
   },
   "settings.legal.privacy.servers": {
@@ -468,7 +468,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.servers"
   },
   "settings.legal.privacy.servers_body": {
-    "value": "Native Jelly is an independent client for Jellyfin. Apart from the optional reports described below, it has no account or online service of its own: signing in, browsing and playing media, watch progress and every other server feature go directly to the Jellyfin server whose address you enter, and are handled by that server and whoever operates it. Native Jelly’s developer does not receive any of it.",
+    "value": "JellyRust is an independent client for Jellyfin. It has no account, online service or reporting of its own and sends nothing anywhere except to your Jellyfin server: signing in, browsing and playing media, watch progress and every other server feature go directly to the Jellyfin server whose address you enter, and are handled by that server and whoever operates it. JellyRust’s developer does not receive any of it.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.servers_body"
   },
   "settings.legal.privacy.local": {
@@ -476,39 +476,15 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.local"
   },
   "settings.legal.privacy.local_body": {
-    "value": "Native Jelly stores the address, name, identifier and version of the Jellyfin server you signed in to, and for each person signed in on this television (up to twelve, listed on the Who's watching? screen) their user name and user identifier there, the access token that server issued to this television and the device identifier it was issued under. It never stores your password. It also keeps downloaded artwork (posters, backdrops and cast images, cached as bounded files for reuse across restarts), each person's Home library choices and recent searches, kept apart from everyone else's, your playback quality, Direct Play and app language preferences, and local technical logs: a small rotating event log and a bounded storage status snapshot. It also stores your answers to the two optional-reporting questions, the random Crash report ID if you turned crash reports on, the random Analytics ID if you turned product analytics on, any report waiting to be sent, and a marker recording how much of the crash log has already been read. It keeps no bookmark of its own for where you stopped watching: playback position is held by your Jellyfin server. Delete all local data in Settings signs out and removes Native Jelly data from this television.",
+    "value": "JellyRust stores the address, name, identifier and version of the Jellyfin server you signed in to, and for each person signed in on this television (up to twelve, listed on the Who's watching? screen) their user name and user identifier there, the access token that server issued to this television and the device identifier it was issued under. It never stores your password. It also keeps downloaded artwork (posters, backdrops and cast images, cached as bounded files for reuse across restarts), each person's Home library choices and recent searches, kept apart from everyone else's, your playback quality, Direct Play and app language preferences, and local technical logs: a small rotating event log and a bounded storage status snapshot. It keeps no bookmark of its own for where you stopped watching: playback position is held by your Jellyfin server. Delete all local data in Settings signs out and removes JellyRust data from this television.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.local_body"
-  },
-  "settings.legal.privacy.crashes": {
-    "value": "OPTIONAL CRASH REPORTS",
-    "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.crashes"
-  },
-  "settings.legal.privacy.crashes_body": {
-    "value": "If enabled, technical crash details are sent to Sentry in Germany. They can include the signal, code addresses, thread information and device compatibility details. Each report carries a random Crash report ID created on this television when you turned crash reports on, so that repeated crashes under one Crash report ID are counted once rather than once each. It is not derived from your account, your television or anything about you, and it is never sent with product analytics. Settings shows it as your Crash report ID while crash reports are on.",
-    "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.crashes_body"
-  },
-  "settings.legal.privacy.analytics": {
-    "value": "OPTIONAL PRODUCT ANALYTICS",
-    "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.analytics"
-  },
-  "settings.legal.privacy.analytics_body": {
-    "value": "If enabled, screen and feature events and broad sign-in and playback outcomes are sent to PostHog in Germany with a random Analytics ID created when you turned product analytics on. Settings shows that identifier as your Analytics ID while product analytics is on. Sign-in events from before you answered are held in memory and sent only if you choose to share.",
-    "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.analytics_body"
-  },
-  "settings.legal.privacy.excluded": {
-    "value": "NEVER INCLUDED",
-    "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.excluded"
-  },
-  "settings.legal.privacy.excluded_body": {
-    "value": "Titles, account names, searches, server names or addresses, tokens, subtitle text and exact viewing history are not included in either optional report type. Both choices are independent and can be changed at any time in Settings.",
-    "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.excluded_body"
   },
   "settings.legal.privacy.retention": {
     "value": "RETENTION",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.retention"
   },
   "settings.legal.privacy.retention_body": {
-    "value": "Different things here have different lifetimes, so this is stated for each. Signing out removes that one person's Jellyfin sign-in from this television (their user name and identifier there, and the access token) and asks the server to revoke the token; everyone else signed in stays. When the last person signs out, the address, name and identifier of the server signed in to last are kept, with no user or token, so the sign-in screen can offer it under Recent; signing in to another server replaces it. Each person's library choices, searches and subtitle adjustments are kept apart from everyone else's. Signing out does not currently remove anything else Native Jelly keeps, including that server, the signed-out person's library choices and searches, your answers to the two optional-reporting questions and the Crash report ID and Analytics ID if they exist: turn a category off, or use Delete all local data, to remove those. A report waiting to be sent is deleted once it is sent, and a queued report of a category you switch off is deleted at that moment; one report that the sender had already picked up at that moment may still be sent, and no further report is picked up after it. The event log rotates continuously and the storage snapshot is replaced when its bounded status changes. Delete all local data removes all of it. A report that has already been sent is held by the service that received it, under that service’s own retention schedule; ask through the contact below what those periods currently are. The app language preference belongs to this television and is kept when you sign out; Delete all local data resets it.",
+    "value": "Different things here have different lifetimes, so this is stated for each. Signing out removes that one person's Jellyfin sign-in from this television (their user name and identifier there, and the access token) and asks the server to revoke the token; everyone else signed in stays. When the last person signs out, the address, name and identifier of the server signed in to last are kept, with no user or token, so the sign-in screen can offer it under Recent; signing in to another server replaces it. Each person's library choices, searches and subtitle adjustments are kept apart from everyone else's. Signing out does not currently remove anything else JellyRust keeps, including that server and the signed-out person's library choices and searches: use Delete all local data to remove those. The event log rotates continuously and the storage snapshot is replaced when its bounded status changes. Delete all local data removes all of it. The app language preference belongs to this television and is kept when you sign out; Delete all local data resets it.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.retention_body"
   },
   "settings.legal.privacy.choices": {
@@ -516,7 +492,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.choices"
   },
   "settings.legal.privacy.choices_body": {
-    "value": "Both optional reports are off until you turn them on, and either can be turned off again at any time in Settings. A one-off sign-in problem report is sent only when you press Send report. Delete all local data removes what Native Jelly stored on this television; it does not reach anything already sent. To ask what crash reports or product analytics hold for your installation, or to have them deleted, ask through the contact below and quote your Crash report ID or Analytics ID from Settings, or the Report ID shown after a one-off report. Each identifier is the only handle its reports carry. Turning a category off deletes its identifier from this television, and so does Delete all local data; reports already sent keep the old one, so copy it down first if you intend to ask for their deletion.",
+    "value": "There is no reporting to turn on or off: JellyRust sends nothing anywhere except to your Jellyfin server. Delete all local data in Settings removes everything JellyRust stored on this television. What your Jellyfin server keeps, such as watch progress and favourites, is managed on that server.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.choices_body"
   },
   "settings.legal.privacy.processing": {
@@ -524,7 +500,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.processing"
   },
   "settings.legal.privacy.processing_body": {
-    "value": "Optional crash reports are processed by Sentry in Germany and optional product analytics by PostHog in Germany. A Jellyfin server you connect to may be located anywhere and is operated by whoever runs it, not by Native Jelly’s developer.",
+    "value": "Neither JellyRust’s developer nor any third party processes anything JellyRust does. A Jellyfin server you connect to may be located anywhere and is operated by whoever runs it, not by JellyRust’s developer.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.processing_body"
   },
   "settings.legal.privacy.uninstall": {
@@ -532,7 +508,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.uninstall"
   },
   "settings.legal.privacy.uninstall_body": {
-    "value": "Removing Native Jelly removes the application, but webOS gives an application no way to run code as it is removed, so anything kept outside the application’s own directory can survive. Your sign-in is deliberately kept there so that reinstalling does not sign you out. Your optional-reporting answers and their Crash report ID and Analytics ID are kept with that sign-in, so that a decision you have already made is not put to you again after a reinstall. Your app language preference is also kept there. Use Delete all local data BEFORE uninstalling if you want nothing of Native Jelly left on this television.",
+    "value": "Removing JellyRust removes the application, but webOS gives an application no way to run code as it is removed, so anything kept outside the application’s own directory can survive. Your sign-in is deliberately kept there so that reinstalling does not sign you out. Your app language preference is also kept there. Use Delete all local data BEFORE uninstalling if you want nothing of JellyRust left on this television.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.uninstall_body"
   },
   "settings.legal.privacy.contact": {
@@ -540,34 +516,34 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.contact"
   },
   "settings.legal.privacy.contact_body": {
-    "value": "Privacy questions: github.com/sostk/native-jelly/issues",
+    "value": "Privacy questions: github.com/mac-lucky/jellyrust/issues",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.contact_body"
   },
   "settings.legal.ffmpeg.body": {
-    "value": "This software uses libraries from the FFmpeg project under the LGPLv2.1. FFmpeg is copyright (c) the FFmpeg developers; Native Jelly does not own FFmpeg.\n\nThe FFmpeg libraries are unmodified and loaded dynamically, and may be replaced with an interface-compatible build. The complete corresponding FFmpeg 9.0 source, exact configure line and build script are published with every Native Jelly release.",
+    "value": "This software uses libraries from the FFmpeg project under the LGPLv2.1. FFmpeg is copyright (c) the FFmpeg developers; JellyRust does not own FFmpeg.\n\nThe FFmpeg libraries are unmodified and loaded dynamically, and may be replaced with an interface-compatible build. The complete corresponding FFmpeg 9.0 source, exact configure line and build script are published with every JellyRust release.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.ffmpeg.body"
   },
   "settings.legal.trademarks.body": {
-    "value": "Jellyfin and the Jellyfin logo belong to the Jellyfin project. They are used here only to say which server software Native Jelly works with.\n\nLG and webOS are trademarks of LG Electronics Inc.\n\nNative Jelly is based on PlxNative by Gleb Linnik. The PlxNative name, logo and artwork are not used as Native Jelly’s identity.\n\nNative Jelly is an independent, unofficial application. It is not produced by, endorsed by, or affiliated with the Jellyfin project, LG Electronics Inc. or the PlxNative developer.",
+    "value": "Jellyfin and the Jellyfin logo belong to the Jellyfin project. They are used here only to say which server software JellyRust works with.\n\nLG and webOS are trademarks of LG Electronics Inc.\n\nJellyRust is a modified version of Native Jelly by sostk, which is based on PlxNative by Gleb Linnik. The Native Jelly and PlxNative names, logos and artwork are not used as JellyRust’s identity.\n\nJellyRust is an independent, unofficial application. It is not produced by, endorsed by, or affiliated with the Jellyfin project, LG Electronics Inc., the Native Jelly or PlxNative developers, or the Litefin project.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.trademarks.body"
   },
   "settings.legal.contact.body": {
-    "value": "Privacy questions can be asked through github.com/sostk/native-jelly/issues. Issues there are public, so do not post anything you would not want others to read.\n\nSecurity vulnerabilities may be reported privately through GitHub Security Advisories for sostk/native-jelly. Please do not include access tokens, server addresses or personal media information in a report.",
+    "value": "Privacy questions and security reports go to github.com/mac-lucky/jellyrust/issues. Please do not include access tokens, server addresses or personal media information in a report.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.contact.body"
   },
   "settings.legal.opensource.body": {
-    "value": "Native Jelly is open-source software licensed under GPL-3.0-or-later. Copyright (c) 2026 sostk. Based on PlxNative, copyright (c) 2026 Gleb Linnik and contributors. You may modify and redistribute it under these terms. There is no warranty, to the extent permitted by law.\n\nThird-party components retain their own licences. The package includes THIRD-PARTY-NOTICES.md and licence texts for the Rust runtime and crates, FFmpeg, Sentry Native, libunwind, NanoSVG, fonts and icons. Platform libraries have separate terms.",
+    "value": "JellyRust is open-source software licensed under GPL-3.0-or-later. It is Native Jelly, copyright (c) 2026 sostk, modified by macluckylab. Native Jelly is based on PlxNative, copyright (c) 2026 Gleb Linnik and contributors. You may modify and redistribute it under these terms. There is no warranty, to the extent permitted by law.\n\nThird-party components retain their own licences. The package includes THIRD-PARTY-NOTICES.md and licence texts for the Rust runtime and crates, FFmpeg, Sentry Native, libunwind, NanoSVG, fonts and icons. Platform libraries have separate terms.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.opensource.body"
   },
   "settings.legal.source.body": {
-    "value": "Source for build {build}:\n\nhttps://github.com/sostk/native-jelly/tree/{build}\n\nNative Jelly is based on PlxNative, whose source is at https://github.com/GLinnik21/plx-native.\n\nLocal migration candidates may contain unpublished changes. Their matching source snapshot is provided with the candidate evidence. A published binary must be accompanied by its version-specific complete source bundle and build instructions; a moving branch is not the corresponding-source record. See LICENSING.md in the package.",
+    "value": "Source for build {build}:\n\nhttps://github.com/mac-lucky/jellyrust/tree/{build}\n\nJellyRust is a modified version of Native Jelly, whose source is at https://github.com/sostk/native-jelly. Native Jelly is based on PlxNative, whose source is at https://github.com/GLinnik21/plx-native.\n\nLocal migration candidates may contain unpublished changes. Their matching source snapshot is provided with the candidate evidence. A published binary must be accompanied by its version-specific complete source bundle and build instructions; a moving branch is not the corresponding-source record. See LICENSING.md in the package.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.source.body",
     "args": {
       "build": "str"
     }
   },
   "settings.about.body": {
-    "value": "Version {version}\nBuild {build}\n\nDeveloped by sostk\n© 2026 sostk\n\nBased on PlxNative by Gleb Linnik\nPlxNative © 2026 Gleb Linnik\n\nOpen source under GPL-3.0-or-later\ngithub.com/sostk/native-jelly\n\nNative Jelly is an independent, unofficial application. It is not produced by, endorsed by, or affiliated with the Jellyfin project, LG Electronics Inc. or the PlxNative developer.",
+    "value": "Version {version}\nBuild {build}\n\nJellyRust by macluckylab\nmacluckylab.com\ngithub.com/mac-lucky/jellyrust\n\nModified by macluckylab in 2026 from Native Jelly by sostk\nNative Jelly © 2026 sostk\n\nBased on PlxNative by Gleb Linnik\nPlxNative © 2026 Gleb Linnik\n\nUpstream contributors: Gleb Linnik, sostk, Marco Rojas, e.petrov, Jacopo, Pavel_Pich, Dino Cikatic, Frank Muller, Konviser, selfhealer-png\n\nLook inspired by Litefin by MoazSalem (design only, no Litefin code)\n\nOpen source under GPL-3.0-or-later\n\nJellyRust is an independent, unofficial application. It is not produced by, endorsed by, or affiliated with the Jellyfin project, LG Electronics Inc., the Native Jelly or PlxNative developers, or the Litefin project.",
     "description": "Settings, account, onboarding or privacy UI: settings.about.body",
     "args": {
       "build": "str",
@@ -746,8 +722,40 @@
     "value": "Default audio track",
     "description": "Settings, Audio & subtitles: row title for Jellyfin's PlayDefaultAudioTrack (play the track the file marks as default even when it is not in the preferred audio language)"
   },
+  "settings.audio.remember_audio": {
+    "value": "Remember audio choice",
+    "description": "Settings, Audio & subtitles: row title for Jellyfin's RememberAudioSelections (the server keeps the audio track last played in each film and starts there next time, on every Jellyfin app). Options are On/Off."
+  },
+  "settings.audio.remember_subtitles": {
+    "value": "Remember subtitle choice",
+    "description": "Settings, Audio & subtitles: row title for Jellyfin's RememberSubtitleSelections (the server keeps the subtitle last shown in each film, or that subtitles were off, and starts there next time, on every Jellyfin app). Options are On/Off."
+  },
+  "settings.audio.voice": {
+    "value": "Dubbing and voice-over",
+    "description": "Settings, Audio & subtitles: row and picker title for the TV-local preference between dubbing and voice-over tracks (a voice-over is a single narrator read over the original, the Polish 'lektor'; an AI voice-over is a synthetic one)"
+  },
+  "settings.audio.voice.detail": {
+    "value": "Saved on this TV.",
+    "description": "Settings, Audio & subtitles: detail line under the Dubbing and voice-over row. Unlike every other row on this page (saved on the Jellyfin server), this one is stored on the television"
+  },
+  "settings.audio.voice.copy": {
+    "value": "Which voice track plays automatically. \"Dubbing, never voice-over\" skips every voice-over, so a film with no dub plays in its original language. A track picked in the player counts for that playback only. Saved on this TV.",
+    "description": "Settings, Audio & subtitles, Dubbing and voice-over picker: the explanation under its title"
+  },
+  "settings.audio.voice.dubbing_first": {
+    "value": "Dubbing first",
+    "description": "Dubbing and voice-over option: within one language, play a dubbed track first, then a track whose title names no kind, then a voice-over, then an AI voice-over"
+  },
+  "settings.audio.voice.dubbing_no_lektor": {
+    "value": "Dubbing, never voice-over",
+    "description": "Dubbing and voice-over option: never pick a voice-over or AI voice-over track automatically; a dubbed track first, otherwise the original"
+  },
+  "settings.audio.voice.no_ai_lektor": {
+    "value": "No AI voice-over",
+    "description": "Dubbing and voice-over option: never pick an AI voice-over track automatically; nothing else changes"
+  },
   "settings.playback.force_body": {
-    "value": "Bypasses playback compatibility checks and always uses original quality. Playback may have no sound, display incorrectly, freeze, or crash the app. Native Jelly will not automatically switch to compatible playback and may not recover gracefully.\n\nEnable this only if you understand these risks and know how to restart the app and return Direct Play to Auto.",
+    "value": "Bypasses playback compatibility checks and always uses original quality. Playback may have no sound, display incorrectly, freeze, or crash the app. JellyRust will not automatically switch to compatible playback and may not recover gracefully.\n\nEnable this only if you understand these risks and know how to restart the app and return Direct Play to Auto.",
     "description": "Settings, consent or sign-in UI: settings.playback.force_body"
   },
   "settings.playback.force_note": {
@@ -1014,11 +1022,7 @@
   },
   "settings.legal.privacy.plaintext_body": {
     "description": "In-app privacy disclosure, aligned with PRIVACY.md.",
-    "value": "When you enter an address without http:// or https://, Native Jelly tries plain http first for an address on your home network and https first for a domain name, and falls back to the other if the first does not answer. Over http, your password, access token and everything Native Jelly exchanges with the server travel over the network without encryption. Enter the full https:// address for a server you reach over the internet. Native Jelly sends nothing that signs you in over plain http until you allow it for that server. It asks once; the answer covers that server at that address only. Each time it connects, it first checks that the same server answers there. The answers are kept when you sign out; Settings › Unencrypted connections turns each one off, and Delete all local data removes them."
-  },
-  "settings.legal.privacy.signin_body": {
-    "description": "In-app privacy disclosure, aligned with PRIVACY.md.",
-    "value": "If signing in fails, the same channel can carry a sign-in problem report: which sign-in step failed (or which fixed kind of failure inside the app stopped it), how the connection answered (an error class with its HTTP status or network error number), rounded try counts and durations, how many codes were shown, and, when a sign-in could not be saved, a storage failure class, which key-service step it stopped at and the key service's own numeric error code, fixed storage-helper failure stages and error codes, storage-candidate errno numbers (never file paths or owners), the app version and when it happened. It never includes your account name, tokens, PIN, sign-in code or network addresses. With crash reports on, it is sent automatically under your Crash report ID, and the sign-in screen shows its Report ID. Otherwise it is sent only if you press Send report on the sign-in screen, once, without any Crash report ID and with a random Report ID that identifies only that one report."
+    "value": "When you enter an address without http:// or https://, JellyRust tries plain http first for an address on your home network and https first for a domain name, and falls back to the other if the first does not answer. Over http, your password, access token and everything JellyRust exchanges with the server travel over the network without encryption. Enter the full https:// address for a server you reach over the internet. JellyRust sends nothing that signs you in over plain http until you allow it for that server. It asks once; the answer covers that server at that address only. Each time it connects, it first checks that the same server answers there. The answers are kept when you sign out; Settings › Unencrypted connections turns each one off, and Delete all local data removes them."
   },
   "settings.consent.preview.incident": {
     "value": "\n\nSign-in problem report (automatically only when error reporting is on; otherwise only when you press Send report, and then without the crash report identifier):\n",

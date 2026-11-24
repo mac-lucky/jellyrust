@@ -1004,10 +1004,10 @@ pub struct FixtureRig {
     pub opaque_route_calls: Vec<bool>,
     pub clears: u32,
     scrim_name: std::ffi::CString,
-    scrim_initial: std::ffi::CString,
-    scrim_labels: Vec<String>,
     scrim_expand: f32,
     scrim_chrome: bool,
+    /// Rail activations the dispatcher handed to the application (`Rig::strip_activate`).
+    pub strip_activations: Vec<u32>,
     us: u64,
 }
 
@@ -1031,18 +1031,15 @@ impl FixtureRig {
             opaque_route_calls: Vec::new(),
             clears: 0,
             scrim_name: std::ffi::CString::default(),
-            scrim_initial: std::ffi::CString::default(),
-            scrim_labels: Vec::new(),
             scrim_expand: 0.0,
             scrim_chrome: false,
+            strip_activations: Vec::new(),
             us: 0,
         }
     }
 
-    pub fn seed_scrim_chrome_for_test(&mut self, name: &str, initial: &str, labels: &[&str], expand: f32) {
+    pub fn seed_scrim_chrome_for_test(&mut self, name: &str, expand: f32) {
         self.scrim_name = std::ffi::CString::new(name).unwrap();
-        self.scrim_initial = std::ffi::CString::new(initial).unwrap();
-        self.scrim_labels = labels.iter().map(|s| (*s).to_owned()).collect();
         self.scrim_expand = expand;
         self.scrim_chrome = true;
     }
@@ -1058,20 +1055,22 @@ impl Rig<FixtureHost> for FixtureRig {
         }
     }
     fn draw_chrome(&mut self, _arg: &FixtureArg, _parts: &CxParts<u32>,
-        _nav: super::screen::NavPresentation, _glass: Option<&mut super::frame::glass::GlassPlan>) {
+        _nav: super::screen::NavPresentation) {
         self.chrome_draws += 1;
+    }
+    fn strip_activate(&mut self, _entry: nj_machine::machine::EntryId, elem: u32,
+        _ret: super::screen::ReturnState<u32, ()>) {
+        self.strip_activations.push(elem);
     }
     fn scrim_chrome_read(&self) -> Option<super::widgets::ChromeRead<'_>> {
         self.scrim_chrome.then(|| super::widgets::ChromeRead {
-            profile: super::widgets::ProfileChipRead {
+            avatar: super::widgets::AvatarRead {
                 src: 0,
                 thumb: "",
-                initial: &self.scrim_initial,
                 name: &self.scrim_name,
                 name_w: 0.0,
             },
-            labels: super::widgets::TabLabels { generation: 1, labels: &self.scrim_labels },
-            chip_expand: self.scrim_expand,
+            avatar_focus: self.scrim_expand,
         })
     }
     fn split(&mut self) -> Split<'_, FixtureHost> {

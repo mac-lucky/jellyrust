@@ -1,4 +1,4 @@
-//! The player transport's **overflow menu** — the popover behind the third control disc (`…`), on
+//! The player transport's **overflow menu** — the popover behind the OSD's Settings button (the gear), on
 //! the same animated [`TableView`] as the subtitle/audio and profile menus. It only REPORTS the
 //! chosen [`Action`]; `app.rs` performs it, exactly as the profile menu did before it became
 //! an owned surface ([`crate::screens::account_menu`], restructure phase 10).

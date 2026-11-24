@@ -44,6 +44,7 @@ use std::sync::OnceLock;
 
 pub mod dv;
 pub mod hdr;
+pub mod power;
 pub mod volume;
 
 /// The AUDIO codec set the buffer-feed PIPELINE decodes. This is the software half of a

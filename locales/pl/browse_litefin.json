@@ -1,0 +1,8 @@
+{
+  "browse.litefin.genres": "Gatunki",
+  "browse.litefin.shuffle": "Wylosuj",
+  "browse.litefin.view_mode": "Tryb widoku",
+  "browse.litefin.paging": "{first}-{last} z {total}",
+  "browse.litefin.genres_empty": "Ta biblioteka nie ma gatunków",
+  "browse.litefin.start_typing": "Zacznij pisać, aby szukać"
+}

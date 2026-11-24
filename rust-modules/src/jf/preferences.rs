@@ -1,11 +1,13 @@
 //! **The signed-in Jellyfin user's audio and subtitle preferences**, as Settings → Audio &
 //! Subtitles reads and edits them (issue #41).
 //!
-//! They are the four playback fields of the server's `UserConfiguration`: `AudioLanguagePreference`,
-//! `PlayDefaultAudioTrack`, `SubtitleLanguagePreference` and `SubtitleMode`. Playback already ranks
-//! tracks against the same fields (`Jf::language_prefs`, read per play), so a save takes effect from
-//! the next playback without anything cached here. They live on the server, per user, so every
-//! Jellyfin client of that user shares them.
+//! They are the six playback fields of the server's `UserConfiguration`: `AudioLanguagePreference`,
+//! `PlayDefaultAudioTrack`, `SubtitleLanguagePreference`, `SubtitleMode`, and
+//! `RememberAudioSelections`/`RememberSubtitleSelections` (the server keeps each film's last pick
+//! from the progress reports and serves it back as that film's default track). Playback already
+//! ranks tracks against the same fields (`Jf::language_prefs` and the item's default streams, read
+//! per play), so a save takes effect from the next playback without anything cached here. They live
+//! on the server, per user, so every Jellyfin client of that user shares them.
 //!
 //! Languages are the server's own list (`GET /Localization/Cultures`), keyed by
 //! `ThreeLetterISOLanguageName` (`eng`, `fre`), which is what the server stores and what it reports
@@ -13,7 +15,7 @@
 //!
 //! **A save is read-modify-write.** `POST /Users/Configuration` REPLACES the whole configuration,
 //! so a save reads the current one, changes only the field asked for and sends the rest back as the
-//! server gave it. If the four fields no longer match what the page showed (another client changed
+//! server gave it. If the six fields no longer match what the page showed (another client changed
 //! them), the save is refused as [`PreferenceError::Stale`] and the page reloads, rather than
 //! overwriting a change the person never saw.
 //!
@@ -71,19 +73,24 @@ pub(crate) struct Culture {
     pub name: String,
 }
 
-/// The four fields this page edits. A language is `None` when unset.
+/// The six fields this page edits. A language is `None` when unset.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct AudioPreferences {
     pub audio_language: Option<String>,
     pub play_default_audio_track: bool,
     pub subtitle_language: Option<String>,
     pub subtitle_mode: SubtitleMode,
+    /// `RememberAudioSelections`: the server keeps each film's last audio track (from the progress
+    /// reports) and serves it back as the film's `DefaultAudioStreamIndex`.
+    pub remember_audio_selections: bool,
+    /// `RememberSubtitleSelections`: the same for subtitles, Off included.
+    pub remember_subtitle_selections: bool,
     /// The server's languages, in its order. Shared by every snapshot of one load.
     pub cultures: Arc<Vec<Culture>>,
 }
 
 impl AudioPreferences {
-    /// The four edited fields of `config` (a `UserConfiguration` object); `cultures` is carried.
+    /// The six edited fields of `config` (a `UserConfiguration` object); `cultures` is carried.
     fn read(config: &Value, cultures: Arc<Vec<Culture>>) -> Self {
         let lang = |key: &str| config.get(key).and_then(Value::as_str).map(str::trim)
             .filter(|s| !s.is_empty()).map(str::to_string);
@@ -92,6 +99,9 @@ impl AudioPreferences {
             play_default_audio_track: config.get("PlayDefaultAudioTrack").and_then(Value::as_bool).unwrap_or(true),
             subtitle_language: lang("SubtitleLanguagePreference"),
             subtitle_mode: SubtitleMode::parse(config.get("SubtitleMode").and_then(Value::as_str).unwrap_or("")),
+            // The server's own default for both is on.
+            remember_audio_selections: config.get("RememberAudioSelections").and_then(Value::as_bool).unwrap_or(true),
+            remember_subtitle_selections: config.get("RememberSubtitleSelections").and_then(Value::as_bool).unwrap_or(true),
             cultures,
         }
     }
@@ -102,6 +112,8 @@ impl AudioPreferences {
             && self.play_default_audio_track == other.play_default_audio_track
             && self.subtitle_language == other.subtitle_language
             && self.subtitle_mode == other.subtitle_mode
+            && self.remember_audio_selections == other.remember_audio_selections
+            && self.remember_subtitle_selections == other.remember_subtitle_selections
     }
 
     /// Write the edited fields into `config`, leaving every other field as it is.
@@ -111,6 +123,8 @@ impl AudioPreferences {
         config.insert("PlayDefaultAudioTrack".into(), Value::Bool(self.play_default_audio_track));
         config.insert("SubtitleLanguagePreference".into(), lang(&self.subtitle_language));
         config.insert("SubtitleMode".into(), Value::String(self.subtitle_mode.as_str().into()));
+        config.insert("RememberAudioSelections".into(), Value::Bool(self.remember_audio_selections));
+        config.insert("RememberSubtitleSelections".into(), Value::Bool(self.remember_subtitle_selections));
     }
 }
 
@@ -135,6 +149,8 @@ pub(crate) struct PreferenceUpdate {
     pub play_default_audio_track: Option<bool>,
     pub subtitle_language: Option<String>,
     pub subtitle_mode: Option<SubtitleMode>,
+    pub remember_audio_selections: Option<bool>,
+    pub remember_subtitle_selections: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -305,6 +321,8 @@ impl PreferenceUpdate {
         if let Some(v) = self.subtitle_language { next.subtitle_language = lang(v)?; }
         if let Some(v) = self.play_default_audio_track { next.play_default_audio_track = v; }
         if let Some(v) = self.subtitle_mode { next.subtitle_mode = v; }
+        if let Some(v) = self.remember_audio_selections { next.remember_audio_selections = v; }
+        if let Some(v) = self.remember_subtitle_selections { next.remember_subtitle_selections = v; }
         Ok(next)
     }
 }

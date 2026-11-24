@@ -7,23 +7,17 @@
 //! The data is `route::up_next()` — lifted from the `continuous=1` PlayQueue that every playback
 //! already creates, so nothing here asks the server what plays next.
 //!
-//! It TAKES THE PLACE of the transport's Subtitles/Audio discs — the same control row the Skip
-//! button uses, the same right edge — with the still and its caption stacked directly above. The
-//! countdown is the primary button's own fill sweep (`Button::progress`), so the control and the
-//! timer are one object rather than a button beside a rail.
-//!
-//! **Two buttons, and they are deliberately not equals** (the design's own note): *Next Episode*
-//! takes the [`ctrl_slot`](crate::appkit::player_hud::ctrl_slot) width — the floor that keeps the row
-//! from visibly shrinking when it appears — while *Watch Credits* takes only its own label's, since
-//! a second full-width capsule would read as a pair of equals when one continues watching and the
-//! other does nothing at all. They are laid out in that spatial order, so LEFT reaches Watch
-//! Credits and RIGHT returns.
+//! It TAKES THE CONTROL ROW as Litefin's Up Next card (`docs/litefin-look.md` 10, `styles/upnext.css`
+//! style `normal`): a 600-wide card over the bottom right — the still with its episode badge,
+//! "UP NEXT" in the accent, the episode in two lines, the countdown — and a right-aligned pair of
+//! buttons, *Next Episode* (the primary, on the left as Litefin's *Play* is) and *Watch Credits*,
+//! which cancels the countdown and leaves the card up as a plain OK target.
 //!
 //! It is HUD furniture, not an overlay: playback keeps running underneath and the credits keep
 //! rolling. That is what makes the countdown honest — `app.rs` holds the HUD up for as long as it
 //! is armed, so the timer is never running behind a hidden transport.
 //!
-//! **The row's cursor is not kept here.** It is `hud_nav.btn`, exactly as it is for the discs, so
+//! **The row's cursor is not kept here.** It is `hud_nav.btn`, exactly as it is for the OSD, so
 //! LEFT/RIGHT need no special case and [`ControlSlot::items`](crate::appkit::player_hud::ControlSlot)
 //! answers for the clamp. This module owns the countdown and nothing else — which is also why the
 //! cancel rule lives at `app.rs`'s one frame block rather than being spread across the key arms.
@@ -34,9 +28,10 @@
 //! never hands us a different show. Sourcing it from Continue Watching is the owner's call.)*
 #![allow(dead_code)]
 use crate::route::UpNext;
+use crate::ui::consts::SCR_H;
 use crate::ui::label::{HAlign, Label};
-use crate::ui::theme;
-use crate::ui::widgets::{draw_card, Button, ControlGround};
+use crate::ui::theme::{self, osd};
+use crate::ui::widgets::{draw_card, OsdPill};
 use crate::ui::{Env, Painter, Rect, View};
 use std::ffi::CString;
 use std::os::raw::c_int;
@@ -45,13 +40,14 @@ use std::os::raw::c_int;
 /// title and reach for the remote, short enough that "always the next episode" stays automatic.
 pub(crate) const COUNTDOWN_MS: u32 = 10_000;
 
-/// The row's two items, in the order they are DRAWN — so `hud_nav.btn` and the arrow keys agree
-/// without a translation table (LEFT lands on 0 because 0 is the left one).
+/// The row's two items. Drawn *Next Episode* first, as Litefin's *Play* is
+/// (`ControlSlot::neighbour` walks that order); indexed with *Watch Credits* at 0 so a cursor left
+/// at 0 by the OSD buttons lands on the alternative, not on the countdown.
 pub(crate) const BTN_CREDITS: c_int = 0;
 pub(crate) const BTN_NEXT: c_int = 1;
-/// Where the focus ring parks when the row appears: the PRIMARY, which here is the right-hand item
-/// rather than the usual 0. `ControlSlot::primary_btn` is what reads this, so the appear edge in
-/// `app.rs` stays one line for every occupant.
+/// Where the focus ring parks when the row appears: the PRIMARY. `ControlSlot::primary_btn` is
+/// what reads this, so the appear edge in `app.rs` stays one line for every occupant; it is not
+/// item 0, because the countdown's cancel rule is a steady state and item 0 declines it.
 pub(crate) const PRIMARY_BTN: c_int = BTN_NEXT;
 
 /// **The auto-advance countdown, owned by the player's instance** (`PlayerScreen::up_next`,
@@ -182,107 +178,80 @@ pub(crate) fn reset(&mut self) {
 }
 }
 
-// ---- geometry: the control row's slot, with the next episode's still stacked above it. The still
-// takes the PRIMARY button's width and right edge, so the group is one clean two-edge column — an
-// earlier version gave the still its own width and drew it permanently scaled, which put its right
-// edge 8px past the pill's and its left 15px inside, a near-miss that reads as unfinished from the
-// couch. ----
+// ---- geometry (`styles/upnext.css` at its 20px base) ----------------------------------------
 
-/// still → caption: the caption is the still's label, so it hugs it…
-const CAP_GAP: f32 = theme::space::XS;
-/// …and the buttons are separate actionable objects, so they get more air. Unequal gaps are what
-/// create the grouping; an earlier 8/8 left the caption belonging to neither.
-const BTN_GAP: f32 = theme::space::MD;
-/// between the two buttons — the design's `--space-sm`, tighter than the gap to the caption above
-/// so the pair reads as one row before it reads as two controls
-const PILL_GAP: f32 = theme::space::SM;
-const CAPTION_H: f32 = 30.0;
+/// The card: 600 wide (`max-width: 30em`), its foot 270 above the panel's bottom (`bottom: 13.5em`)
+/// and its right edge on the OSD's ([`crate::appkit::player_hud::CTRL_RIGHT`]; Litefin's 48 is
+/// inside the overscan keep-out).
+const CARD_W: f32 = 600.0;
+const CARD_BOTTOM: f32 = SCR_H - 270.0;
+/// 1.4em around the card's content; the content row closes on .6em and the buttons open on .8em.
+const PAD: f32 = 28.0;
+const ROW_PAD_BOTTOM: f32 = 12.0;
+const ACTIONS_PAD_TOP: f32 = 16.0;
+/// The still, 7.5 x 4.25em, 1em before the text.
+const THUMB_W: f32 = 150.0;
+const THUMB_H: f32 = 85.0;
+const INFO_GAP: f32 = 20.0;
+/// .8em between the two buttons.
+const PILL_GAP: f32 = 16.0;
+/// The text block: "UP NEXT" 14 (the nearest rung, 16), the title 20 bold over two 1.3 lines, the
+/// countdown 16.4 (16).
+const LABEL_SZ: c_int = theme::size::lf::S16;
+const TITLE_SZ: c_int = theme::size::lf::S20;
+const COUNTDOWN_SZ: c_int = theme::size::lf::S16;
+const LABEL_H: f32 = 22.0;
+const TITLE_LEADING: f32 = 26.0;
+const COUNTDOWN_H: f32 = 26.0;
+const INFO_H: f32 = LABEL_H + 2.0 * TITLE_LEADING + COUNTDOWN_H;
 
-
-
-
-/// The caption is RIGHT-ALIGNED text, so it may run wider than the still/button column without
-/// breaking it — the column's edges are the two solid rectangles, and a text run has no left edge
-/// to break. It gets its own budget because clamping it to the button's width elided the episode
-/// NAME, which is the one thing the caption is for.
-const CAPTION_W: f32 = 460.0;
-
-/// The tile's four frames, in draw order up the column.
+/// The card's frames.
 pub(crate) struct Layout {
-    pub(crate) still: Rect,
-    pub(crate) caption: Rect,
-    pub(crate) credits: Rect,
+    pub(crate) card: Rect,
+    pub(crate) thumb: Rect,
+    pub(crate) info: Rect,
     pub(crate) next: Rect,
+    pub(crate) hide: Rect,
 }
 
-/// PURE — the whole column from the two MEASURED pill widths, so the draw and the pointer hit-test
-/// are one arrangement and the arrangement is host-testable. Measuring is the impure half and lives
-/// in [`layout`]: `text_width` is `TTF_SizeUTF8`, which the host suite cannot even link against.
-pub(crate) fn layout_of(next_w: f32, credits_w: f32) -> Layout {
-    use crate::appkit::player_hud::{CTRL_H, CTRL_RIGHT, CTRL_Y};
-    let next = Rect::new(CTRL_RIGHT - next_w, CTRL_Y, next_w, CTRL_H);
-    let credits = Rect::new(next.x - PILL_GAP - credits_w, next.y, credits_w, next.h);
-    let caption = Rect::new(
-        CTRL_RIGHT - CAPTION_W,
-        CTRL_Y - BTN_GAP - CAPTION_H,
-        CAPTION_W,
-        CAPTION_H,
-    );
-    let still_h = (next_w * 9.0 / 16.0).round();
-    let still = Rect::new(
-        CTRL_RIGHT - next_w,
-        caption.y - CAP_GAP - still_h,
-        next_w,
-        still_h,
-    );
-    Layout {
-        still,
-        caption,
-        credits,
-        next,
-    }
+/// PURE — the whole card from the two MEASURED button sizes, so the draw and the pointer hit-test
+/// are one arrangement and the arrangement is host-testable.
+pub(crate) fn layout_of(next_w: f32, hide_w: f32, btn_h: f32) -> Layout {
+    let right = crate::appkit::player_hud::CTRL_RIGHT;
+    let h = PAD + INFO_H.max(THUMB_H) + ROW_PAD_BOTTOM + ACTIONS_PAD_TOP + btn_h + PAD;
+    let card = Rect::new(right - CARD_W, CARD_BOTTOM - h, CARD_W, h);
+    let thumb = Rect::new(card.x + PAD, card.y + PAD, THUMB_W, THUMB_H);
+    let info_x = thumb.x + THUMB_W + INFO_GAP;
+    let info = Rect::new(info_x, card.y + PAD, card.x + card.w - PAD - info_x, INFO_H);
+    let btn_y = card.y + card.h - PAD - btn_h;
+    let hide = Rect::new(card.x + card.w - PAD - hide_w, btn_y, hide_w, btn_h);
+    let next = Rect::new(hide.x - PILL_GAP - next_w, btn_y, next_w, btn_h);
+    Layout { card, thumb, info, next, hide }
 }
 
-/// [`layout_of`] over the two measured widths. The primary takes the same control-row slot the
-/// Subtitles/Audio pair occupies — never narrower than the pair it replaces, so the row does not
-/// visibly shrink when it appears — while *Watch Credits* takes only its own label's width:
-/// deliberately NOT a second `ctrl_slot`, because that floor exists to hold the row's right edge
-/// steady, which is the primary's job, and two equal capsules would say the two choices are
-/// equivalent.
-pub(crate) fn layout(row: &mut crate::appkit::player_hud::TransportRow, measure: &dyn nj_machine::machine::Measure) -> Layout {
-    layout_of(
-        crate::appkit::player_hud::ctrl_slot(row, nj_platform::i18n::msg::widgets_next_episode(), measure).w,
-        crate::ui::widgets::Button::pill_w_measured(nj_platform::i18n::msg::widgets_next_credits_c(), theme::size::BODY, false, false, measure),
-    )
+/// [`layout_of`] over the two measured buttons. Only the two BUTTONS are pointer targets: with two
+/// actions on the card, a click on the artwork has no single obvious meaning, and guessing one is
+/// how a stray click starts an episode the user did not ask for.
+pub(crate) fn layout(measure: &dyn nj_machine::machine::Measure) -> Layout {
+    let (next_w, h) = OsdPill::size(nj_platform::i18n::msg::widgets_next_episode(), measure);
+    let (hide_w, _) = OsdPill::size(nj_platform::i18n::msg::widgets_next_credits(), measure);
+    layout_of(next_w, hide_w, h)
 }
 
-/// [`layout`] without writing the row's width memo — what `ControlSlot::item_rect` places the two
-/// buttons at. Only the two BUTTONS are pointer targets: the still and its caption are not, since
-/// with two actions in the row a click on the artwork has no single obvious meaning, and guessing
-/// one is how a stray click starts an episode the user did not ask for.
-pub(crate) fn layout_peek(row: &crate::appkit::player_hud::TransportRow, measure: &dyn nj_machine::machine::Measure) -> Layout {
-    layout_of(
-        crate::appkit::player_hud::ctrl_slot_w(row, nj_platform::i18n::msg::widgets_next_episode(), measure),
-        crate::ui::widgets::Button::pill_w_measured(nj_platform::i18n::msg::widgets_next_credits_c(), theme::size::BODY, false, false, measure),
-    )
-}
-
-/// The caption — `"Up Next · S2, E4 · Laura"`. PRIMARY and bold, not secondary: it sits at y≈760
-/// where the HUD scrim is only ~0.28, so over a bright end card a secondary grey measures ~1.3:1 —
-/// invisible. It is also the only thing distinguishing this episode's ID from the now-playing one
-/// on the same band, hence the explicit "Up Next ·" kicker rather than a bare "S2, E4".
+/// The card's title: the episode's address and name (`fmt::episode_kicker`, shared with the HUD
+/// and the pre-roll ctx line), or the bare name for an unaddressed leaf.
 fn caption(u: &UpNext) -> String {
-    let episode = if u.season > 0 || u.index > 0 {
+    if u.season > 0 || u.index > 0 {
         crate::ui::fmt::episode_kicker(u.season, u.index, &u.ep_title)
     } else {
         u.ep_title.clone()
-    };
-    nj_platform::i18n::msg::widgets_next_caption(&episode)
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw(
     ps: &crate::route::PlaybackSession,
-    row: &mut crate::appkit::player_hud::TransportRow,
+    row: &crate::appkit::player_hud::TransportRow,
     up: &Countdown,
     p: Painter,
     focused: bool,
@@ -293,69 +262,58 @@ pub(crate) fn draw(
     let Some(u) = crate::route::up_next(ps) else {
         return;
     };
-    let l = layout(row, measure);
-    let (pop_credits, pop_next) = (row.scale(BTN_CREDITS), row.scale(BTN_NEXT));
-    // NOT scaled: `CARD_FOCUS_SCALE` is the terminal value of a focus spring the shelves drive, and
-    // passing it as a constant drew the still permanently 7% oversized — overhanging the column on
-    // both sides. The still is decoration on a focusable row, not a focusable tile itself, so it
-    // keeps the card treatment (sheen + resting shadow) at rest scale.
-    draw_card(
-        p,
-        l.still,
-        crate::route::item_sid(crate::route::cur_sid(ps)).raw(),
-        &u.thumb,
-        (480, 270),
-        10.0,
-        false,
-        1.0,
-    );
-
-    let elided = nj_gfx::text::elide_by(&caption(u), l.caption.w, false, |t| {
-        measure.width_str(t, theme::size::CAPTION, true)
-    });
-    if let Ok(cs) = CString::new(elided) {
-        Label::new(cs.as_ptr(), theme::size::CAPTION, theme::TEXT_PRIMARY)
-            .bold()
-            .h(HAlign::Right)
-            .draw(p, l.caption);
+    let l = layout(measure);
+    p.rrect(l.card, theme::radius::LG, theme::radius::LG, osd::CARD_FILL);
+    p.rring(l.card, theme::radius::LG, 1.0, osd::CARD_BORDER);
+    p.rrect(l.thumb, theme::radius::BASE, theme::radius::BASE, osd::CARD_THUMB_FILL);
+    // decoration on a focusable card, not a focusable tile itself: drawn at rest scale
+    draw_card(p, l.thumb, crate::route::item_sid(crate::route::cur_sid(ps)).raw(), &u.thumb, (480, 270),
+        theme::radius::BASE, false, 1.0);
+    if u.season > 0 || u.index > 0 {
+        if let Ok(badge) = CString::new(format!("S{}:E{}", u.season, u.index)) {
+            let w = measure.width(&badge, LABEL_SZ, true) + 10.0;
+            let b = Rect::new(l.thumb.x + l.thumb.w - 4.0 - w, l.thumb.y + l.thumb.h - 4.0 - LABEL_H, w, LABEL_H);
+            p.rrect(b, theme::radius::BASE, theme::radius::BASE, osd::CARD_BADGE_FILL);
+            Label::new(badge.as_ptr(), LABEL_SZ, theme::TEXT_PRIMARY).bold().h(HAlign::Center).draw(p, b);
+        }
     }
-
-    let e = Env::inert();
-    // The focus pop is the CONTROL ROW's, not this card's: these two stand in the transport's own
-    // slot and share its cursor, so they share its springs (`TransportRow::scale`).
-    Button::new(nj_platform::i18n::msg::widgets_next_credits_c().as_ptr(), theme::size::BODY, l.credits)
-        .focused(focused && btn == BTN_CREDITS)
-        // Both buttons on this card stand on LIVE CREDITS — the video plane, under this card's own
-        // scrim — so both take the unkeyed ground (`ControlGround`). It is what the app's
-        // `ControlStyle::Keyline` was hand-rolling for exactly this surface, and the right way
-        // round: a light film over the scrim rather than a darker plate cut into the picture.
-        .ground(ControlGround::Unkeyed)
-        .scale(pop_credits)
-        .draw(&e, p);
-
-    // The primary IS the countdown — its fill sweeps left→right and, at the far edge, the episode
-    // starts. Driven straight off the remaining MILLISECONDS and redrawn every frame, so the sweep
-    // is continuous; the label carries no seconds, because the pill's width is derived from its
-    // label and a ticking numeral would resize the button and slide its centred text every second.
-    let Ok(label) = CString::new(nj_platform::i18n::msg::widgets_next_episode()) else {
-        return;
-    };
-    let mut b = Button::new(label.as_ptr(), theme::size::BODY, l.next)
-        .focused(focused && btn == BTN_NEXT)
-        .ground(ControlGround::Unkeyed)
-        .scale(pop_next);
+    let i = l.info;
+    if let Ok(label) = CString::new(nj_platform::i18n::msg::player_osd_up_next().to_uppercase()) {
+        Label::new(label.as_ptr(), LABEL_SZ, osd::CARD_LABEL).bold().draw(p, Rect::new(i.x, i.y, i.w, LABEL_H));
+    }
+    let title = caption(u);
+    crate::ui::text_view::TextView::new(&title, TITLE_SZ, theme::TEXT_PRIMARY)
+        .bold()
+        .with_measure(measure)
+        .leading(TITLE_LEADING)
+        .max_lines(2)
+        .draw(p, Rect::new(i.x, i.y + LABEL_H, i.w, 2.0 * TITLE_LEADING));
     if up.armed() {
         // It animates from a CLOCK, so `nj_machine::idle`'s spring instrumentation cannot see it — the trap
-        // `Xfade::tick` and `Spinner::draw` both shipped frozen in. The player route bypasses the
-        // frame gate outright today, so this changes nothing now; it is what keeps that reversible.
-        // A HELD clock (`remaining_ms`) draws one fixed fill, so there is nothing to redraw — the
-        // same exception `widgets::Spinner` makes.
+        // `Xfade::tick` and `Spinner::draw` both shipped frozen in. A HELD clock (`remaining_ms`) draws
+        // one fixed second, so there is nothing to redraw — the same exception `widgets::Spinner` makes.
         if !nj_machine::motion::phase_clocks_held() {
             nj_machine::idle::invalidate();
         }
-        b = b.progress(1.0 - (up.remaining_ms(now) as f32 / COUNTDOWN_MS as f32).clamp(0.0, 1.0));
+        let secs = i64::from(up.remaining_ms(now).div_ceil(1000));
+        if let Ok(text) = CString::new(nj_platform::i18n::msg::player_osd_starts_in(&secs.to_string())) {
+            Label::new(text.as_ptr(), COUNTDOWN_SZ, osd::CARD_COUNTDOWN)
+                .draw(p, Rect::new(i.x, i.y + LABEL_H + 2.0 * TITLE_LEADING, i.w, COUNTDOWN_H));
+        }
     }
-    b.draw(&e, p);
+    let e = Env::inert();
+    // The focus pop is the CONTROL ROW's, not this card's: these two stand in the transport's own
+    // row and share its cursor, so they share its springs (`TransportRow::pop`).
+    for (idx, rect, label, primary) in [
+        (BTN_NEXT, l.next, nj_platform::i18n::msg::widgets_next_episode_c(), true),
+        (BTN_CREDITS, l.hide, nj_platform::i18n::msg::widgets_next_credits_c(), false),
+    ] {
+        OsdPill::new(label.as_ptr(), rect)
+            .primary(primary)
+            .focused(focused && btn == idx)
+            .scale(row.pop(idx, OsdPill::FOCUS_SCALE))
+            .draw(&e, p);
+    }
 }
 
 #[cfg(test)]
@@ -399,64 +357,39 @@ mod tests {
         }
     }
 
-    /// The ring parks on the RIGHT item, which is the one place in the app where a row's primary is
-    /// not index 0 — a Skip pill's only item is, and so is the first disc. If this ever silently
-    /// became 0 the countdown would arm and be cancelled by its own resting state on the very next
-    /// frame, and the tile would look like a timer that never runs.
+    /// The ring parks on the primary, *Next Episode*. If it ever parked on *Watch Credits* the
+    /// countdown would arm and be cancelled by its own resting state on the very next frame, and the
+    /// card would look like a timer that never runs.
     #[test]
-    fn the_primary_is_the_right_hand_item_and_the_countdown_survives_it() {
+    fn the_ring_parks_on_the_primary_and_the_countdown_survives_it() {
         assert_eq!(PRIMARY_BTN, BTN_NEXT);
         assert!(countdown_may_run(true, true, PRIMARY_BTN));
     }
 
-    /// Geometry, from the design's own column: the two pills share a baseline and the control row's
-    /// right edge, Watch Credits sits `space::SM` to the LEFT of the primary (so LEFT reaches it),
-    /// and the still shares the primary's width and edge in a 16:9 frame. Driven through the PURE
-    /// half with the two widths supplied, because the impure one measures with `TTF_SizeUTF8` and
-    /// the host suite cannot link SDL2_ttf at all.
+    /// Geometry, from the card's own CSS: the card holds the OSD's right edge with its foot 270 above
+    /// the panel's bottom, the still and the text sit inside its 28 padding, and the pair is
+    /// right-aligned with the primary on the LEFT (so LEFT reaches it from Watch Credits) on one
+    /// baseline. Driven through the PURE half with the sizes supplied.
     #[test]
-    fn the_column_is_right_anchored_on_one_edge() {
-        // the real orders of magnitude: `ctrl_slot`'s floor is 236, and "Watch Credits" measures a
-        // little under it — which is the asymmetry the design is making a point of
-        let l = layout_of(243.0, 226.0);
-        let (n, c, t, cap) = (l.next, l.credits, l.still, l.caption);
+    fn the_card_is_right_anchored_with_its_buttons_right_aligned() {
+        let l = layout_of(190.0, 200.0, 50.0);
         let right = crate::appkit::player_hud::CTRL_RIGHT;
-        assert_eq!(n.x + n.w, right, "the primary holds the row's right edge");
-        assert_eq!(t.x + t.w, right, "…and the still shares it");
-        assert_eq!(
-            cap.x + cap.w,
-            right,
-            "…and the caption's right-aligned run is measured from it"
-        );
-        assert_eq!(t.w, n.w, "one column, one pair of edges");
-        assert_eq!(
-            t.h,
-            (n.w * 9.0 / 16.0).round(),
-            "16:9 — it is a video frame"
-        );
-        assert!(
-            c.x + c.w < n.x,
-            "Watch Credits is drawn LEFT of the primary, so LEFT reaches it"
-        );
-        assert_eq!(n.x - (c.x + c.w), PILL_GAP);
-        assert_eq!(c.y, n.y, "the pair shares a baseline");
-        assert_eq!(c.h, n.h);
-        // stacked bottom-up with the unequal gaps that do the grouping
-        assert_eq!(cap.y + cap.h + BTN_GAP, n.y);
-        assert_eq!(t.y + t.h + CAP_GAP, cap.y);
-        assert!(
-            CAP_GAP < BTN_GAP,
-            "the caption belongs to the still, not to the buttons"
-        );
-        // The whole tile sits ABOVE the control row's own band and inside the frame — it is the
-        // tallest thing the transport ever puts there, and the still is what could run off the top.
-        assert!(t.y > 0.0, "the column fits on the panel");
-        assert!(c.x > 0.0, "…and does not run off its left edge");
+        assert_eq!(l.card.x + l.card.w, right, "the card holds the OSD's right edge");
+        assert_eq!(l.card.y + l.card.h, CARD_BOTTOM);
+        assert_eq!(l.card.w, CARD_W);
+        assert_eq!(l.hide.x + l.hide.w, right - PAD, "the pair is right-aligned inside the padding");
+        assert_eq!(l.hide.x - (l.next.x + l.next.w), PILL_GAP);
+        assert_eq!((l.next.y, l.next.h), (l.hide.y, l.hide.h), "one baseline");
+        assert_eq!(l.card.y + l.card.h - PAD, l.hide.y + l.hide.h);
+        assert_eq!((l.thumb.x, l.thumb.y), (l.card.x + PAD, l.card.y + PAD));
+        assert!(l.info.x + l.info.w <= right - PAD && l.info.y + l.info.h < l.next.y, "the text clears the buttons");
+        assert!(l.card.y > crate::ui::consts::MARGIN_Y && l.card.y + l.card.h < crate::appkit::player_hud::CTRL_Y,
+            "the card sits on the panel, above the controls row");
     }
 
-    /// The caption names the successor and says so: the kicker survives, the address comes from the
-    /// shared `fmt::episode_kicker` (so the HUD, the pre-roll ctx line and this cannot drift), and an
-    /// unaddressed leaf degrades to the bare title instead of drawing "S0, E0".
+    /// The title names the successor: the address comes from the shared `fmt::episode_kicker` (so
+    /// the HUD, the pre-roll ctx line and this cannot drift), and an unaddressed leaf degrades to the
+    /// bare title instead of drawing "S0, E0".
     #[test]
     fn the_caption_is_the_shared_episode_vocabulary_behind_an_up_next_kicker() {
         let ep = UpNext {
@@ -465,15 +398,11 @@ mod tests {
             ep_title: "Laura".into(),
             ..Default::default()
         };
-        assert_eq!(caption(&ep), "Up Next \u{b7} S2, E4 \u{b7} Laura");
+        assert_eq!(caption(&ep), crate::ui::fmt::episode_kicker(2, 4, "Laura"));
         let bare = UpNext {
             ep_title: "Laura".into(),
             ..Default::default()
         };
-        assert_eq!(
-            caption(&bare),
-            "Up Next \u{b7} Laura",
-            "no address, no empty ordinal"
-        );
+        assert_eq!(caption(&bare), "Laura", "no address, no empty ordinal");
     }
 }

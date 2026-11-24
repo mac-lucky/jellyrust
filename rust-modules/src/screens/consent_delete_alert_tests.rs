@@ -115,6 +115,7 @@ fn cancelling_the_alert_never_asks_the_loop_to_delete_anything() {
 /// arms: before them, this test's two assertions on `draft`/`out` would have failed.
 #[test]
 fn the_open_alert_refuses_a_stray_activate_or_presscommit_on_the_table_or_band() {
+    let _reporting = super::offer_reporting_for_test(); // litefin: the upstream rows
     let _g = nj_base::testlock::serial();
     let m = FixtureMeasure;
     let c = test_cx(&m);
@@ -263,6 +264,7 @@ fn a_stale_presscommit_after_the_alert_was_already_dismissed_deletes_nothing() {
 /// would silently RE-OPEN the very alert that is still dissolving on screen.
 #[test]
 fn the_dismissal_fade_traps_activate_presscommit_and_keys_the_same_as_the_open_alert() {
+    let _reporting = super::offer_reporting_for_test(); // litefin: the upstream rows
     let _g = nj_base::testlock::serial();
     let m = FixtureMeasure;
     let c = test_cx(&m);

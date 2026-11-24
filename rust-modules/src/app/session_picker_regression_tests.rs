@@ -323,6 +323,8 @@ fn change_profile_then_back_cannot_restore_the_protected_profile_it_left() {
 fn first_run_consent_over_the_picker_does_not_flip_mounts_every_frame() {
     use super::test_support::tick;
     let _g = nj_base::testlock::serial();
+    // The fork never asks (telemetry is off); this grades upstream's mount logic for the question.
+    let _reporting = crate::screens::consent::offer_reporting_for_test();
     let saved_consent = crate::telemetry::consent::current();
     crate::telemetry::consent::install(crate::telemetry::consent::Consent::default());
     // Any `nativejelly-*` file in the runtime root suppresses the question (`dev::any_trigger_present`);

@@ -141,6 +141,7 @@ pub(crate) enum Screen {
     Person,
     Collection,
     Search,
+    Favorites,
     /// `overlay` is the same word the heartbeat prints after `overlay=`, supplied by `app.rs` from
     /// its own exhaustive match on the private `Overlay` enum.
     Player {
@@ -167,7 +168,6 @@ pub(crate) enum Screen {
 pub(crate) struct Hud {
     pub(crate) focus: c_int,
     pub(crate) btn: c_int,
-    pub(crate) tab: c_int,
     pub(crate) visible: bool,
 }
 
@@ -263,7 +263,7 @@ fn push_fields(ps: &crate::route::PlaybackSession, s: &mut String, screen: Scree
         }
         Screen::Home => s.push_str(content),
         Screen::Library => s.push_str(content),
-        Screen::Detail | Screen::Person | Screen::Collection => s.push_str(content),
+        Screen::Detail | Screen::Person | Screen::Collection | Screen::Favorites => s.push_str(content),
         // Owned like Library/Detail/Person: the content string is built generically by the
         // caller (`super::bridge::content_probe`, from the mounted `SearchScreen`'s own
         // `LogicalState::probe` output), not read off a legacy global here.
@@ -297,12 +297,11 @@ fn push_player(ps: &crate::route::PlaybackSession, s: &mut String, overlay: &str
     // (Phase 12, PX-PLAYER: the loop does not read this predicate at all any more.)
     let _ = write!(
         s,
-        " ov={} hud={} f={} btn={} tab={} slot={} items={} hidden={}",
+        " ov={} hud={} f={} btn={} slot={} items={} hidden={}",
         overlay,
         b(hud.visible),
         hud.focus,
         hud.btn,
-        hud.tab,
         slot,
         ctrl.items(),
         b(crate::appkit::player_hud::transport_hidden(ps))
@@ -398,7 +397,6 @@ mod tests {
         Hud {
             focus: 0,
             btn: 0,
-            tab: 0,
             visible: false,
         }
     }
@@ -431,6 +429,7 @@ mod tests {
             ("person", Screen::Person),
             ("collection", Screen::Collection),
             ("search", Screen::Search),
+            ("favorites", Screen::Favorites),
             ("player", Screen::Player { overlay: "none" }),
             ("player", Screen::Player { overlay: "info" }),
         ]
@@ -525,9 +524,8 @@ mod tests {
             "player",
             Screen::Player { overlay: "none" },
             Hud {
-                focus: 2,
+                focus: 1,
                 btn: 1,
-                tab: 1,
                 visible: true,
             },
             ControlSlot::Discs(crate::appkit::player_hud::Controls::NONE), test_store().view(),
@@ -546,43 +544,36 @@ mod tests {
     fn moving_the_hud_cursor_changes_the_line() {
         let ps = crate::route::PlaybackSession::IDLE;
         let _g = nj_base::testlock::serial();
-        let at = |f, btn, tab| {
+        let at = |f, btn| {
             fingerprint(&ps, 
                 "player",
                 Screen::Player { overlay: "none" },
                 Hud {
                     focus: f,
                     btn,
-                    tab,
                     visible: true,
                 },
                 ControlSlot::Discs(crate::appkit::player_hud::Controls::NONE), test_store().view(),
             )
         };
         assert_ne!(
-            at(0, 0, 0),
-            at(1, 0, 0),
+            at(0, 0),
+            at(1, 0),
             "the HUD focus row is not observable"
         );
         assert_ne!(
-            at(1, 0, 0),
-            at(1, 1, 0),
+            at(1, 0),
+            at(1, 1),
             "the control-row cursor is not observable"
         );
         assert_ne!(
-            at(2, 0, 0),
-            at(2, 0, 1),
-            "the tab-row cursor is not observable"
-        );
-        assert_ne!(
-            at(0, 0, 0),
+            at(0, 0),
             fingerprint(&ps, 
                 "player",
                 Screen::Player { overlay: "info" },
                 Hud {
                     focus: 0,
                     btn: 0,
-                    tab: 0,
                     visible: true
                 },
                 ControlSlot::Discs(crate::appkit::player_hud::Controls::NONE), test_store().view()

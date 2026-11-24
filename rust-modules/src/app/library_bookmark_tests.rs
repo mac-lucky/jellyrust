@@ -156,21 +156,17 @@ fn retired_library_entry_seeds_its_previous_section_card_and_viewport() {
     let select = |d: &mut Dispatcher<AppHost>, rig: &Bridge, index: usize| {
         let view = rig.directory.view();
         let section = &view.sections()[index];
-        let target = crate::stores::browse::SectionAddress {
-            epoch: view.epoch().unwrap(),
-            sid: section.sid.unwrap(),
-            section: section.key,
-        };
+        let target = crate::screens::registry::LibrarySectionIdentity { sid: section.sid.unwrap(), key: section.key };
         let instance = d.nav.top_page().unwrap().inst.as_ref().unwrap().id;
         d.emit(
             MachineId::Nav,
             Fx::Deliver(
                 MachineId::Instance(instance),
-                Delivery::Screen(ScreenEvent::App(AppMsg::LibrarySelect(target))),
+                Delivery::Screen(ScreenEvent::App(AppMsg::Library(crate::screens::registry::LibraryCmd::Enter(target)))),
             ),
         );
     };
-    // Menu selection addresses a covered host: its Cx must read that host entry's
+    // A section change addresses a covered host: its Cx must read that host entry's
     // engine memory, never the menu's current row or its unrelated remembered groups.
     let listing_id = rig.listing.view().id().unwrap();
     d.nav.next_style = crate::ui::containers::modal::Style::Compact;
@@ -207,7 +203,8 @@ fn retired_library_entry_seeds_its_previous_section_card_and_viewport() {
         );
     }
     assert!(saves.0.iter().any(|(target, cursor)| target.sid == item.sid
-        && matches!(&cursor.at, crate::stores::browse::CursorAt::ItemKey { sid, rk, slot: 52 } if *sid == item.sid && rk == &item.rk)),
+        && matches!(&cursor.at, crate::stores::browse::CursorAt::ItemKey { sid, rk, slot } if *sid == item.sid && rk == &item.rk
+            && *slot as usize == 8 * crate::ui::poster_grid::COLS + 4)),
         "section switching must emit the outgoing A snapshot through the StoreCmd drain");
     assert_eq!(
         rig.directory.view().current(),
@@ -244,13 +241,15 @@ fn retired_library_entry_seeds_its_previous_section_card_and_viewport() {
         d.prune(&report.unmounted);
     }
     assert!(saves.0.iter().any(|(target, cursor)| target.sid == b_item.sid
-        && matches!(&cursor.at, crate::stores::browse::CursorAt::ItemKey { sid, rk, slot: 19 } if *sid == b_item.sid && rk == &b_item.rk)),
+        && matches!(&cursor.at, crate::stores::browse::CursorAt::ItemKey { sid, rk, slot } if *sid == b_item.sid && rk == &b_item.rk
+            && *slot as usize == 3 * crate::ui::poster_grid::COLS + 1)),
         "outgoing WillLeave must emit B's snapshot before its engine memory is retired");
     assert!(
         d.nav.entry(old_entry).is_none(),
         "the test must retire, not merely evict, the old entry"
     );
-    rig.enter_library(crate::stores::browse::SecKind::Movie);
+    let current = rig.current_library_for_test();
+    rig.enter_library(current);
     for i in 210..290 {
         frame(&mut d, &mut rig, AppArg::Library, tick(i), vec![]);
     }

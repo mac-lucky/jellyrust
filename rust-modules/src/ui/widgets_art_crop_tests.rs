@@ -6,9 +6,10 @@ use crate::ui::card_row::RowStyle;
 /// The crop never reads which server a picture came from, so any raw id will do.
 const SRC: u16 = 0;
 
-/// The cast row's circle, at rest and popped. The shape is what matters; the position is not.
-fn cast_circle(scale: f32) -> Rect {
-    Rect::new(96.0, 700.0, RowStyle::CAST.w, RowStyle::CAST.h).scaled(scale)
+/// The cast row's poster card (Litefin's 2:3 classic card), at rest and popped. The shape is what
+/// matters; the position is not.
+fn cast_card(scale: f32) -> Rect {
+    Rect::new(172.0, 700.0, RowStyle::HOME.w, RowStyle::HOME.h).scaled(scale)
 }
 
 fn headshot(key: &str) -> Art<'_> {
@@ -20,23 +21,24 @@ fn texel_scale(uv: [f32; 4], tw: f32, th: f32, r: Rect) -> (f32, f32) {
     (uv[2] * tw / r.w, uv[3] * th / r.h)
 }
 
-/// **The reported bug.** A cast headshot is requested at 300×300 with `minSize=1`, which COVERS the
-/// box, so a portrait photo decodes at 300×450. The tile used to sample the whole texture into the
-/// 190×190 circle — a vertical squash to two-thirds. It must now sample an even-scaled window that
-/// keeps the full width and rides high on the photo, at rest and through the focus pop.
+/// **The reported bug, on Litefin's poster card.** A headshot decodes at whatever aspect the
+/// server stores it; sampling the whole texture into the tile squashes it. The tile samples an
+/// even-scaled window instead, at rest and through the focus pop: a square photo keeps its full
+/// height and loses its sides, a photo taller than the card keeps its width and rides high.
 #[test]
-fn a_portrait_headshot_on_the_cast_row_is_cropped_not_squashed() {
-    let (tw, th) = (300.0, 450.0);
-    for scale in [1.0, RowStyle::CAST.focus_scale] {
-        let r = cast_circle(scale);
-        let uv = art_uv(&headshot("/library/metadata/1/thumb"), tw, th, r);
-        let (sx, sy) = texel_scale(uv, tw, th, r);
-        assert!((sx - sy).abs() < 1e-4, "cast headshot drawn with uneven scale {sx} x {sy} (uv {uv:?})");
-        assert_eq!(uv[2], 1.0, "the full width of a portrait survives");
-        assert!(
-            uv[1] < (1.0 - uv[3]) * 0.5,
-            "a headshot's crop must keep more of the top than the bottom: {uv:?}"
-        );
+fn a_headshot_on_the_cast_row_is_cropped_not_squashed() {
+    for scale in [1.0, RowStyle::HOME.focus_scale] {
+        let r = cast_card(scale);
+        for (tw, th) in [(300.0, 300.0), (300.0, 600.0)] {
+            let uv = art_uv(&headshot("/library/metadata/1/thumb"), tw, th, r);
+            let (sx, sy) = texel_scale(uv, tw, th, r);
+            assert!((sx - sy).abs() < 1e-4, "cast headshot drawn with uneven scale {sx} x {sy} (uv {uv:?})");
+        }
+        let square = art_uv(&headshot("k"), 300.0, 300.0, r);
+        assert!(square[3] == 1.0 && square[2] < 1.0, "a square photo keeps its height: {square:?}");
+        let tall = art_uv(&headshot("k"), 300.0, 600.0, r);
+        assert_eq!(tall[2], 1.0, "the full width of a tall photo survives");
+        assert!(tall[1] < (1.0 - tall[3]) * 0.5, "a headshot's crop must keep more of the top than the bottom: {tall:?}");
     }
 }
 
@@ -66,5 +68,5 @@ fn art_at_its_tiles_aspect_is_untouched_and_a_poster_in_a_landscape_tile_is_crop
     assert!((sx - sy).abs() < 1e-4, "poster fallback drawn with uneven scale {sx} x {sy}");
     assert!(uv[3] < 1.0 && uv[2] == 1.0, "a tall poster in a wide tile loses top and bottom: {uv:?}");
     // an undecoded texture answers the whole window, never a NaN
-    assert_eq!(art_uv(&headshot("k"), 0.0, 0.0, cast_circle(1.0)), nj_gfx::gfx::UV_FULL);
+    assert_eq!(art_uv(&headshot("k"), 0.0, 0.0, cast_card(1.0)), nj_gfx::gfx::UV_FULL);
 }

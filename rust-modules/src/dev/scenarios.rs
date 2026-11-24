@@ -302,16 +302,6 @@ pub(crate) fn arm_cardsplit() {
     if nj_base::devtrig::flag("nocardsplit") { nj_gfx::overdraw::set_card_split(false); }
 }
 
-
-/// `/tmp/nativejelly-heroground` — the one-pass hero ground A/B.
-pub(crate) fn arm_heroground() {
-    if nj_base::devtrig::flag("heroground") {
-        crate::ui::widgets::set_hero_ground(true);
-        #[cfg(feature = "devtriggers")]
-        nj_base::eventlog::log("hero: one-pass ground ENABLED by /tmp/nativejelly-heroground");
-    }
-}
-
 /// `/tmp/nativejelly-profile` / `/tmp/nativejelly-hwcnt` — the two GPU-time profilers. Both present
 /// is refused; either alone arms its mode.
 ///
@@ -950,16 +940,6 @@ fn grid_library_search_heroidx_arm(app: &mut App, _fr: &mut Frame) {
             let (row, col) = screenshot::parse_cell(&v).unwrap_or((0, 0));
             app.bridge.home_command(HomeCmd::FocusGrid { row, col });
         }
-        if let Some(s) = nj_base::devtrig::read("library") {
-            let kind = match s.parse::<usize>().unwrap_or(0) {
-                1 => crate::stores::browse::SecKind::Show,
-                _ => crate::stores::browse::SecKind::Movie,
-            };
-            app.bridge.enter_library(kind);
-            // Same pill semantics as the search trigger above: boot has already rooted Home,
-            // so this is `SelectTab`, not a `Root` that would discard it.
-            crate::app::bridge::nav_select_tab(&mut app.pages, AppArg::Library);
-        }
         if let Some(q) = nj_base::devtrig::read("search") {
             apply_search_boot_trigger(&q, &mut app.pages, &mut app.bridge);
         }
@@ -1058,6 +1038,80 @@ fn acct_arm(app: &mut App, fr: &mut Frame) {
         crate::app::bridge::open_account_menu(&mut app.pages);
     } else if fr.now.wrapping_sub(app.t0) > 12_000 {
         app.scenarios.acct_tried = true;
+    }
+}
+
+/// `/tmp/nativejelly-library[=<n>]` — from Home, open the `n`th library in the server's view order
+/// (the rail popover's rows) as its row opens it; an empty file opens the server's preferred
+/// Movies library (else the first). It waits for the directory to list the library, up to 20 s.
+/// Boot has already rooted Home, so this is `SelectTab`, not a `Root` that would discard it.
+fn library_arm(app: &mut App, fr: &mut Frame) {
+    if app.bridge.dev_library_done { return; }
+    let Some(value) = nj_base::devtrig::read("library") else { app.bridge.dev_library_done = true; return; };
+    if fr.now.wrapping_sub(app.t0) <= 400 || !matches!(app.route(), AppArg::Home) { return; }
+    match app.bridge.dev_library(&value) {
+        Ok(Some(section)) => {
+            app.bridge.dev_library_done = true;
+            crate::app::bridge::open_library(&mut app.pages, &mut app.bridge, section, None);
+        }
+        Ok(None) if fr.now.wrapping_sub(app.t0) <= 20_000 => {}
+        Ok(None) => {
+            nj_base::eventlog::log(&format!("library={value}: the directory never listed it"));
+            app.bridge.dev_library_done = true;
+        }
+        Err(()) => {
+            nj_base::eventlog::log(&format!("BADTRIGGER library={value:?}: not a library number"));
+            app.bridge.dev_library_done = true;
+        }
+    }
+}
+
+/// `/tmp/nativejelly-rail=<slot>[,<rest ms>]` — once the page has come to rest, put the remote on
+/// rail slot `<slot>` (0 = the first item, the item count = the account), or `libraries` to open
+/// the Libraries popover as its OK does: the rail's focus states for a capture.
+fn rail_arm(app: &mut App, fr: &mut Frame) {
+    if app.bridge.dev_rail_done { return; }
+    let Some(spec) = nj_base::devtrig::read("rail") else { app.bridge.dev_rail_done = true; return; };
+    let (what, rest) = spec.split_once(',').map_or((spec.as_str(), Some(1500)), |(w, ms)| (w, ms.trim().parse().ok()));
+    let ready = screenshot::at_rest(fr.now, rest) && fr.now.wrapping_sub(app.t0) > 2_000;
+    if ready && crate::app::bridge::dev_rail(&mut app.pages, &mut app.bridge, what.trim()) {
+        app.bridge.dev_rail_done = true;
+    } else if fr.now.wrapping_sub(app.t0) > 20_000 {
+        nj_base::eventlog::log(&format!("rail={spec}: no rail to focus"));
+        app.bridge.dev_rail_done = true;
+    }
+}
+
+/// `/tmp/nativejelly-favorites[=<row>]` — once Home is up, open the Favorites page as its rail
+/// item does, and with a row number put the remote on that row's first card once it has landed.
+fn favorites_arm(app: &mut App, fr: &mut Frame) {
+    if app.bridge.dev_favorites_done { return; }
+    let Some(value) = nj_base::devtrig::read("favorites") else { app.bridge.dev_favorites_done = true; return; };
+    let row = value.trim().parse::<usize>().ok();
+    if matches!(app.route(), AppArg::Favorites) {
+        if row.is_none_or(|row| crate::app::bridge::dev_favorites_row(&mut app.pages, row)) {
+            app.bridge.dev_favorites_done = true;
+        }
+    } else if matches!(app.route(), AppArg::Home) && fr.now.wrapping_sub(app.t0) > 400 && !app.pages.has_pending_navigation() {
+        crate::app::bridge::nav_select_tab(&mut app.pages, AppArg::Favorites);
+    }
+    if !app.bridge.dev_favorites_done && fr.now.wrapping_sub(app.t0) > 20_000 {
+        nj_base::eventlog::log(&format!("favorites={value}: no such row to focus"));
+        app.bridge.dev_favorites_done = true;
+    }
+}
+
+/// `/tmp/nativejelly-random` — once Home has come to rest, pick a random title as the rail's
+/// Random item does; its detail page opens when the pick lands.
+fn random_arm(app: &mut App, fr: &mut Frame) {
+    if app.bridge.dev_random_done { return; }
+    if !nj_base::devtrig::flag("random") { app.bridge.dev_random_done = true; return; }
+    if matches!(app.route(), AppArg::Home) && screenshot::at_rest(fr.now, Some(1500)) && fr.now.wrapping_sub(app.t0) > 2_000 {
+        app.bridge.dev_random_done = true;
+        crate::app::bridge::dev_random(&mut app.pages, &mut app.bridge);
+    } else if fr.now.wrapping_sub(app.t0) > 20_000 {
+        nj_base::eventlog::log("random: Home never came to rest");
+        app.bridge.dev_random_done = true;
     }
 }
 
@@ -1367,7 +1421,7 @@ fn autopause_arm(app: &mut App, fr: &mut Frame) {
                 app.scenarios.pause_resume_at = hold_ms.map(|hold| fr.now.wrapping_add(hold));
                 #[cfg(feature = "hostsim")]
                 crate::player::stop_sim_clock_at(None);
-                pin_headless_hud(app, fr.now, None);
+                pin_headless_hud(app, fr.now, false);
             }
         }
     }
@@ -1390,19 +1444,36 @@ fn menu_arm(app: &mut App, fr: &mut Frame) {
                 &mut app.pages,
                 crate::screens::player::overlay::OverlayKind::Tracks { tab: t.parse::<c_int>().unwrap_or(0) },
             );
-            pin_headless_hud(app, fr.now, None);
+            pin_headless_hud(app, fr.now, false);
         }
         if nj_base::devtrig::flag("more") {
             crate::app::bridge::open_player_overlay(&mut app.player.session, app.bridge.metadata_view(), &mut app.pages, crate::screens::player::overlay::OverlayKind::More { quality: false });
-            pin_headless_hud(app, fr.now, None);
+            pin_headless_hud(app, fr.now, false);
         }
         if nj_base::devtrig::flag("info") {
             crate::app::bridge::open_player_overlay(&mut app.player.session, app.bridge.metadata_view(), &mut app.pages, crate::screens::player::overlay::OverlayKind::Info);
-            pin_headless_hud(app, fr.now, Some(0));
+            pin_headless_hud(app, fr.now, true);
         }
         if nj_base::devtrig::flag("chapters") {
             crate::app::bridge::open_player_overlay(&mut app.player.session, app.bridge.metadata_view(), &mut app.pages, crate::screens::player::overlay::OverlayKind::Chapters);
-            pin_headless_hud(app, fr.now, Some(1));
+            pin_headless_hud(app, fr.now, true);
+        }
+        // `/tmp/nativejelly-osdfocus=<btn>`: park the OSD's ring on controls-row item `btn`
+        // (`appkit::player_hud::BTN_*`) and pin the HUD — the focused-button capture.
+        if let Some(btn) = nj_base::devtrig::read("osdfocus").and_then(|v| v.trim().parse::<i32>().ok()) {
+            if let Some(player) = crate::app::bridge::player_mut(&mut app.pages) {
+                player.hud.nav.focus = 1;
+                player.hud.nav.btn = btn;
+            }
+            pin_headless_hud(app, fr.now, false);
+        }
+        // `/tmp/nativejelly-osdscrub=<ms>`: hold a scrub preview at `ms` — the seek tooltip capture.
+        if let Some(ms) = nj_base::devtrig::read("osdscrub").and_then(|v| v.trim().parse::<i64>().ok()) {
+            if let Some(player) = crate::app::bridge::player_mut(&mut app.pages) {
+                player.scrub.ns = ms.max(0) * 1_000_000;
+                player.publish();
+            }
+            pin_headless_hud(app, fr.now, false);
         }
     }
 }
@@ -1526,7 +1597,7 @@ fn submenuosc_arm(app: &mut App, fr: &mut Frame) {
     let Some((tab, depth, has_other)) = probe else {
         if !crate::app::bridge::player_overlay_up(&app.pages) {
             crate::app::bridge::open_player_overlay(&mut app.player.session, app.bridge.metadata_view(), &mut app.pages, crate::screens::player::overlay::OverlayKind::Tracks { tab: 1 });
-            pin_headless_hud(app, fr.now, None);
+            pin_headless_hud(app, fr.now, false);
             app.scenarios.submenu_osc.step = 0;
         }
         return;
@@ -1572,7 +1643,7 @@ fn moreosc_arm(app: &mut App, fr: &mut Frame) {
     let Some(depth) = crate::app::bridge::player_overlay_mut(&mut app.pages).and_then(|s| s.more_probe()) else {
         if !crate::app::bridge::player_overlay_up(&app.pages) {
             crate::app::bridge::open_player_overlay(&mut app.player.session, app.bridge.metadata_view(), &mut app.pages, crate::screens::player::overlay::OverlayKind::More { quality: false });
-            pin_headless_hud(app, fr.now, None);
+            pin_headless_hud(app, fr.now, false);
         }
         return;
     };
@@ -1913,6 +1984,10 @@ pub(crate) unsafe fn each_frame(app: &mut App, fr: &mut Frame) -> bool {
     press_arm(app, fr);
     itemmenu_arm(app, fr);
     acct_arm(app, fr);
+    library_arm(app, fr);
+    rail_arm(app, fr);
+    favorites_arm(app, fr);
+    random_arm(app, fr);
     screenshot::libtype_arm(app, fr);
     screenshot::libgrid_arm(app, fr);
     screenshot::libshelf_arm(app, fr);
@@ -2000,7 +2075,6 @@ pub(crate) fn pickuser_tick(app: &mut App) {
 /// `/tmp/nativejelly-navosc` — bounce the route Home↔Library (or Home↔a named detail page) on a
 /// timer. Called from `app::run::land_results` at the position the arm always occupied.
 pub(crate) fn nav_osc_tick(app: &mut App, now: u32) {
-    use crate::screens::registry::HomeTab;
     if app.scenarios.dev.nav_osc && now.wrapping_sub(app.scenarios.nav_osc_last) > 1400 {
         app.scenarios.nav_osc_last = now;
         match app.route() {
@@ -2011,20 +2085,11 @@ pub(crate) fn nav_osc_tick(app: &mut App, now: u32) {
             }
             AppArg::Content(_) => crate::app::bridge::nav_pop(&mut app.pages),
             AppArg::Home => {
-                if let Some(kind) = app.bridge.browse_directory().tab_kind(0) {
-                    let tab = match kind {
-                        crate::stores::browse::SecKind::Show => HomeTab::Shows,
-                        _ => HomeTab::Movies,
-                    };
-                    crate::app::bridge::nav_tab(&mut app.pages, &mut app.bridge, tab, None, None);
+                if let Some(section) = app.bridge.library_at(0) {
+                    crate::app::bridge::open_library(&mut app.pages, &mut app.bridge, section, None);
                 }
             }
-            AppArg::Library => {
-                let origin = crate::app::chrome::pill_at(
-                    app.bridge.browse_directory(), 1);
-                crate::app::bridge::nav_tab(&mut app.pages, &mut app.bridge,
-                    HomeTab::Home, Some(origin), None);
-            }
+            AppArg::Library => crate::app::bridge::nav_home(&mut app.pages, None),
             _ => {}
         }
     }
@@ -2191,7 +2256,7 @@ fn log_bench_settled(kind: &str, waited_ms: u32, capped: bool) {
 /// Opens `target` through the real bridge/nav call the interactive press uses, and returns the
 /// target ACTUALLY opened — `Person` falls back to `Library` when no cast data has landed yet.
 fn push_bench_open(app: &mut App, target: bench::PushTarget) -> bench::PushTarget {
-    use crate::screens::registry::{ContentArg, HomeTab};
+    use crate::screens::registry::ContentArg;
     match target {
         bench::PushTarget::Detail => {
             let rk = app.scenarios.push_bench.as_ref().unwrap().rk.clone();
@@ -2216,29 +2281,21 @@ fn push_bench_open(app: &mut App, target: bench::PushTarget) -> bench::PushTarge
             }
         }
         bench::PushTarget::Library => {
-            if let Some(kind) = app.bridge.browse_directory().tab_kind(0) {
-                let tab = match kind {
-                    crate::stores::browse::SecKind::Show => HomeTab::Shows,
-                    _ => HomeTab::Movies,
-                };
-                crate::app::bridge::nav_tab(&mut app.pages, &mut app.bridge, tab, None, None);
+            if let Some(section) = app.bridge.library_at(0) {
+                crate::app::bridge::open_library(&mut app.pages, &mut app.bridge, section, None);
             }
             bench::PushTarget::Library
         }
     }
 }
 
-/// …and its close, through `nav_pop`/`nav_tab` exactly as `nav_osc_tick`'s reverse leg does.
+/// …and its close, through `nav_pop`/`nav_home` exactly as `nav_osc_tick`'s reverse leg does.
 fn push_bench_close(app: &mut App, opened: bench::PushTarget) {
-    use crate::screens::registry::HomeTab;
     match opened {
         bench::PushTarget::Detail | bench::PushTarget::Person => {
             crate::app::bridge::nav_pop(&mut app.pages);
         }
-        bench::PushTarget::Library => {
-            let origin = crate::app::chrome::pill_at(app.bridge.browse_directory(), 1);
-            crate::app::bridge::nav_tab(&mut app.pages, &mut app.bridge, HomeTab::Home, Some(origin), None);
-        }
+        bench::PushTarget::Library => crate::app::bridge::nav_home(&mut app.pages, None),
     }
 }
 

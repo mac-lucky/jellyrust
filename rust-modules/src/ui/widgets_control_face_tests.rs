@@ -617,3 +617,44 @@ fn a_selected_player_tab_keeps_a_quiet_face_until_it_owns_focus() {
     let focused = pill().focused(true).face();
     assert_eq!(focused, (Some(crate::ui::ACCENT), crate::ui::ACCENT_INK, 1.0));
 }
+
+/// **Litefin's action face** (`docs/litefin-look.md` 5 Actions row) is the same on every ground
+/// and ignores the sampled palette: idle the white .10 film under a white glyph (the accent once
+/// the toggle is on), focused the accent under the lavender glyph.
+#[test]
+fn the_action_face_is_litefins_and_ignores_the_ground() {
+    let warm = ControlPalette::ambient([0.7, 0.4, 0.1]);
+    for ground in [ControlGround::Keyed, ControlGround::Unkeyed] {
+        for palette in [ControlPalette::default(), warm] {
+            let idle = ControlStyle::Action { active: false }.face(false, ground, palette);
+            let on = ControlStyle::Action { active: true }.face(false, ground, palette);
+            let focused = ControlStyle::Action { active: true }.face(true, ground, palette);
+            assert_eq!((idle.top, idle.body, idle.ink), (theme::ACTION_FILL, theme::ACTION_FILL, theme::CONTROL_IDLE_INK));
+            assert_eq!((on.top, on.ink), (theme::ACTION_FILL, theme::BRAND_ACTIVE_INK));
+            assert_eq!((focused.top, focused.body, focused.ink), (theme::BRAND_FILL, theme::BRAND_FILL, theme::BRAND_INK));
+        }
+    }
+}
+
+/// The shared control pop drives Litefin's larger peaks: rest stays 1, the shared focus scale
+/// lands on the peak, and the press dip below rest stays below rest.
+#[test]
+fn the_action_pop_rides_the_shared_spring_onto_litefins_peak() {
+    assert_eq!(action_scale(1.0, ACTION_FOCUS_SCALE), 1.0);
+    assert!((action_scale(CTRL_FOCUS_SCALE, ACTION_FOCUS_SCALE) - ACTION_FOCUS_SCALE).abs() < 1e-6);
+    assert!((action_scale(CTRL_FOCUS_SCALE, ACTION_PLAY_FOCUS_SCALE) - ACTION_PLAY_FOCUS_SCALE).abs() < 1e-6);
+    assert!(action_scale(0.95, ACTION_FOCUS_SCALE) < 1.0);
+    assert_eq!(action_pill_w(100.0), 2.0 * ACTION_PILL_PAD + ACTION_ICON + BTN_ICON_GAP + 100.0);
+}
+
+/// The Litefin plates are the CSS boxes: line-height 1.5 plus padding and border.
+#[test]
+fn the_litefin_plates_are_their_css_boxes() {
+    let m = crate::ui::fixture::FixtureMeasure;
+    assert_eq!(LfPlate::Rating.h(), theme::size::lf::S19 as f32 * 1.5 + 8.0);
+    assert_eq!(LfPlate::Tech(PillTone::Plain).h(), theme::size::lf::S20 as f32 * 1.5 + 10.0);
+    assert_eq!(LfPlate::Chip { focused: false }.h(), theme::size::lf::S18 as f32 * 1.5 + 16.0);
+    let w = LfPlate::Chip { focused: false }.w("Drama", &m);
+    use nj_machine::machine::Measure;
+    assert_eq!(w, m.width_str("Drama", theme::size::lf::S18, false) + 24.0);
+}

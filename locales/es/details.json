@@ -1,0 +1,18 @@
+{
+  "details.runtime_hm": "{hours} h {minutes} min",
+  "details.runtime_m": "{minutes} min",
+  "details.ends_at": "Termina a las {time}",
+  "details.aired": "Estreno: {date}",
+  "details.show_more": "Mostrar más",
+  "details.genres": "Géneros",
+  "details.directors": "Dirección",
+  "details.writers": "Guion",
+  "details.audio": "Audio",
+  "details.subtitles": "Subtítulos",
+  "details.seasons": "Temporadas",
+  "details.special_features": "Contenido extra",
+  "details.more_like_this": "Títulos similares",
+  "details.added": "Añadido: {date}",
+  "details.studios": "Estudios",
+  "details.favorite": "Favorito"
+}

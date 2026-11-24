@@ -11,10 +11,9 @@ use nj_platform::i18n::{language_on_this_thread_for_test, SHIPPED};
 use crate::jf::preferences::AudioPreferences;
 use crate::route::available_quality_ladder;
 use crate::ui::table::{Section, TableView};
-use nj_machine::machine::Measure;
 
 fn frame_w() -> f32 {
-    RouteLayout::screen().sectioned_table().w
+    RouteLayout::panel().sectioned_table().w
 }
 
 fn playback(quality: Quality, direct_play: DirectPlayMode) -> FieldListInputs<'static> {
@@ -30,7 +29,7 @@ fn audio(prefs: Option<&AudioPreferences>) -> FieldListInputs<'_> {
 
 fn table_of(section: Section) -> TableView {
     let mut table = TableView::new();
-    table.compact = false;
+    super::super::family::style_page_table(&mut table);
     table.set_sections(vec![section], 0, false);
     table
 }
@@ -108,7 +107,15 @@ fn every_field_readout_and_detail_fits_its_column_in_every_language() {
         for on in [true, false] {
             prefs.play_default_audio_track = on;
             check_field_section(&format!("{tag} default_track={on}"), &audio(Some(&prefs)), &mut out);
+            prefs.remember_audio_selections = on;
+            prefs.remember_subtitle_selections = on;
+            check_field_section(&format!("{tag} remember={on}"), &audio(Some(&prefs)), &mut out);
         }
+        for voice in crate::route::VoicePreference::LADDER {
+            crate::route::restore_voice_preference(voice);
+            check_field_section(&format!("{tag} voice={voice:?}"), &audio(Some(&prefs)), &mut out);
+        }
+        crate::route::restore_voice_preference(crate::route::VoicePreference::Any);
     }
     crate::ui::table::assert_no_fit_failures(&out);
 }
@@ -127,7 +134,7 @@ fn every_picker_level_fits_its_column_in_every_language() {
             let prefs = AudioPreferences::default();
             let fields: &[PickerKind] = match kind {
                 Kind::Playback => &[PickerKind::Quality, PickerKind::DirectPlay, PickerKind::SubtitleSize, PickerKind::SubtitlePosition, PickerKind::NextEpisode, PickerKind::SkipInterval],
-                Kind::AudioSubtitles => &[PickerKind::AudioLanguage, PickerKind::SubtitleMode, PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack],
+                Kind::AudioSubtitles => &[PickerKind::AudioLanguage, PickerKind::SubtitleMode, PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack, PickerKind::RememberAudio, PickerKind::RememberSubtitles, PickerKind::Voice],
             };
             for &field in fields {
                 let current = resolve_value(field, Quality::Original, DirectPlayMode::Auto, Some(&prefs));
@@ -160,8 +167,8 @@ fn direct_play_readout_fits_beside_its_label_in_every_language() {
             out.extend(table.app_fit_failures(frame_w(), &format!("{} playback ({value})", language.tag())));
             let direct_play_row = &table.sections[0].rows[1];
             let cols = table.row_columns(direct_play_row, frame_w(), &M);
-            let value_natural = M.width_str(value, theme::size::LABEL, true);
-            let label_natural = M.width_str(nj_platform::i18n::msg::settings_playback_direct_play(), theme::size::HEADLINE, true);
+            let (label_natural, value_natural) = table.natural_widths(direct_play_row, &M);
+            let value_natural = value_natural.unwrap_or_default();
             assert!(cols.value_w + 1.0 >= value_natural,
                 "{} {value:?}: an app-owned Direct Play value must never be elided ({} px column vs {value_natural} px natural)",
                 language.tag(), cols.value_w);
@@ -198,32 +205,25 @@ fn the_subtitle_mode_readouts_are_pinned_in_every_language() {
             "en" => "When audio isn't in the subtitle language",
             "es" => "Audio fuera del idioma de subtítulos",
             "ru" => "Когда звук не на языке субтитров",
+            "pl" => "Dźwięk w innym języku niż napisy",
             _ => "Калі гук не на мове субцітраў",
         };
         assert_eq!(readouts[1], want, "{}", language.tag());
     }
 }
 
-/// The copy as `RouteLayout::draw_narrative` draws it under the title.
-fn copy_view<'a>(copy: &'a str) -> crate::ui::text_view::TextView<'a> {
-    let size = theme::size::LABEL;
-    crate::ui::text_view::TextView::new(copy, size, theme::TEXT_READING)
-        .leading(size as f32 + theme::space::XS).max_lines(12).with_measure(&M)
-}
-
-/// Every explanation a field list or a picker can show under its title fits the left column
-/// COMPLETE in every shipped language: never cut at the line cap, never taller than the room
-/// between the title and the action band, and short enough to read as a note (at most
-/// [`MAX_COPY_LINES`] lines). A picker's own explanation, the Force note that replaces it while
-/// Force Direct Play is on, and a status line with the Force note appended are all covered.
+/// Every explanation a field list or a picker can show under its title fits the content panel's
+/// subtitle COMPLETE in every shipped language: never cut at its line cap
+/// ([`crate::ui::route_screen::panel::SUB_LINES`]). A picker's own explanation, the Force note that
+/// replaces it while Force Direct Play is on, and a status line with the Force note appended are
+/// all covered.
 #[test]
 fn every_explanation_under_a_title_fits_the_column_in_every_language() {
-    const MAX_COPY_LINES: usize = 5;
     let _serial = nj_base::testlock::serial();
-    let layout = RouteLayout::screen();
+    let layout = RouteLayout::panel();
     let all_fields = [PickerKind::Quality, PickerKind::DirectPlay, PickerKind::SubtitleSize, PickerKind::SubtitlePosition,
         PickerKind::NextEpisode, PickerKind::SkipInterval, PickerKind::AudioLanguage, PickerKind::SubtitleMode,
-        PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack];
+        PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack, PickerKind::RememberAudio, PickerKind::RememberSubtitles, PickerKind::Voice];
     let mut out = Vec::new();
     for language in SHIPPED {
         let _guard = language_on_this_thread_for_test(language);
@@ -231,22 +231,12 @@ fn every_explanation_under_a_title_fits_the_column_in_every_language() {
         let mut subjects = vec![Subject::Page(Kind::Playback), Subject::Page(Kind::AudioSubtitles)];
         subjects.extend(all_fields.map(Subject::Picker));
         for subject in subjects {
-            let title = match subject {
-                Subject::Page(kind) => kind.title(),
-                Subject::Picker(field) => field.title(),
-            };
             for direct_play in [DirectPlayMode::Auto, DirectPlayMode::Forced] {
                 for status in ["", nj_platform::i18n::msg::settings_playback_save_failed()] {
                     let copy = copy_text(subject, status, direct_play);
-                    let view = copy_view(&copy);
-                    let top = layout.narrative_copy_frame(true, title, layout.action.y, &M).y;
-                    let room = layout.action.y - theme::space::XL - top;
-                    let (lines, h) = (view.line_count(layout.narrative.w), view.measure_h(layout.narrative.w));
+                    let view = RouteLayout::panel_subtitle(&copy).with_measure(&M);
                     let at = format!("{tag} {subject:?} direct_play={direct_play:?} status={status:?}");
-                    if view.truncates(layout.narrative.w) { out.push(format!("{at}: the copy is cut at the line cap")); }
-                    if h > room { out.push(format!("{at}: the copy is {h}px tall, the column has {room}px")); }
-                    // A status line is the failure text, not an explanation: only the explanation is held to the note length.
-                    if status.is_empty() && lines > MAX_COPY_LINES { out.push(format!("{at}: {lines} lines, more than {MAX_COPY_LINES}")); }
+                    if view.truncates(layout.narrative.w) { out.push(format!("{at}: the copy is cut at the subtitle's line cap")); }
                 }
             }
         }
@@ -262,7 +252,7 @@ fn every_explanation_under_a_title_fits_the_column_in_every_language() {
 fn each_local_picker_has_its_own_explanation_in_every_language() {
     let _serial = nj_base::testlock::serial();
     let fields = [PickerKind::Quality, PickerKind::DirectPlay, PickerKind::SubtitleSize, PickerKind::SubtitlePosition,
-        PickerKind::NextEpisode, PickerKind::SkipInterval];
+        PickerKind::NextEpisode, PickerKind::SkipInterval, PickerKind::Voice];
     for language in SHIPPED {
         let _guard = language_on_this_thread_for_test(language);
         let tag = language.tag();
@@ -283,7 +273,7 @@ fn each_local_picker_has_its_own_explanation_in_every_language() {
             assert_eq!(forced(Subject::Picker(field)), copies[i], "{tag} {field:?} is untouched by Force");
         }
         // The account pickers keep the account note under every mode.
-        for field in [PickerKind::AudioLanguage, PickerKind::SubtitleMode, PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack] {
+        for field in [PickerKind::AudioLanguage, PickerKind::SubtitleMode, PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack, PickerKind::RememberAudio, PickerKind::RememberSubtitles] {
             assert_eq!(copy_text(Subject::Picker(field), "", DirectPlayMode::Forced), nj_platform::i18n::msg::settings_audio_account_note(), "{tag} {field:?}");
         }
         // A status wins, with the Force note appended only where Force matters.

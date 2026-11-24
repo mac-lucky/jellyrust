@@ -64,13 +64,17 @@ fn no_required_content_enters_the_safe_area_exclusion_zone() {
         );
     };
 
-    // ---- the shared chrome, and the screens composed on it ------------------------------
-    probe("widgets", &crate::ui::widgets::overscan_rects);
+    // ---- the screens composed on the shared chrome --------------------------------------
+    // The rail and the clock are NOT graded here, deliberately: they are Litefin's chrome at
+    // Litefin's coordinates (an icon column at x 0..100, the clock 32 from the top and 50 from the
+    // right, `docs/litefin-look.md` 1, 3, 4.2), which the household's TVs show unscaled every day
+    // in Litefin itself. `widgets`' `the_rail_sits_where_litefin_puts_it` pins those numbers; this
+    // audit keeps grading the page content laid out beside them. The account menu hangs off the
+    // rail's avatar at the same coordinates and is pinned by `account_menu`'s own test.
     probe("detail", &crate::ui::detail_layout::overscan_rects);
     probe("player_hud", &crate::appkit::player_hud::overscan_rects);
 
     // ---- the panels, each at the widest/tallest state its own clamp admits ---------------
-    probe("account_menu", &crate::screens::account_menu::overscan_rects);
     probe("track_menu", &crate::appkit::track_menu::overscan_rects);
     probe("more_menu", &crate::appkit::more_menu::overscan_rects);
     probe("stats", &crate::app::diagnostics::overscan_rects);
@@ -78,7 +82,7 @@ fn no_required_content_enters_the_safe_area_exclusion_zone() {
 
     // ---- the screens whose outermost geometry is already public here --------------------
     // Home: the hero's text column and its action row start at the margin; the grid view's
-    // first shelf heading is the highest ink the page draws under the bar.
+    // first shelf heading is the highest ink the page draws.
     r.push((
         "home hero text column",
         Rect::new(MARGIN_X, 380.0, crate::ui::landing_hero::COL_W, 400.0),

@@ -23,6 +23,8 @@ pub(crate) enum PersonCmd {
     Reset,
     /// The optimistic half of a view-state write, on the person's shelves.
     SetWatchedLocal { sid: ServerId, rk: String, on: bool },
+    /// The optimistic half of a favourite write on the person `(sid, key)` themselves.
+    SetFavoriteLocal { sid: ServerId, key: String, on: bool },
 }
 
 /// One Person owner: logical state, the worker adapter all current requests capture, and notice.
@@ -102,6 +104,12 @@ impl PersonStore {
         shows: Vec<crate::catalog_fetch::PmsMovie>,
     ) {
         self.state.install_source_for_test(sid, movies, shows);
+        self.bump();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_favorite_for_test(&mut self, favorite: Option<bool>) {
+        self.state.install_favorite_for_test(favorite);
         self.bump();
     }
 

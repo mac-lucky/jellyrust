@@ -1,10 +1,11 @@
 //! **Who's watching?** — every Jellyfin user kept on this television (`jf::store::roster`), one
 //! avatar each, and *Add user* at the end of the row.
 //!
-//! The approved design (2026-10-09, "Multi-user profiles", board 1) is the old Plex Home picker's
-//! layout without its PIN pad: a centred HERO title, a row of large circles whose focused one grows
-//! and wears the focus rim, the names under them, and the server they belong to along the bottom.
-//! Each person is their initial on a disc in their own tone (`widgets::avatar_disc`).
+//! Litefin's *modern* sign-in (`docs/litefin-look.md` 8): the brand pane on the left
+//! (`widgets::draw_login_brand`) and, centred in the pane beside it, the title and the user
+//! picker — 215-wide tiles whose 208px circle holds the person's avatar (their initial on a disc in
+//! their own tone, `widgets::avatar_disc`) and whose focused one pops 1.08 in a 4px accent ring —
+//! with the server they belong to along the bottom.
 //!
 //! The screen never handles a token. A pick is the user's POSITION in the roster it showed. It
 //! first asks the app whether the server still honours that user (`JfAuthCmd::CheckKept`, the
@@ -18,17 +19,16 @@
 use std::borrow::Cow;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-use crate::ui::consts::{SCR_H, SCR_W};
 use crate::ui::frame::Budget;
 use crate::ui::label::HAlign;
-use crate::ui::route_screen::RouteGround;
 use crate::ui::screen::{
     Activate, At, AxisMask, Dir, DrawFrame, EdgeRule, ElemKind, Enter, FocusSource, FocusTarget,
     Focusable, GroupKind, GroupSpec, HitSource, Hover, Placed, RenderStrategy, Screen, ScreenEvent,
     Seat, Step, Stop,
 };
 use crate::ui::text_view::TextView;
-use crate::ui::widgets::CtlPop;
+use crate::ui::widgets::{login_pane, CtlPop, LOGIN_AVATAR, LOGIN_AVATAR_POP, LOGIN_NAME_GAP, LOGIN_NAME_H,
+    LOGIN_PERSON_GAP, LOGIN_PERSON_W};
 use crate::ui::{theme, Painter, Rect, View};
 use nj_machine::machine::{
     Canon, Cx, Delivery, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind, Key,
@@ -46,29 +46,24 @@ const ADD: u32 = 1000;
 const GROUP: GroupId = GroupId(0);
 /// Every kept user and *Add user*.
 const TILES: usize = crate::jf::store::MAX_USERS + 1;
-/// How the circles stand: up to six in one row at the design's full size, more in two compact
-/// rows of seven — every kept user and *Add user* always fit under the title.
+/// How the circles stand: Litefin's full tiles, four to a row, for up to two rows; more in two
+/// compact rows of seven, so every kept user and *Add user* always fit under the title.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Grid {
     avatar: f32,
     gap: f32,
     per_row: usize,
-    /// The first row's top edge.
-    top: f32,
 }
-const FULL: Grid = Grid { avatar: 220.0, gap: 72.0, per_row: 6, top: 384.0 };
-const COMPACT: Grid = Grid { avatar: 160.0, gap: 56.0, per_row: 7, top: 288.0 };
-/// Under a circle: the gap to its name, the name, and the air before a second row.
-const NAME_GAP: f32 = 30.0;
-const NAME_H: f32 = 44.0;
-const ROW_AIR: f32 = 40.0;
-const TITLE_Y: f32 = 132.0;
-const TITLE_H: f32 = 96.0;
+const FULL: Grid = Grid { avatar: LOGIN_AVATAR, gap: LOGIN_PERSON_W + LOGIN_PERSON_GAP - LOGIN_AVATAR, per_row: 4 };
+const COMPACT: Grid = Grid { avatar: 128.0, gap: 32.0, per_row: 7 };
+/// The title (8: 51.2/700) and the air under it; the air between two rows.
+const TITLE_SZ: i32 = theme::size::lf::S51;
+const TITLE_H: f32 = 60.0;
+const TITLE_GAP: f32 = theme::space::LG;
+const ROW_AIR: f32 = theme::space::LG;
 /// The server line along the bottom.
 const FOOTER_H: f32 = 40.0;
 const FOOTER_MARK: f32 = 28.0;
-/// *Add user*'s plus mark inside its circle.
-const PLUS: f32 = 76.0;
 
 /// One person on the screen: what is drawn of them, never their token.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,7 +80,6 @@ pub(crate) struct JfUsersScreen {
     /// "Living Room · 192.168.1.20:8096" — the server these people belong to.
     server: String,
     pop: CtlPop<TILES>,
-    ground: RouteGround,
     /// The pick being checked with the server, and where its answer comes back.
     checking: Option<(u8, Receiver<JfAuthReply>)>,
     spin: nj_machine::motion::Phase,
@@ -121,7 +115,6 @@ impl JfUsersScreen {
             active: roster.active,
             server,
             pop: CtlPop::new(),
-            ground: RouteGround::new(),
             checking: None,
             spin: nj_machine::motion::Phase::default(),
             spin_ms: 0.0,
@@ -155,18 +148,40 @@ impl JfUsersScreen {
     }
 
     fn grid(&self) -> Grid {
-        if self.tiles() <= FULL.per_row { FULL } else { COMPACT }
+        if self.tiles() <= 2 * FULL.per_row { FULL } else { COMPACT }
     }
 
-    /// Tile `i`'s circle, at rest: rows of [`Grid::per_row`], each centred on the screen.
+    /// One column's pitch: the circle and the gap to the next; a name's cell is bounded by it.
+    fn pitch(&self) -> f32 {
+        self.grid().avatar + self.grid().gap
+    }
+
+    /// One row's pitch: the circle, its name and the air under it.
+    fn row_h(&self) -> f32 {
+        self.grid().avatar + LOGIN_NAME_GAP + LOGIN_NAME_H + ROW_AIR
+    }
+
+    /// The title's rect: the head of the block the title and the rows make, centred in the pane
+    /// above the server line.
+    fn title_rect(&self) -> Rect {
+        let pane = login_pane();
+        let rows = self.tiles().div_ceil(self.grid().per_row);
+        let block = TITLE_H + TITLE_GAP + rows as f32 * self.row_h() - ROW_AIR;
+        let top = pane.y + ((pane.h - FOOTER_H - block) * 0.5).max(0.0);
+        Rect::new(pane.x, top, pane.w, TITLE_H)
+    }
+
+    /// Tile `i`'s circle, at rest: rows of [`Grid::per_row`], each centred in the pane.
     fn tile_rect(&self, i: usize) -> Rect {
         let g = self.grid();
+        let pane = login_pane();
         let n = self.tiles();
         let row = i / g.per_row;
         let in_row = (n - row * g.per_row).min(g.per_row);
         let row_w = in_row as f32 * g.avatar + (in_row - 1) as f32 * g.gap;
-        let x = (SCR_W - row_w) * 0.5 + (i % g.per_row) as f32 * (g.avatar + g.gap);
-        let y = g.top + row as f32 * (g.avatar + NAME_GAP + NAME_H + ROW_AIR);
+        let x = pane.cx() - row_w * 0.5 + (i % g.per_row) as f32 * (g.avatar + g.gap);
+        let title = self.title_rect();
+        let y = title.y + title.h + TITLE_GAP + row as f32 * self.row_h();
         Rect::new(x, y, g.avatar, g.avatar)
     }
 
@@ -209,8 +224,9 @@ impl JfUsersScreen {
         }
     }
 
-    /// The server's answer about the person picked: refused means sign in again, anything else
-    /// goes ahead (an unreachable server is said on the page it lands on).
+    /// The server's answer about the person picked: revoked (`BadCredentials`, a 401) means sign in
+    /// again, anything else goes ahead (an unreachable or refusing server is said on the page it
+    /// lands on).
     fn drain<H: AppLike>(&mut self, fx: &mut Effects<'_, H>) {
         let Some((index, rx)) = &self.checking else { return };
         let index = *index;
@@ -240,49 +256,22 @@ impl JfUsersScreen {
         fx.push(Fx::App(AppFx::Loop(req)));
     }
 
+    /// Tile `i` (`widgets::draw_login_person`): the person's avatar, or *Add user*'s plus, its name,
+    /// and the spinner while that person is being checked with the server.
     fn draw_tile(&self, p: Painter, i: usize, focused: bool, scale: f32) {
+        use crate::ui::widgets::{draw_login_person, LoginPerson};
         let rest = self.tile_rect(i);
-        let r = Rect::new(
-            rest.cx() - rest.w * scale * 0.5,
-            rest.cy() - rest.h * scale * 0.5,
-            rest.w * scale,
-            rest.h * scale,
-        );
-        let name = match self.people.get(i) {
-            Some(person) => {
-                let size = if self.grid() == FULL { theme::size::HERO } else { theme::size::DISPLAY };
-                crate::ui::widgets::avatar_disc(p, r, &person.name, &person.id, focused, size);
-                person.name.as_str()
-            }
-            None => {
-                let rad = r.w * 0.5;
-                p.rrect(r, rad, rad, theme::CONTROL_IDLE_FILL_UNKEYED);
-                if focused {
-                    p.rring(r, rad, 5.0, theme::CONTROL_RIM_FOCUS_UNKEYED);
-                } else {
-                    p.rring(r, rad, 2.0, theme::CONTROL_RIM_IDLE_UNKEYED);
-                }
-                let mark = PLUS * r.w / FULL.avatar;
-                crate::ui::icons::draw(
-                    p,
-                    crate::ui::icons::Icon::Plus,
-                    Rect::new(r.cx() - mark * 0.5, r.cy() - mark * 0.5, mark, mark),
-                    if focused { theme::TEXT_PRIMARY } else { theme::TEXT_SECONDARY },
-                );
-                msg::settings_account_add_user()
-            }
-        };
-        let ink = if focused { theme::TEXT_PRIMARY } else { theme::TEXT_SECONDARY };
-        let mut view = TextView::new(name, theme::size::BODY, ink).h(HAlign::Center).max_lines(1);
-        if focused {
-            view = view.bold();
+        let pitch = self.pitch();
+        match self.people.get(i) {
+            Some(person) => draw_login_person(p, rest, pitch, LoginPerson::Person { name: &person.name, id: &person.id },
+                &person.name, None, focused, scale),
+            None => draw_login_person(p, rest, pitch, LoginPerson::Mark(crate::ui::icons::Icon::Plus),
+                msg::settings_account_add_user(), None, focused, scale),
         }
-        let g = self.grid();
-        let name_w = g.avatar + g.gap - 12.0;
-        view.draw(p, Rect::new(rest.cx() - name_w * 0.5, r.y + r.h + NAME_GAP, name_w, NAME_H));
         if self.checking.as_ref().is_some_and(|(index, _)| usize::from(*index) == i) {
             let gutter = crate::ui::widgets::Spinner::inline_gutter();
-            crate::ui::widgets::Spinner::leading(rest.cx() - gutter * 0.5, r.y + r.h + NAME_GAP + NAME_H + 24.0)
+            let y = rest.y + rest.h + LOGIN_NAME_GAP + LOGIN_NAME_H + theme::space::MD;
+            crate::ui::widgets::Spinner::leading(rest.cx() - gutter * 0.5, y)
                 .phase(self.spin_ms as u32)
                 .tint(theme::TEXT_SECONDARY)
                 .draw(&crate::ui::Env::inert(), p);
@@ -293,20 +282,21 @@ impl JfUsersScreen {
         if self.server.is_empty() {
             return;
         }
-        let y = SCR_H - crate::ui::consts::SAFE.y - FOOTER_H;
+        let pane = login_pane();
+        let y = pane.y + pane.h - FOOTER_H;
         let gap = theme::space::SM;
-        let room = crate::ui::consts::SAFE.w - FOOTER_MARK - gap;
-        let tw = measure.width_str(&self.server, theme::size::CAPTION, false).min(room);
-        let x = (SCR_W - FOOTER_MARK - gap - tw) * 0.5;
+        let room = pane.w - FOOTER_MARK - gap;
+        let tw = measure.width_str(&self.server, theme::size::lf::S19, false).min(room);
+        let x = pane.cx() - (FOOTER_MARK + gap + tw) * 0.5;
         crate::ui::icons::draw(
             p,
             crate::ui::icons::Icon::Server,
             Rect::new(x, y + (FOOTER_H - FOOTER_MARK) * 0.5, FOOTER_MARK, FOOTER_MARK),
             theme::TEXT_TERTIARY,
         );
-        TextView::new(&self.server, theme::size::CAPTION, theme::TEXT_TERTIARY)
+        TextView::new(&self.server, theme::size::lf::S19, theme::TEXT_TERTIARY)
             .max_lines(1)
-            .draw(p, Rect::new(x + FOOTER_MARK + gap, y + 4.0, tw + 1.0, FOOTER_H));
+            .draw(p, Rect::new(x + FOOTER_MARK + gap, y + (FOOTER_H - measure.cap_h(theme::size::lf::S19)) * 0.5, tw + 1.0, FOOTER_H));
     }
 }
 
@@ -387,15 +377,18 @@ impl<H: AppLike> Screen<H> for JfUsersScreen {
     fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, H>) {}
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
         let p = f.painter;
-        self.ground.draw_default(Painter::root());
-        TextView::new(msg::settings_profiles_title(), theme::size::HERO, theme::TEXT_HEADING)
+        // Litefin's sign-in stands on the flat black page (`docs/litefin-look.md` 2.1, 8)
+        Painter::root().rect(Rect::FULL, 0.0, theme::SURFACE_APP, theme::SURFACE_APP, 0.0);
+        crate::ui::widgets::draw_login_brand(p, f.measure);
+        TextView::new(msg::settings_profiles_title(), TITLE_SZ, theme::TEXT_HEADING)
             .bold()
             .h(HAlign::Center)
             .max_lines(1)
-            .draw(p, Rect::new(crate::ui::consts::SAFE.x, TITLE_Y, crate::ui::consts::SAFE.w, TITLE_H));
+            .draw(p, self.title_rect());
         let focus = f.focus.current.filter(|k| k.entry == self.entry).and_then(|k| self.tile_of(k.elem));
         for i in 0..self.tiles() {
-            self.draw_tile(p, i, focus == Some(i), self.pop.scale_with(i, f.press.scale));
+            let pop = crate::ui::widgets::pop_progress(&self.pop, i, f.press.scale);
+            self.draw_tile(p, i, focus == Some(i), 1.0 + (LOGIN_AVATAR_POP - 1.0) * pop);
         }
         self.draw_footer(p, f.measure);
         if f.records_stops() {
@@ -498,7 +491,7 @@ mod tests {
         let s = screen(&["Alex", "Sam", "Kids"], Some(0));
         assert_eq!(s.grid(), FULL);
         let (first, add) = (s.tile_rect(0), s.tile_rect(3));
-        assert!(((first.x + add.x + add.w) * 0.5 - SCR_W * 0.5).abs() < 0.5, "the row is centred");
+        assert!(((first.x + add.x + add.w) * 0.5 - login_pane().cx()).abs() < 0.5, "the row is centred in the pane");
         assert_eq!(first.y, add.y);
         assert_eq!(s.elem_of(3), ADD);
 
@@ -508,10 +501,14 @@ mod tests {
             assert!(crate::ui::consts::inside_safe(r), "{r:?} leaves the safe area");
         }
         let last = s.tile_rect(TILES - 1);
-        assert!(last.y + last.h + NAME_GAP + NAME_H < SCR_H - crate::ui::consts::SAFE.y - FOOTER_H,
+        let pane = login_pane();
+        assert!(last.y + last.h + LOGIN_NAME_GAP + LOGIN_NAME_H < pane.y + pane.h - FOOTER_H,
             "the last row's names clear the server line");
-        assert!(s.tile_rect(0).y > TITLE_Y + TITLE_H, "the first row clears the title");
+        assert!(s.tile_rect(0).y > s.title_rect().y + TITLE_H, "the first row clears the title");
+        assert!(s.tile_rect(0).x >= pane.x && last.x + last.w <= pane.x + pane.w, "the rows stay in the pane");
 
+        let s = screen(&["a", "b", "c", "d", "e", "f", "g"], None);
+        assert_eq!(s.grid(), FULL, "two full rows of four");
         let s = screen(&["a", "b", "c", "d", "e", "f", "g", "h"], None);
         assert_eq!(s.grid(), COMPACT);
         assert!(s.tile_rect(7).y > s.tile_rect(0).y, "a second row");
@@ -520,6 +517,20 @@ mod tests {
         assert_eq!(s.step_from(6, Dir::Right), None, "a row ends at its last tile");
         assert_eq!(s.step_from(0, Dir::Left), None);
         assert_eq!(s.step_from(8, Dir::Down), None);
+    }
+
+    /// Neighbours' names never meet: a name's cell is bounded by its grid's pitch, so the compact
+    /// grid's 160 px columns do not draw 255 px names over each other.
+    #[test]
+    fn neighbouring_names_keep_clear_in_either_grid() {
+        use crate::ui::widgets::login_name_span;
+        for n in [3, crate::jf::store::MAX_USERS] {
+            let names: Vec<String> = (0..n).map(|i| format!("user{i}")).collect();
+            let s = screen(&names.iter().map(String::as_str).collect::<Vec<_>>(), None);
+            let (ax, aw) = login_name_span(s.tile_rect(0), s.pitch());
+            let (bx, _) = login_name_span(s.tile_rect(1), s.pitch());
+            assert!(ax + aw < bx, "{:?}: names {ax}+{aw} and {bx} overlap", s.grid());
+        }
     }
 
     /// OK on a person checks them with the server first, then asks the loop for that position — or,

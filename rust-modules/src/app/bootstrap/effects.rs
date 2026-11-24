@@ -23,12 +23,10 @@ fn argument(arg: &crate::screens::registry::AppArg) -> Result<Value, &'static st
     }
 }
 fn home_command(command: &crate::screens::registry::HomeCmd) -> Value {
-    use crate::screens::registry::{HomeCmd,HomeTab};
+    use crate::screens::registry::HomeCmd;
     match command {
         HomeCmd::FocusGrid { row,col } => json!({"focus_grid":[row,col]}),
         HomeCmd::Hero => json!("hero"),
-        HomeCmd::FocusStrip(tab) => json!({"focus_strip":match tab {
-            HomeTab::Home => "home", HomeTab::Movies => "movies", HomeTab::Shows => "shows", HomeTab::Search => "search" }}),
         HomeCmd::Flip(delta) => json!({"flip":delta}),
         HomeCmd::SelectHero(index) => json!({"select_hero":index}),
         HomeCmd::PinHero(index) => json!({"pin_hero":index}),

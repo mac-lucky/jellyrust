@@ -15,15 +15,14 @@
 //! testable without driving the process-wide `player::preview` singleton or a live engine.
 
 use crate::ui::icons::Icon;
-use crate::appkit::player_hud::{Knob, Playbar, TransportMark};
+use crate::appkit::player_hud::{Knob, Playbar};
 use crate::ui::widgets::KeyHint;
 use crate::ui::{consts, theme, Painter};
 use std::ffi::CString;
 
-/// How long the trailer transport lingers after the key that raised it, and how long
-/// [`TransportMark::Play`] stands after a resume: the player HUD's own two constants, so the
-/// trailer's controls leave the screen — and its resume mark clears — on the same beat a film's do.
-use crate::appkit::player_hud::{LINGER_MS, PLAY_MARK_MS};
+/// How long the trailer transport lingers after the key that raised it: the player HUD's own
+/// constant, so the trailer's controls leave the screen on the same beat a film's do.
+use crate::appkit::player_hud::LINGER_MS;
 
 /// Which title the transport shows under the `Trailer` kicker: the FILM/SHOW title by default, so
 /// a trailer whose own PMS-scanned title is the boilerplate "Trailer" does not repeat the kicker
@@ -163,10 +162,6 @@ pub(super) struct Transport {
     /// When the hint most recently transitioned false→true, so [`hint_alpha_target`] can tell how
     /// long it has been continuously up. `None` while it is down.
     hint_since: Option<u32>,
-    /// When the last paused→playing edge happened, so the read-out can wear
-    /// [`TransportMark::Play`] for [`PLAY_MARK_MS`], exactly as the HUD's `TransportRow::play_at`
-    /// makes it.
-    play_at: Option<u32>,
     /// last tick's pause state, which is the only way to see that edge
     was_paused: bool,
     /// The tick clock this transport was last stepped at. The playbar's own read-outs take an
@@ -199,7 +194,6 @@ impl Transport {
         alpha: 0.0,
         hint: 0.0,
         hint_since: None,
-        play_at: None,
         was_paused: false,
         now_ms: 0,
         scrub_dir: 0,
@@ -216,13 +210,11 @@ impl Transport {
         self.until_ms = self.now_ms.wrapping_add(LINGER_MS);
     }
 
-    /// Full-trailer mode is over: the transport goes with it, the resume mark it was carrying
-    /// belongs to a session the viewer has stopped looking at, and any scrub gesture in flight is
+    /// Full-trailer mode is over: the transport goes with it, and any scrub gesture in flight is
     /// abandoned uncommitted — leaving it live would keep [`step_scrub_hold`](Self::step_scrub_hold)
     /// firing in the background after the page nobody is looking at has already collapsed.
     pub(super) fn dismiss(&mut self) {
         self.until_ms = 0;
-        self.play_at = None;
         self.cancel_scrub();
     }
 
@@ -383,20 +375,11 @@ impl Transport {
             self.until_ms = self.until_ms.wrapping_add(now.wrapping_sub(self.now_ms));
         }
         self.now_ms = now;
-        if self.was_paused && !paused && full_trailer {
-            self.play_at = Some(now);
-        }
         self.was_paused = paused;
         if !full_trailer {
             self.dismiss();
         }
         let shown = controls_shown(full_trailer, now, self.until_ms, paused);
-        if self
-            .play_at
-            .is_some_and(|at| now.wrapping_sub(at) >= PLAY_MARK_MS)
-        {
-            self.play_at = None;
-        }
         // The hint's own clock: when it stood up (false→true edge) so `hint_alpha_target` can
         // tell how long it has been up continuously, cleared the moment it goes away so a later
         // reappearance starts a fresh peak rather than resuming an old one.
@@ -408,26 +391,6 @@ impl Transport {
         // owes the frame gate a report even when no alpha changed this tick. A paused one is
         // static and deliberately owes nothing.
         moved || (shown && !paused)
-    }
-
-    /// What the state read-out wears. `Busy::None`: a committed seek's reload is a fresh Starfish
-    /// `Load`, not the in-place seek machinery `Busy::Transport` describes, and `view.picture`
-    /// staying true across it (`player::preview::View`'s own doc) means the transport never
-    /// observes it as a wait — the FastForward/Rewind marks below come from the scrub preview's
-    /// own travel instead, exactly the `scrubbing`/`travel_ns` arm [`transport_mark`] carries for
-    /// the player HUD's pointer drag.
-    ///
-    /// [`transport_mark`]: crate::appkit::player_hud::transport_mark
-    pub(super) fn mark(&self, paused: bool, live_ns: i64) -> TransportMark {
-        let scrubbing = self.scrubbing();
-        crate::appkit::player_hud::transport_mark(
-            paused,
-            crate::appkit::player_hud::Busy::None,
-            scrubbing,
-            if scrubbing { self.scrub_ns } else { live_ns },
-            live_ns,
-            self.play_at.map(|at| self.now_ms.wrapping_sub(at)),
-        )
     }
 
     /// Draw the trailer transport. `film_title` is the ITEM's own (the trailer extra's parent);
@@ -445,7 +408,6 @@ impl Transport {
         p: Painter,
         film_title: &str,
         extra_title: &str,
-        paused: bool,
         measure: &dyn nj_machine::machine::Measure,
     ) {
         if self.alpha <= 0.01 {
@@ -473,7 +435,10 @@ impl Transport {
                 // knob everywhere else on this transport is a read-out — but LEFT/RIGHT do move
                 // it now, same as the player HUD's own scrubber.
                 knob: Knob::Tick,
-                mark: self.mark(paused, live_ns),
+                // A committed seek's reload is a fresh Starfish `Load`, not the in-place seek
+                // machinery the spinner waits on, and the picture stays up across it
+                // (`player::preview::View`), so this transport never shows a wait.
+                waiting: false,
                 now: self.now_ms,
             },
             measure,
@@ -831,25 +796,6 @@ mod tests {
         // …then resume: the controls are still inside their deadline.
         let (_, _) = run(&mut t, now, 1, true, false, false);
         assert!(t.revealed(), "the pause must not have spent the linger");
-    }
-
-    /// The resume mark: [`TransportMark::Play`] stands for [`PLAY_MARK_MS`] after the
-    /// paused→playing edge and then gets out of the way, exactly as it does on the player.
-    #[test]
-    fn the_read_out_marks_pause_always_and_a_resume_only_briefly() {
-        let mut t = Transport::IDLE;
-        t.reveal();
-        let (_, now) = run(&mut t, 0, 1, true, true, false);
-        assert_eq!(t.mark(true, 0), TransportMark::Pause);
-        // the resume edge
-        let (_, now) = run(&mut t, now, 1, true, false, false);
-        assert_eq!(t.mark(false, 0), TransportMark::Play);
-        let (_, _) = run(&mut t, now, 200, true, false, false);
-        assert_eq!(
-            t.mark(false, 0),
-            TransportMark::None,
-            "a play glyph held for the whole trailer says nothing"
-        );
     }
 
     /// **The hint fades on its own eased clock, same as the transport row.** `update`'s `hint`

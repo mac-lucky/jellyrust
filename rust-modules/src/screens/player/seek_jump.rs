@@ -42,27 +42,44 @@ impl PlayerScreen {
         }
     }
 
-    fn commit_jump<H: AppLike>(&mut self, ps: &crate::route::PlaybackSession,
+    /// The dedicated FF/REW keys' bare jump, which leaves the transport down ([`Self::jump`]).
+    pub(super) fn commit_jump<H: AppLike>(&mut self, ps: &crate::route::PlaybackSession,
         forward: bool, now: u32, fx: &mut Effects<'_, H>) {
+        if let Some(target) = self.jump(ps, forward, now, true) {
+            Self::ask(fx, PlayerReq::CommitSeek(target));
+        }
+    }
+
+    /// One Skip-interval jump: the target to commit now, or `None` when there is no duration or the
+    /// pipeline is still landing a previous seek (the target then waits in `queued_jump`). `hide` is
+    /// the dedicated FF/REW keys' bare jump, which leaves the transport down; the OSD's own rewind /
+    /// forward buttons (`app::playback::activate_player_row`) keep it up.
+    pub(crate) fn jump(&mut self, ps: &crate::route::PlaybackSession, forward: bool, now: u32, hide: bool) -> Option<i64> {
         let duration = crate::player::duration_ns();
-        if duration <= 0 { return; }
+        if duration <= 0 { return None; }
         let step = input::scrub_step_ns() * if forward { 1 } else { -1 };
         let position = self.jump_position(ps);
         let target = self.seek_burst.jump(now, position, step, duration);
         self.scrub.ns = -1;
         self.scrub.disengage();
         self.scrub.commit_at = 0;
-        self.hud.until = 0;
-        self.hud.dismissed = true;
+        if hide {
+            self.hud.until = 0;
+            self.hud.dismissed = true;
+        } else {
+            self.hud.extend(now, input::HUD_LINGER_MS);
+        }
         // A second av_seek while the first keyframe is still queued can anchor stale packets.
         // Keep only the latest destination until both the seek and paused-frame prime finish.
-        if crate::player::loading(ps) || crate::player::seek_preroll_active() {
+        let commit = if crate::player::loading(ps) || crate::player::seek_preroll_active() {
             self.queued_jump = Some(target);
+            None
         } else {
             self.queued_jump = None;
-            Self::ask(fx, PlayerReq::CommitSeek(target));
-        }
+            Some(target)
+        };
         self.publish();
+        commit
     }
 
     pub(super) fn jump_key<H: AppLike>(&mut self, ps: &crate::route::PlaybackSession,

@@ -57,8 +57,8 @@ pub(crate) fn action(d: &Detail, key: u32) -> related::Action {
     }
 }
 
-/// Where OK on the heading goes: the collection page, by section and tag — `/related` names the
-/// collection by its TAG id, and the collection store resolves the rating key from it.
+/// Where OK on the heading goes: the collection page, by [`CollectionShelf::link`] (a PMS
+/// `/related` hub names the collection by its TAG id, a Jellyfin box set by its key).
 pub(crate) fn target(d: &Detail) -> Option<crate::screens::registry::ContentArg> {
     let c = d.collection.as_ref()?;
     Some(crate::screens::registry::ContentArg::Collection(c.link(d.sid)))
@@ -79,7 +79,7 @@ pub(crate) fn heading_rect(
 ) -> Rect {
     let h = heading(c);
     let m = h.measure(measure);
-    h.face_rect(crate::ui::consts::MARGIN_X, top - lift, f32::from(focused), &m)
+    h.face_rect(super::section::ROW_X, top - lift, f32::from(focused), &m)
 }
 
 pub(crate) fn rect(row: &CardRow, index: usize, top: f32, at_drawn: bool) -> Rect {
@@ -104,7 +104,7 @@ pub(crate) fn draw(
     let m = h.measure(measure);
     h.draw(
         p,
-        crate::ui::consts::MARGIN_X,
+        super::section::ROW_X,
         top - row.lift(),
         f32::from(heading_focused),
         &m,

@@ -1,0 +1,17 @@
+{
+  "cards.episode_code": {
+    "value": "S{season}E{episode}",
+    "description": "Episode code on the badge in the top-left corner of an episode's card, as in S01E05. Both numbers arrive zero-padded to two digits; keep it as short as a code.",
+    "args": {
+      "season": "str",
+      "episode": "str"
+    }
+  },
+  "cards.as_role": {
+    "value": "as {role}",
+    "description": "Under an actor's name on a Cast & Crew card: the character they play, as in \"as Thom\". The role is the server's text.",
+    "args": {
+      "role": "str"
+    }
+  }
+}

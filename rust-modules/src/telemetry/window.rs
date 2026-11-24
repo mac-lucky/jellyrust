@@ -203,6 +203,7 @@ mod tests {
 
     #[test]
     fn withdrawal_stops_collection_before_the_native_backend() {
+        let _endpoint = crate::telemetry::consent::as_if_configured(); // upstream's configured-build gates
         let _guard = nj_base::testlock::serial();
         use crate::telemetry::consent::{self, Consent};
         let previous = consent::current();

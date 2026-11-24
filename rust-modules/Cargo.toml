@@ -24,8 +24,8 @@ edition = "2021"
 # with the repo's own LICENSE, which is the provenance a webosbrew reviewer reads. The manifest
 # asserting nothing while the root said MIT was a contradiction with no upside.
 license = "GPL-3.0-or-later"
-description = "Application core for Native Jelly — an unofficial native Jellyfin client for LG webOS."
-repository = "https://github.com/sostk/native-jelly"
+description = "Application core for JellyRust — an unofficial native Jellyfin client for LG webOS."
+repository = "https://github.com/mac-lucky/jellyrust"
 
 # Static library linked into the C app (hybrid migration): each ported module
 # exposes the same C ABI its src/*.h declares, so the C code calls it unchanged.

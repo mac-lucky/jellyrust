@@ -54,16 +54,6 @@ pub(crate) fn viewer_paused() -> bool {
     paused() && !crate::player::claim_hold::owns_pause()
 }
 
-/// The clock intent an OS suspend saves for the foreground restore. Reads the transport through
-/// the same lens as the viewer's toggle ([`viewer_paused`]); the pause a claim's presentation hold
-/// is keeping is the hold's loan and must not be saved as the viewer's, or foregrounding a session
-/// that was playing under a spinner would restore it Paused.
-pub(crate) fn clock_for_suspend_now(
-    lifecycle: &ForegroundLifecycle,
-) -> ForegroundClock {
-    lifecycle.clock_for_suspend(viewer_paused())
-}
-
 /// Ask the synchronized player clock to commit a user Pause/Resume. The player publishes the feed
 /// gate at the same accepted native boundary; keeping a second commit here used to leave a window
 /// in which deadline accounting still treated an already-accepted Pause as active playback.
@@ -113,20 +103,15 @@ pub(crate) enum ForegroundInput {
 }
 
 /// Viewer clock intent carried independently of the native Engine's current clock state.
+///
+/// The app's OS suspend always saves `Playing` (`app::run`'s background arm): the owner's rule is
+/// that a film open when the app went to the background plays on return, even one the viewer
+/// paused just before. The foreground turns it into `Paused` when the television was switched off
+/// during the park ([`ForegroundLifecycle::settle_park_clock`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ForegroundClock {
     Paused,
     Playing,
-}
-
-impl ForegroundClock {
-    pub(crate) fn from_paused(paused: bool) -> Self {
-        if paused {
-            Self::Paused
-        } else {
-            Self::Playing
-        }
-    }
 }
 
 /// Work which has been claimed but whose synchronous external effect has not settled yet.
@@ -183,12 +168,16 @@ pub(crate) enum ForegroundState<Attempt = crate::route::RouteStartAttempt> {
 pub(crate) struct ForegroundLifecycle<Attempt = crate::route::RouteStartAttempt> {
     pub(crate) state: ForegroundState<Attempt>,
     pub(crate) next_id: u64,
+    /// When the last park began, on `devcaps::power`'s clock: a switch-off reported after it
+    /// happened during the park.
+    pub(crate) parked_at_ms: u64,
 }
 
 impl<Attempt: Copy + PartialEq> ForegroundLifecycle<Attempt> {
     pub(crate) const IDLE: Self = Self {
         state: ForegroundState::Idle,
         next_id: 0,
+        parked_at_ms: 0,
     };
 
     pub(crate) fn suspend(&mut self, saved_ns: i64, clock: ForegroundClock) {
@@ -201,22 +190,26 @@ impl<Attempt: Copy + PartialEq> ForegroundLifecycle<Attempt> {
             saved_ns,
             clock,
         };
+        self.parked_at_ms = nj_platform::devcaps::power::now_ms();
     }
 
-    /// The physical clock can remain Paused after a refused foreground Play. Preserve the
-    /// viewer's newer Playing intent if the OS backgrounds that live session again.
-    pub(crate) fn clock_for_suspend(&self, transport_paused: bool) -> ForegroundClock {
-        match self.state {
-            ForegroundState::ClockPending { .. }
-            | ForegroundState::Claimed {
-                claim: ForegroundClaim::PlayClock,
-                ..
-            } => ForegroundClock::Playing,
-            // A Play-key resume can still have a physically Paused clock until its exact Load
-            // settles. If the OS backgrounds again in that window, preserve the viewer's intent
-            // from the reducer rather than resnapshotting the deliberately stale native clock.
-            ForegroundState::LoadPending { clock, .. } => clock,
-            _ => ForegroundClock::from_paused(transport_paused),
+    /// The owner's rule for how a parked film comes back, decided at the foreground: an app switch
+    /// plays on (the park saved `Playing`), while a television switched off during the park
+    /// (standby, suspend, power off: `devcaps::power`) brings it back paused. A watcher that was
+    /// refused or never answered keeps `Playing`, said once.
+    pub(crate) fn settle_park_clock(&mut self) {
+        let parked_at = self.parked_at_ms;
+        let ForegroundState::Suspended { clock, .. } = &mut self.state else { return };
+        match nj_platform::devcaps::power::switched_off_since(parked_at) {
+            Some(true) => {
+                *clock = ForegroundClock::Paused;
+                crate::player::log("lifecycle: the television was switched off during the park; the film comes back paused");
+            }
+            Some(false) => {}
+            None => {
+                static SAID: std::sync::Once = std::sync::Once::new();
+                SAID.call_once(|| crate::player::log("lifecycle: no power state from the set; a parked film plays on return"));
+            }
         }
     }
 
@@ -233,6 +226,17 @@ impl<Attempt: Copy + PartialEq> ForegroundLifecycle<Attempt> {
                     ..
                 }
         )
+    }
+
+    /// Where a parked session stands while [`Self::awaiting_load`]: what an app close reports.
+    pub(crate) fn parked_ns(&self) -> Option<i64> {
+        match self.state {
+            ForegroundState::Suspended { saved_ns, .. }
+            | ForegroundState::Claimed { claim: ForegroundClaim::Prepare { saved_ns, .. }, .. } => Some(saved_ns),
+            ForegroundState::Prepared { resume_ns, .. }
+            | ForegroundState::Claimed { claim: ForegroundClaim::Load { resume_ns, .. }, .. } => Some(resume_ns),
+            _ => None,
+        }
     }
 
     /// `ClockPending` belongs to an already-loaded player. If a later real exit has removed that
@@ -935,11 +939,6 @@ mod foreground_resume_tests {
             }
         );
         assert_eq!(actuator.clock_calls, 0, "thread launch is not native Start");
-        assert_eq!(
-            lifecycle.clock_for_suspend(true),
-            ForegroundClock::Playing,
-            "a second background edge lost the Play-key intent to the held native clock"
-        );
         assert_eq!(
             poll_foreground_load(&mut lifecycle, &mut ps, &mut actuator),
             ForegroundPollOutcome::Pending

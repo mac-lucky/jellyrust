@@ -75,14 +75,16 @@
 //! * **Resolved at WRITE time, on the worker.** Not from a detail page's earlier cross-source
 //!   resolve: the press can come from a Home / Library / Search card menu where none ever ran, and
 //!   a behaviour that only worked after visiting a page is a behaviour that is wrong most of the
-//!   time. A press that carries no guid gets one looked up from its own `(server, ratingKey)`.
+//!   time. A press that carries no guid gets one looked up from its own `(server, ratingKey)`, and
+//!   every press reads the item's own type there: copies are matched within that type alone.
 //! * **Best-effort per source, and unconditional.** A source that is asleep or refuses costs its
 //!   own log line and nothing else — the write the user pressed has already reported, and one
 //!   unreachable share must never fail or retry it. There is no setting: this app has no
 //!   preferences screen by design.
 //!
-//! The cost is real and priced deliberately: a press on a two-source install is one write, one guid
-//! query per source, and one write per other copy — every one of them on the worker and none on the
+//! The cost is real and priced deliberately: a press on a two-source install is one write, one read
+//! of its own record, one guid query per source, and one write per other copy — every one of them
+//! on the worker and none on the
 //! frame loop. The queue still drains ONE worker at a time, so a burst of four episodes pays it four
 //! times in sequence rather than in parallel; that serialisation is the point rather than an
 //! oversight (see [`kick`]), and the single deferred refresh at the end of a burst is unchanged.
@@ -114,6 +116,9 @@ pub(crate) enum Write {
     Unwatched,
     /// `PUT /actions/removeFromContinueWatching` — HIDE from the deck, keeping the resume point.
     RemoveFromDeck,
+    /// Jellyfin's `UserFavoriteItems` — mark (`true`) or unmark the viewer's favourite. One server's
+    /// fact, like the deck: it does not fan out.
+    Favorite(bool),
 }
 
 impl Write {
@@ -125,6 +130,7 @@ impl Write {
         match self {
             Write::Watched | Write::Unwatched => 0,
             Write::RemoveFromDeck => 1,
+            Write::Favorite(_) => 2,
         }
     }
 
@@ -142,6 +148,7 @@ impl Write {
             Write::Watched => c.scrobble(rk),
             Write::Unwatched => c.unscrobble(rk),
             Write::RemoveFromDeck => c.remove_from_continue_watching(rk),
+            Write::Favorite(on) => c.set_favorite(rk, on),
         }
     }
 
@@ -150,6 +157,8 @@ impl Write {
             Write::Watched => "watched",
             Write::Unwatched => "unwatched",
             Write::RemoveFromDeck => "deck-remove",
+            Write::Favorite(true) => "favorite",
+            Write::Favorite(false) => "unfavorite",
         }
     }
 }
@@ -392,6 +401,12 @@ fn edit_local_with_owners(
                 rk: rk.to_string(),
             });
         }
+        // The detail page's heart (an item's) and the person page's (a person's key): each is a
+        // no-op where it does not hold `rk`.
+        Write::Favorite(on) => {
+            metadata(crate::stores::metadata::MetadataCmd::SetFavoriteLocal { sid, rk: rk.to_string(), on });
+            person(crate::stores::person::PersonCmd::SetFavoriteLocal { sid, key: rk.to_string(), on });
+        }
     }
     nj_machine::idle::invalidate(); // the tick/veil/bar just changed with no spring behind it
 }
@@ -521,8 +536,9 @@ pub(crate) fn pump_with_gate(
             // The refresh is owed whether or not the server took it: on success it is the reconcile,
             // and on failure it is what puts the optimistic edit back to whatever the server really
             // says. A server that can answer neither question leaves the shelves exactly as they
-            // are — `pms.rs`'s per-source rule, unchanged.
-            self.want_hubs = true;
+            // are — `pms.rs`'s per-source rule, unchanged. A favourite is on no hub: its page's
+            // re-read (`detail`) is the whole reconcile.
+            if !matches!(r.w, Write::Favorite(_)) { self.want_hubs = true; }
             if let Some(detail) = r.detail {
                 self.want_detail = Some(detail);
             }
@@ -681,7 +697,7 @@ type Answer = (ServerId, Option<Vec<String>>);
 /// `c` is the item's OWN client — the one [`kick`] captured on the main thread and the write itself
 /// went out on, handed down rather than re-resolved from `sid` here. That is `pms::kick`'s
 /// capture-at-the-spawn-site rule (a worker never asks the registry about the server it was given),
-/// and it also keeps [`resolved_guid`]'s failure honest: a slot re-pointed or revoked mid-write
+/// and it also keeps [`resolved_identity`]'s failure honest: a slot re-pointed or revoked mid-write
 /// cannot turn into a log line claiming the item has no portable id.
 fn fan_out(
     c: &crate::catalog::Client,
@@ -696,7 +712,7 @@ fn fan_out(
         // the log. Checked before the lookup below for exactly that reason.
         return Vec::new();
     }
-    let Some(guid) = resolved_guid(c, rk, guid) else {
+    let Some((guid, kind)) = resolved_identity(c, rk, guid) else {
         // Never a silent no-op. With two sources registered, a title that cannot be identified
         // portably is one whose watch state WILL disagree between them, and this line is the only
         // place that says so.
@@ -706,7 +722,7 @@ fn fan_out(
         ));
         return Vec::new();
     };
-    let answers = ask_sources(&sources, &guid);
+    let answers = ask_sources(&sources, &guid, &kind);
     let mut done = Vec::new();
     for (id, key) in fanout_targets((sid, rk), &answers) {
         // `dst`, not a second `c`: shadowing the item's own client inside the one loop that writes
@@ -729,34 +745,36 @@ fn fan_out(
     done
 }
 
-/// WORKER. The guid to fan out on: the one the press carried, or — when it carried none, which is
-/// every press from a Home / Library / Search card menu, since a catalog row (`pms::PmsMovie`) does
-/// not hold one — the item's own record, read off its own server.
+/// WORKER. The guid to fan out on and the item's own type, both off the item's own record, read
+/// off its own server: the guid the press carried wins, and when it carried none, which is every
+/// press from a Home / Library / Search card menu, since a catalog row (`pms::PmsMovie`) does not
+/// hold one, the record's. The type is read even for a press that carried the guid: a provider id
+/// names a title only within one type (TMDb numbers films, shows and episodes separately), so the
+/// lookup matches copies of this type alone (`catalog::Client::find_by_guid`).
 ///
 /// The lookup is what makes the "resolve at write time" rule hold: the fan-out must not require a
 /// prior detail-page visit, because a card menu is a place no cross-source resolve has ever run. It
 /// costs one extra GET, on this worker, and only where a second source is registered. `None` is a
 /// server that did not answer or an item it has no portable id for — both leave the caller with a
 /// log line rather than a quiet nothing.
-fn resolved_guid(c: &crate::catalog::Client, rk: &str, given: &str) -> Option<String> {
-    if !given.is_empty() {
-        return Some(given.to_string()); // the press knew it; no round trip at all
-    }
-    let guid = c.metadata(rk).map(|m| m.guid).unwrap_or_default();
-    (!guid.is_empty()).then_some(guid)
+fn resolved_identity(c: &crate::catalog::Client, rk: &str, given: &str) -> Option<(String, String)> {
+    let m = c.metadata(rk)?;
+    let guid = if given.is_empty() { m.guid } else { given.to_string() };
+    (!guid.is_empty()).then_some((guid, m.kind))
 }
 
-/// WORKER. Ask every source for its copy of `guid`, one line per source with its outcome.
+/// WORKER. Ask every source for its copy of `guid` among items of `kind`, one line per source with
+/// its outcome.
 ///
 /// A guid is a public metadata id and is safe to log; **a machine name, an address or a token is
 /// not**, and none appears here — a source is named by its registry slot number, which means
 /// nothing off this device. (This repo is public, and a friend's server details are theirs.)
-fn ask_sources(sources: &[ServerId], guid: &str) -> Vec<Answer> {
+fn ask_sources(sources: &[ServerId], guid: &str, kind: &str) -> Vec<Answer> {
     sources
         .iter()
         .map(|&id| {
             let keys = crate::catalog::client_for(id)
-                .and_then(|c| c.find_by_guid(guid))
+                .and_then(|c| c.find_by_guid(guid, kind))
                 .map(|mc| {
                     mc.metadata
                         .iter()
@@ -1277,6 +1295,34 @@ mod tests {
             !Write::RemoveFromDeck.propagates(),
             "the deck is one server's own surface"
         );
+        assert!(!Write::Favorite(true).propagates(), "a favourite is one server's user data");
+    }
+
+    /// A favourite's optimistic edit is the detail and person pages' heart, and a later press of
+    /// the other face supersedes a queued one: one toggle, one family.
+    #[test]
+    fn a_favourite_flips_the_detail_heart_and_coalesces_as_one_toggle() {
+        let _g = nj_base::testlock::serial();
+        let mut metadata_store = crate::stores::metadata::MetadataStore::default();
+        crate::metadata::install_for_test(metadata_store.state_mut(), Some(crate::metadata::Detail {
+            sid: SRV_A,
+            rk: "4".into(),
+            ..Default::default()
+        }));
+        edit_local_with_owners(SRV_A, "4", Write::Favorite(true), &mut |_| false,
+            &mut |_cmd| crate::stores::StoreOutcome::default(), &mut |_| false, &mut |_| false, &mut |_| false,
+            &mut |cmd| metadata_store.run(cmd));
+        assert!(metadata_store.view().current().unwrap().favorite);
+        crate::metadata::install_for_test(metadata_store.state_mut(), None);
+        // And the person page's heart, whose key is the person's.
+        let mut person = Vec::new();
+        edit_local_with_owners(SRV_A, "161", Write::Favorite(false), &mut |_| false,
+            &mut |_cmd| crate::stores::StoreOutcome::default(), &mut |cmd| { person.push(cmd); true }, &mut |_| false,
+            &mut |_| false, &mut |_| false);
+        assert!(matches!(person.as_slice(), [crate::stores::person::PersonCmd::SetFavoriteLocal { sid, key, on: false }]
+            if *sid == SRV_A && key == "161"), "{person:?}");
+        assert_eq!(Write::Favorite(true).family(), Write::Favorite(false).family());
+        assert_ne!(Write::Favorite(true).family(), Write::Watched.family());
     }
 
     /// The EDIT the landing applies to a fanned-out copy: the same local flip the press made for
@@ -1419,5 +1465,27 @@ mod tests {
             &mut |_| false);
 
         assert_eq!(state.take_detail_refresh(), Some(target));
+    }
+
+    /// R3.2: a favourite the server refused (or never got) must not leave the heart on the
+    /// optimistic face. Its landing re-reads the page it was pressed on, which puts the server's
+    /// `IsFavorite` back, and refetches no shelf: no hub lists favourites.
+    #[test]
+    fn a_refused_favourite_rereads_its_page_and_refetches_no_hub() {
+        let _guard = nj_base::testlock::serial();
+        let target = crate::stores::viewstate::DetailRefresh { sid: SRV_B, rk: "film".into(), keep: None };
+        let mut state = ViewStateState::default();
+        let adapter = Arc::new(ViewStateAdapter::default());
+        let request = req(&mut state, "film", Write::Favorite(true), Some(target.clone()));
+        let id = request.id;
+        state.sent = Some(request);
+        *adapter.mail.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(Completion { id, done: Done { ok: false, also: Vec::new() } });
+        let mut hub_refetches = 0;
+        let _ = state.pump(&adapter, &mut |_| false,
+            &mut |_| { hub_refetches += 1; crate::stores::StoreOutcome::default() },
+            &mut |_| false, &mut |_| false, &mut |_| false, &mut |_| false);
+        assert_eq!(state.take_detail_refresh(), Some(target), "the page re-reads the server's answer");
+        assert_eq!(hub_refetches, 0, "a favourite changes no hub");
     }
 }

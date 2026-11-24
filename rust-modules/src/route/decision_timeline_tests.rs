@@ -361,13 +361,14 @@ fn a_session_resolved_for_a_preview_never_reports_a_timeline() {
     reset_session(&mut ps);
 }
 
-/// **A stop that finished the item marks it played, after its `stopped` report, only below the
-/// server's own threshold.** Jellyfin 12.0 leaves an episode unwatched at a stop at 89 % and marks it
-/// at 91 %, and long credits start before that. The flag is taken by the stop that reads it: the next
-/// stop, which the viewer did not finish, posts `stopped` alone.
+/// **A stop that finished the item marks it played, after its `stopped` report, wherever it
+/// stopped.** Jellyfin marks a stop played only past its own `MaxResumePct` (a server setting,
+/// strict `>`), and long credits start before that; a bare mark on an already played item counts no
+/// second play. The flag is taken by the stop that reads it: the next stop, which the viewer did
+/// not finish, posts `stopped` alone.
 #[test]
 #[cfg(feature = "devtriggers")]
-fn a_finished_stop_marks_the_item_played_only_below_the_threshold() {
+fn a_finished_stop_marks_the_item_played() {
     let mut ps = crate::route::PlaybackSession::IDLE;
     let _g = fresh_registry(&mut ps);
     assert!(nj_net::net::global_init() && crate::curlio::available());
@@ -393,17 +394,38 @@ fn a_finished_stop_marks_the_item_played_only_below_the_threshold() {
     assert_eq!(marks(seen.clone()), 1, "{seen:?}");
     let at = |needle: &str| seen.iter().position(|l| l.starts_with(needle)).unwrap();
     assert!(at("POST /Sessions/Playing/Stopped ") < at("POST /UserPlayedItems/"), "{seen:?}");
-    // Past the threshold the server counted it already.
-    stop(&mut ps, true, 55_000);
-    assert_eq!(marks(lines()), 1, "a second mark past the threshold: {:?}", lines());
+    // At exactly 90 %, which a default server (`MaxResumePct` 90, strict) does not count.
+    stop(&mut ps, true, 54_000);
+    assert_eq!(marks(lines()), 2, "no mark at the server's threshold: {:?}", lines());
     // An ordinary stop at the same place as the first: not finished, so no mark.
     stop(&mut ps, false, 51_000);
-    assert_eq!(marks(lines()), 1, "a stop the viewer did not finish was marked: {:?}", lines());
+    assert_eq!(marks(lines()), 2, "a stop the viewer did not finish was marked: {:?}", lines());
 
     let _ = server.finish();
     reset_session(&mut ps);
     install_active_encoder("");
     reset_player_control_for_test(&ps);
+}
+
+/// **What the post-playback refreshes wait for** (Home's hubs, the uncovered Detail page): false
+/// while a stop's reports are still owed, here behind its reporter's last POST, and true once the
+/// stop worker has attempted them. It used to be a fixed 800 ms that a slow server outran.
+#[test]
+fn stop_reports_land_only_once_the_stop_worker_has_posted() {
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    drain_scrobble();
+    assert!(stop_reports_landed(), "nothing owed");
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let reporter = std::thread::spawn(move || {
+        let _ = held.recv();
+    });
+    scrobble_stop(&mut ps, None, Some(reporter), true);
+    assert!(!stop_reports_landed(), "the stop's reports are still owed");
+    release.send(()).unwrap();
+    drain_scrobble();
+    assert!(stop_reports_landed());
+    reset_session(&mut ps);
 }
 
 /// A flag the previous stop never took (the stop posted nothing) must not mark the next item.

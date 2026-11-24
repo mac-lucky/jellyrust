@@ -608,7 +608,8 @@ fn the_preview_calls_a_profile_5_item_a_conversion() {
             1920,
             1080,
             p5().presentation(SILENT, nj_platform::devcaps::dv::DvCapability::Supported, true),
-            &aac
+            &aac,
+            VoicePreference::Any,
         ),
         Some(Preview::Converts),
         "the server must re-encode it — a container remux would copy the same wrong pixels"
@@ -622,7 +623,8 @@ fn the_preview_calls_a_profile_5_item_a_conversion() {
             1920,
             1080,
             no_dv().presentation(SILENT, nj_platform::devcaps::dv::DvCapability::Supported, true),
-            &aac
+            &aac,
+            VoicePreference::Any,
         ),
         Some(Preview::DirectPlay)
     );
@@ -633,7 +635,8 @@ fn the_preview_calls_a_profile_5_item_a_conversion() {
             1920,
             1080,
             p8().presentation(SILENT, nj_platform::devcaps::dv::DvCapability::Supported, true),
-            &aac
+            &aac,
+            VoicePreference::Any,
         ),
         Some(Preview::DirectPlay)
     );
@@ -646,7 +649,8 @@ fn the_preview_calls_a_profile_5_item_a_conversion() {
             1920,
             1080,
             p5().presentation(DECLARED, nj_platform::devcaps::dv::DvCapability::Supported, true),
-            &aac
+            &aac,
+            VoicePreference::Any,
         ),
         Some(Preview::DirectPlay)
     );

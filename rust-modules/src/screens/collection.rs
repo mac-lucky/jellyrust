@@ -112,28 +112,6 @@ fn meta_line(collection: &Collection) -> CString {
     }
 }
 
-pub(crate) fn member_label(item: &PmsMovie) -> String {
-    match item.kind {
-        2 if item.season_index > 0 => nj_platform::i18n::msg::browse_collection_season_mark(item.season_index as i64),
-        3 => crate::ui::fmt::episode_address(item.season_index as i64, item.ep_index as i64),
-        _ => String::new(),
-    }
-}
-
-pub(crate) fn member_caption(item: &PmsMovie) -> TileLabel {
-    if item.kind == 3 {
-        let address = crate::ui::fmt::episode_address(item.season_index as i64, item.ep_index as i64);
-        let caption = match (item.show_title.is_empty(), address.is_empty()) {
-            (false, false) => format!("{} · {}", item.show_title, address),
-            (false, true) => item.show_title.clone(),
-            (true, false) => address,
-            (true, true) => String::new(),
-        };
-        return TileLabel::titled(&item.title, &caption);
-    }
-    card_row::poster_label(&tile_facts::of(item))
-}
-
 pub(crate) struct CollectionScreen {
     entry: EntryId,
     /// The page's argument; `id.rk` adopts the store's resolution of a tag route.
@@ -144,9 +122,6 @@ pub(crate) struct CollectionScreen {
     /// [`Self::sync`] so a frame finds a card's element or index without scanning identities.
     /// Derived, not logical state.
     elems: Vec<u32>,
-    /// `labels[i]` is `items[i]`'s persistent poster label ([`member_label`]), built beside
-    /// [`Self::elems`] so a frame formats none. Derived, not logical state.
-    labels: Vec<String>,
     /// The header's meta line and the `(count, kind-only)` it was built for ([`meta_line`]).
     /// Derived, not logical state.
     meta: ((i64, bool), CString),
@@ -189,7 +164,7 @@ impl CollectionScreen {
 
     pub(crate) fn new(entry: EntryId, id: CollectionRef) -> Self {
         Self { entry, id, header_marked: false, cards: CardKeys::new(FIRST_CARD_ELEM),
-            elems: Vec::new(), labels: Vec::new(), meta: ((0, true), CString::default()), return_pending: false, teardown_closed: false,
+            elems: Vec::new(), meta: ((0, true), CString::default()), return_pending: false, teardown_closed: false,
             scroll: Spring::default(), scroll_target: 0.0, ground: PageGround::new(),
             ground_seeded: false, summary_more: false, links_c: Vec::new(), synced: None,
             bands: crate::ui::poster_grid::GridBands::new(),
@@ -222,7 +197,6 @@ impl CollectionScreen {
         if self.id.rk.is_empty() && !collection.id.rk.is_empty() { self.id.rk = collection.id.rk.clone(); }
         self.elems = self.cards.intern_all(
             collection.items.iter().map(|item| (item.sid, item.rk.as_str())), "collection");
-        self.labels = collection.items.iter().map(member_label).collect();
         self.meta = (meta_key(collection), meta_line(collection));
         self.summary_more = !collection.summary.is_empty() && summary_view(&collection.summary, measure).truncates(TEXT_W);
         self.links_c.clear();
@@ -427,8 +401,7 @@ impl CollectionScreen {
         let Some(index) = focus.filter(|key| key.entry == self.entry)
             .and_then(|key| self.item_index(collection, key.elem)) else { return };
         let Some(item) = collection.items.get(index) else { return };
-        let label = self.label_at(collection, index, item);
-        self.draw_card(f.painter.alpha(f.page_alpha), item, &label, index, true, f.press.scale, f.measure);
+        self.draw_card(f.painter.alpha(f.page_alpha), item, index, true, f.press.scale, f.measure);
     }
 
     /// The header's focus rect — its text column — scrolled with the document: the header is the
@@ -491,40 +464,15 @@ impl CollectionScreen {
             });
     }
 
-    /// Card `index`'s persistent label: the one [`Self::sync`] built, or — for a landing the page
-    /// has not synced yet — formatted now.
-    fn label_at<'a>(&'a self, collection: &Collection, index: usize, item: &PmsMovie) -> std::borrow::Cow<'a, str> {
-        match self.labels.get(index).filter(|_| self.indexed(collection)) {
-            Some(label) => std::borrow::Cow::Borrowed(label),
-            None => std::borrow::Cow::Owned(member_label(item)),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn draw_card(&self, p: Painter, item: &PmsMovie, persistent: &str, index: usize, focused: bool,
+    /// Member `index`'s card, worded under it from its own row (`card_row::draw_cell`): a season
+    /// names its show and itself, an episode its name beside its code badge.
+    fn draw_card(&self, p: Painter, item: &PmsMovie, index: usize, focused: bool,
         press: f32, measure: &dyn nj_machine::machine::Measure) {
         let rect = self.card_rect(index, focused, press);
         let scale = rect.w / CARD_W;
         if !card_row::paint_visible(p, rect, scale, focused) { return; }
-        let resume = item.resume_frac();
-        if focused {
-            let row = index / crate::ui::poster_grid::COLS;
-            let open = self.bands.geometry().iter().find(|band| band.row == row).map_or(0.0, |band| band.expansion);
-            let label = member_caption(item).revealed(card_row::band_reveal(open));
-            card_row::draw_focused(p, Art::Poster(Some(tile_facts::of(item))), rect, scale,
-                &crate::ui::poster_grid::STYLE, resume, &label, measure);
-        } else {
-            card_row::draw_tile(p, Art::Poster(Some(tile_facts::of(item))), rect, scale,
-                &crate::ui::poster_grid::STYLE, resume);
-        }
-        if !persistent.is_empty() {
-            widgets::poster_label(p, rect,
-                crate::ui::poster_grid::STYLE.tile_radius(rect, scale), persistent, measure);
-            if let Some(frac) = resume {
-                card_row::resume_bar(p, rect, frac,
-                    crate::ui::poster_grid::STYLE.tile_radius(rect, scale));
-            }
-        }
+        card_row::draw_cell(p, Art::Poster(Some(tile_facts::of(item))), rect, scale,
+            &crate::ui::poster_grid::STYLE, item.resume_frac(), &TileLabel::default(), focused, measure);
     }
 
     /// Whether member `index`'s row rests wholly above the content edge — the row over the one a
@@ -540,12 +488,12 @@ impl CollectionScreen {
         for index in crate::ui::poster_grid::visible(collection.items.len(), GRID_TOP, self.scroll.pos) {
             if current == Some(index) || self.above_edge(index) { continue; }
             if let Some(item) = collection.items.get(index) {
-                self.draw_card(p, item, &self.label_at(collection, index, item), index, false, 1.0, f.measure);
+                self.draw_card(p, item, index, false, 1.0, f.measure);
             }
         }
         if let Some(index) = current {
             if let Some(item) = collection.items.get(index) {
-                self.draw_card(p, item, &self.label_at(collection, index, item), index, true, f.press.scale, f.measure);
+                self.draw_card(p, item, index, true, f.press.scale, f.measure);
             }
         }
         let visible = if f.records_stops() { crate::ui::poster_grid::visible(collection.items.len(), GRID_TOP, self.scroll.pos) } else { 0..0 };
@@ -801,16 +749,21 @@ mod tests {
             owner: InputOwner::Entry(EntryId(9)) }
     }
 
+    /// A member is worded under its card from its own row, as Litefin words every card: a season
+    /// names its show over itself, an episode on a poster its own name (its code is the badge).
     #[test]
-    fn season_and_episode_projection_uses_persistent_labels_and_show_address_caption() {
-        let season = PmsMovie { kind: 2, season_index: 3, title: "Season 3".into(), ..Default::default() };
-        assert_eq!(member_label(&season), "SEASON 3");
+    fn season_and_episode_members_are_worded_under_their_cards() {
+        let words = |m: &PmsMovie| {
+            let label = card_row::tile_label(&tile_facts::of(m), false);
+            let text = |c: Option<std::ffi::CString>| c.map(|c| c.into_string().unwrap());
+            (text(label.title), text(label.caption))
+        };
+        let season = PmsMovie { kind: 2, season_index: 3, title: "Season 3".into(),
+            show_title: "Example Show".into(), ..Default::default() };
+        assert_eq!(words(&season), (Some("Example Show".into()), Some("Season 3".into())));
         let episode = PmsMovie { kind: 3, season_index: 3, ep_index: 4, title: "The Answer".into(),
             show_title: "Example Show".into(), ..Default::default() };
-        assert_eq!(member_label(&episode), "S3 · E4");
-        let caption = member_caption(&episode);
-        assert_eq!(caption.title.unwrap().to_str().unwrap(), "The Answer");
-        assert_eq!(caption.caption.unwrap().to_str().unwrap(), "Example Show · S3 · E4");
+        assert_eq!(words(&episode), (Some("The Answer".into()), None));
     }
 
     fn step(screen: &mut CollectionScreen, ev: ScreenEvent<CollectionHost>,
@@ -1029,9 +982,8 @@ mod tests {
         assert_eq!(restored.focused_item(Some(got), &cx(store.view(), Some(got))).unwrap().rk, "b");
     }
 
-    /// **The collection page's fixed slots fit in every shipped language**: the season mark on a
-    /// grid poster (`widgets::poster_label` elides to the card less its insets) and the one-line
-    /// meta line beside the artwork. Measured with the device's whole-pixel advances.
+    /// **The collection page's fixed slots fit in every shipped language**: the one-line meta line
+    /// beside the artwork and the page's read-outs. Measured with the device's whole-pixel advances.
     #[test]
     fn the_collection_pages_fixed_slots_fit_in_every_language() {
         use nj_base::fontcov::advances::ShippedMeasure;
@@ -1039,14 +991,9 @@ mod tests {
         use nj_platform::i18n::{language_on_this_thread_for_test, msg, Preference};
         use nj_machine::machine::Measure;
         let m = ShippedMeasure;
-        let mark_budget = (CARD_W - 2.0 * 16.0) * HEADROOM;
         let mut out = Vec::new();
         for language in [Preference::En, Preference::Es, Preference::Be, Preference::Ru] {
             let _guard = language_on_this_thread_for_test(language);
-            let season = PmsMovie { kind: 2, season_index: 99, ..Default::default() };
-            let mark = member_label(&season);
-            let w = m.width_str(&mark, theme::size::LABEL, true);
-            if w > mark_budget { out.push(format!("{}: {mark:?} is {w:.0}px in {mark_budget:.0}px", language.tag())); }
             for meta in [msg::browse_collection_kind().to_owned(),
                 msg::browse_collection_meta(&crate::ui::fmt::item_count(99_999))] {
                 let w = m.width_str(&meta, theme::size::LABEL, false);
@@ -1077,6 +1024,8 @@ mod tests {
         let _serial = nj_base::testlock::serial();
         let _pseudo = nj_platform::i18n::pseudo_on_this_thread_for_test();
         let server = ["Set", "Qwerty", "Zzyzx", "Vlox"];
+        // the seeded members' own titles, drawn under their cards
+        let members = ["a", "b", "c"];
         let season = PmsMovie { rk: "s".into(), kind: 2, season_index: 3, title: "Zzyzx".into(),
             show_title: "Vlox".into(), ..Default::default() };
         let mut stray = Vec::new();
@@ -1098,7 +1047,7 @@ mod tests {
             });
             assert!(runs.iter().any(|run| run.contains("[!!")), "{status:?} drew catalog text: {runs:?}");
             let pseudo = |run: &str| run.contains("[!!") || run.contains(['á', 'ë', 'ï', 'ö', 'ü']);
-            stray.extend(runs.into_iter().filter(|run| !pseudo(run)).filter(|run| {
+            stray.extend(runs.into_iter().filter(|run| !pseudo(run) && !members.contains(&run.as_str())).filter(|run| {
                 let mut rest = run.replace('\u{a0}', " ");
                 for value in server { rest = rest.replace(value, ""); }
                 rest.chars().any(char::is_alphabetic)

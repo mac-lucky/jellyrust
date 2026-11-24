@@ -2,20 +2,13 @@
 
 ## Reporting a vulnerability
 
-Report privately, **not** as a public issue:
+Report to the maintainer, macluckylab, privately through GitHub's vulnerability reporting at
+<https://github.com/mac-lucky/jellyrust/security/advisories/new>, not in a public issue. Leave out
+access tokens, server addresses and anything about what is being watched.
 
-- **GitHub Security Advisories** — <https://github.com/sostk/native-jelly/security/advisories/new>
-  (it is private, it threads, and it produces a CVE if one is warranted)
-
-This is a one-person unpaid project, so the honest service level is: acknowledged within **7 days**,
-an assessment within **30**. If you have not heard back in a week, open a public issue saying only
-*"sent a security report on <date>, no reply"* — with no details.
-
-Native Jelly is a fork of [PlxNative](https://github.com/GLinnik21/plx-native). A flaw that is also
-present upstream is worth reporting there too, through that project's own security policy.
-
-Please give me a reasonable window to ship a fix before disclosing. There is no bounty; I will credit
-you in the release note unless you ask me not to.
+JellyRust is a modified version of [Native Jelly](https://github.com/sostk/native-jelly), itself a
+fork of [PlxNative](https://github.com/GLinnik21/plx-native). A flaw that is also present upstream
+is worth reporting there too, through that project's own security policy.
 
 ## What is in scope
 
@@ -45,7 +38,7 @@ looking at:
   request is repeated with the chain-and-date check replaced by a pin on that key; the name check
   stays on. Telemetry and any host with no remembered key never take this path (`net.rs`,
   `net::keypin`). The product path talks only to the Jellyfin server whose address you enter.
-  Over `http://`, your password, access token and everything Native Jelly exchanges with that
+  Over `http://`, your password, access token and everything JellyRust exchanges with that
   server travel without encryption — enter `https://` for a server you reach over the internet.
   A token sent over plaintext to an origin the user did not enter, or to a server other than the
   one the token names, is in scope.

@@ -16,7 +16,7 @@ fn pending_home_grid_focus_wins_when_the_first_catalog_arrives() {
         frame(&mut d, &mut rig, AppArg::Home, tick(0), vec![]);
         let entry = d.nav.top_page().unwrap().id;
         d.set_focus_in(
-            on_strip.then_some(FocusKey { entry, elem: crate::screens::home::STRIP_HOME_ELEM }),
+            on_strip.then_some(FocusKey { entry, elem: crate::app::chrome::item_key(crate::app::chrome::Dest::Home) }),
             on_strip.then_some(crate::ui::containers::tabs::STRIP),
         );
         assert!(rig.home_command(HomeCmd::FocusGrid { row: 0, col: 2 }));
@@ -68,7 +68,7 @@ fn first_home_catalog_preserves_default_and_explicit_hero_seating() {
 
 #[test]
 fn home_requests_keep_the_emitting_instance_and_captured_return_memory() {
-    use crate::screens::registry::{HomeGroupKey, HomeHubIdentity, HomeItemIdentity, HomeItemKey, HomeMemory, HomeTab};
+    use crate::screens::registry::{HomeGroupKey, HomeHubIdentity, HomeItemIdentity, HomeItemKey, HomeMemory};
     let _guard = nj_base::testlock::serial();
     let mut rig = Bridge::for_test(|| 0);
     let sid = crate::catalog::ServerId::UNSET;
@@ -88,8 +88,7 @@ fn home_requests_keep_the_emitting_instance_and_captured_return_memory() {
     let source = MachineId::Instance(InstanceId(20));
     rig.app_return(source, ret.clone());
     let requests = vec![HomeReq::Play { sid, rk: "1".into(), resume_ns: 1_000_000 },
-        HomeReq::Detail { sid, rk: "1".into() }, HomeReq::ItemMenu { sid, rk: "1".into() }, HomeReq::Account,
-        HomeReq::Tab(HomeTab::Home), HomeReq::Tab(HomeTab::Movies), HomeReq::Tab(HomeTab::Shows), HomeReq::Tab(HomeTab::Search)];
+        HomeReq::Detail { sid, rk: "1".into() }, HomeReq::ItemMenu { sid, rk: "1".into() }, HomeReq::FoldToHero];
     let parts = CxParts { tick: tick(0), press: Default::default(), focus: Default::default(), owner: InputOwner::Entry(EntryId(1)) };
     let mut out = Vec::new();
     let mut present = Present::new();
@@ -207,7 +206,7 @@ fn mounted_home_walks_to_the_twentieth_row() {
 }
 
 #[test]
-fn hero_edge_keys_page_without_seating_a_pager_or_leaving_the_control() {
+fn hero_keys_page_without_seating_a_pager_or_leaving_the_hero() {
     let _guard = nj_base::testlock::serial();
     let mut d = Dispatcher::<AppHost>::new();
     let mut rig = Bridge::for_test(|| 0);
@@ -217,22 +216,18 @@ fn hero_edge_keys_page_without_seating_a_pager_or_leaving_the_control() {
     let selected = |rig: &Bridge, d: &Dispatcher<AppHost>| rig.with_home(d,
         |home, cx, _| home.hero_item::<AppHost>(cx).unwrap().rk.clone()).unwrap();
     let mut i = 2;
-    for (direction, control) in [(Key::Left, 0), (Key::Right, 1), (Key::Right, 1)] {
-        if control == 1 && d.focus().unwrap().elem == 0 {
-            frame(&mut d, &mut rig, AppArg::Home, tick(i), script_key(Key::Right, tick(i)));
-            i += 1;
-        }
+    // the hero is one stop: RIGHT pages on, wrapping past the last slide
+    for direction in [Key::Right, Key::Right, Key::Right] {
         let before = selected(&rig, &d);
         frame(&mut d, &mut rig, AppArg::Home, tick(i), script_key(direction, tick(i)));
         i += 1;
-        assert_eq!(d.focus().unwrap().elem, control);
-        assert_ne!(selected(&rig, &d), before, "the delivered edge must page, not just report an edge");
+        assert_eq!(d.focus().unwrap().elem, 0);
+        assert_ne!(selected(&rig, &d), before, "the key must page");
         rig.with_home(&d, |home, cx, _| {
             let mut draw = DrawFrame::new(cx, crate::ui::Painter::root());
             home.record_stops(&mut draw, cx.views.hubs);
-            let mut keys: Vec<_> = draw.into_stops().into_iter().map(|s| s.key.elem).collect();
-            keys.sort();
-            assert_eq!(keys, vec![0, 1], "pager chevron/dots are not hit stops");
+            let keys: Vec<_> = draw.into_stops().into_iter().map(|s| s.key.elem).collect();
+            assert_eq!(keys, vec![0], "the pager dots are not hit stops");
         }).unwrap();
         for _ in 0..30 {
             frame(&mut d, &mut rig, AppArg::Home, tick(i), vec![]);
@@ -241,8 +236,11 @@ fn hero_edge_keys_page_without_seating_a_pager_or_leaving_the_control() {
     }
 }
 
+/// LEFT on the hero, past the first slide too, is the dispatcher's door into the rail on Home's
+/// item (the carousel pages on RIGHT only); RIGHT from the rail returns to the hero.
 #[test]
-fn a_removed_home_type_tab_recovers_to_home_not_the_profile_chip() {
+fn left_on_the_hero_enters_the_rail_and_right_returns() {
+    use crate::app::chrome::{item_key, Dest};
     let _guard = nj_base::testlock::serial();
     let mut d = Dispatcher::<AppHost>::new();
     let mut rig = Bridge::for_test(|| 0);
@@ -250,14 +248,38 @@ fn a_removed_home_type_tab_recovers_to_home_not_the_profile_chip() {
     frame(&mut d, &mut rig, AppArg::Home, tick(0), vec![]);
     frame(&mut d, &mut rig, AppArg::Home, tick(1), vec![]);
     let entry = d.nav.top_page().unwrap().id;
-    let movies = crate::screens::home::STRIP_MOVIES_ELEM;
-    d.nav.tabs.strip.push(crate::ui::containers::tabs::StripMember::new(movies,
-        crate::ui::Rect::new(800.0, 50.0, 160.0, 60.0)));
-    d.set_focus_in(Some(FocusKey { entry, elem: movies }), Some(crate::ui::containers::tabs::STRIP));
-    // Republish the current empty-library strip: the previous Movies destination is gone.
+    let selected = |rig: &Bridge, d: &Dispatcher<AppHost>| rig.with_home(d,
+        |home, cx, _| home.hero_item::<AppHost>(cx).unwrap().rk.clone()).unwrap();
+    frame(&mut d, &mut rig, AppArg::Home, tick(2), script_key(Key::Right, tick(2)));
+    for i in 3..40 { frame(&mut d, &mut rig, AppArg::Home, tick(i), vec![]); }
+    let (hero, slide) = (d.focus(), selected(&rig, &d));
+    assert_eq!(hero.map(|key| key.elem), Some(0));
+    frame(&mut d, &mut rig, AppArg::Home, tick(40), script_key(Key::Left, tick(40)));
+    assert_eq!(d.focus(), Some(FocusKey { entry, elem: item_key(Dest::Home) }), "LEFT enters the rail");
+    assert_eq!(selected(&rig, &d), slide, "LEFT pages no slide");
+    frame(&mut d, &mut rig, AppArg::Home, tick(41), script_key(Key::Right, tick(41)));
+    assert_eq!(d.focus(), hero, "RIGHT returns to the hero");
+}
+
+/// A focused rail key the capture no longer publishes (a library row whose library left the
+/// server) recovers onto Home's item, the rail's fallback, never onto the avatar.
+#[test]
+fn a_removed_rail_key_recovers_to_home_not_the_avatar() {
+    let _guard = nj_base::testlock::serial();
+    let mut d = Dispatcher::<AppHost>::new();
+    let mut rig = Bridge::for_test(|| 0);
+    rig.stores.hubs.seed_for_test(3, crate::catalog_fetch::HubState::Ready);
+    frame(&mut d, &mut rig, AppArg::Home, tick(0), vec![]);
+    frame(&mut d, &mut rig, AppArg::Home, tick(1), vec![]);
+    let entry = d.nav.top_page().unwrap().id;
+    let gone = crate::ui::dispatch::STRIP_BASE + 0x100;
+    d.nav.tabs.strip.push(crate::ui::containers::tabs::StripMember::new(gone,
+        crate::ui::Rect::new(0.0, 500.0, 100.0, 72.0)));
+    d.set_focus_in(Some(FocusKey { entry, elem: gone }), Some(crate::ui::containers::tabs::STRIP));
+    // Republish the current empty-library rail: the old key is gone.
     frame(&mut d, &mut rig, AppArg::Home, tick(2), vec![]);
-    assert!(!d.nav.tabs.strip.iter().any(|member| member.elem == movies));
-    assert_eq!(d.focus(), Some(FocusKey { entry, elem: crate::screens::home::STRIP_HOME_ELEM }));
+    assert!(!d.nav.tabs.strip.iter().any(|member| member.elem == gone));
+    assert_eq!(d.focus(), Some(FocusKey { entry, elem: crate::app::chrome::item_key(crate::app::chrome::Dest::Home) }));
 }
 
 #[test]
@@ -375,6 +397,9 @@ fn library_detail_return_restores_engine_card_and_viewport_after_stack_eviction(
     }
 }
 
+/// The Library publishes the real rail: Litefin's order, keyed by identity, Home the fallback.
+/// This table's sections carry no server, so there is no library to list and Libraries is not on
+/// the rail (`library_navigation_tests` drives a table that has them).
 #[test]
 fn library_publishes_the_actual_container_strip() {
     let _guard = nj_base::testlock::serial();
@@ -382,12 +407,14 @@ fn library_publishes_the_actual_container_strip() {
     let mut bridge = Bridge::for_test(|| 0);
     bridge.stores.browse.borrow_mut().seed_two_source_table_for_test();
     bridge.refresh_browse_directory();
-    super::show_page(&mut dispatcher, AppArg::Library);
-    bridge.capture_chrome(&mut dispatcher);
+    // The rail is captured for the page on top, so it is there from the page's second frame.
+    frame(&mut dispatcher, &mut bridge, AppArg::Library, tick(0), vec![]);
+    frame(&mut dispatcher, &mut bridge, AppArg::Library, tick(1), vec![]);
     let base = crate::ui::dispatch::STRIP_BASE;
     assert_eq!(dispatcher.nav.tabs.strip.iter().map(|member| member.elem).collect::<Vec<_>>(),
-        vec![base + 4, base, base + 1, base + 2, base + 3]);
+        vec![base, base + 5, base + 3, base + 6, base + 2, base + 4]);
     assert_eq!(dispatcher.nav.tabs.strip_fallback, Some(base));
+    assert_eq!(dispatcher.nav.tabs.strip_active, None, "no Libraries item to be the Library's own");
 }
 
 #[test]

@@ -41,10 +41,11 @@ pub struct DeviceIdentity {
     pub version: String,
 }
 
-/// `DeviceId` for one (installation, user) pair. **Jellyfin keeps one access token per DeviceId**
-/// and a sign-in on a DeviceId revokes the previous token issued to it, so two users of one set
-/// sharing the install's id would sign each other out. Deriving it per user keeps every seat its own
-/// device while staying stable across launches.
+/// `DeviceId` for one (installation, user) pair, stable across launches, so every seat is its own
+/// device in the server's list. **A sign-in revokes only the earlier token of the same user on the
+/// same DeviceId** (the server matches both), so the same person signed in under another basis — a
+/// password sign-in derives it from the typed name, Quick Connect from `""` — leaves the earlier
+/// token valid there: `app::jf_login::adopt` signs a pushed-out token out itself.
 pub fn device_id(install_id: &str, username: &str) -> String {
     let digest = nj_base::sha256::sha256(format!("{install_id}\n{}", username.to_lowercase()).as_bytes());
     digest[..16].iter().map(|b| format!("{b:02x}")).collect()

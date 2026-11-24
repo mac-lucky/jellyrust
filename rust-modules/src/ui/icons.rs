@@ -37,7 +37,6 @@ pub enum Icon {
     /// Two people joined by one agreement line. A one-colour stroked mask that NanoSVG can
     /// rasterize at icon and artwork sizes without unsupported filters.
     Agreement,
-    Cc,
     Audio,
     Check,
     Chevron, // points RIGHT; the directional variants below are separate masks (the
@@ -70,27 +69,6 @@ pub enum Icon {
     /// a `Check` on the same ground: the pair `detail::hero_ctls` draws for a part-watched item.
     Minus,
     Play,
-    Pause,
-    /// The transport pair — two filled triangles, pointing back and forward. Worn by ONE surface:
-    /// the player HUD's transport state read-out beside the elapsed clock (`player_hud::draw_hud`,
-    /// via [`crate::appkit::player_hud::transport_mark`]), where `Rewind` marks the playhead travelling
-    /// BACKWARDS and `FastForward` marks it travelling forwards — a scrub, a chapter/marker hop and
-    /// a rapid-seek burst alike. They are a read-out, never a control: there is no rewind BUTTON in
-    /// this app and the design system forbids adding one.
-    ///
-    /// **Both live in [`Icon::Pause`]'s own 14-unit band** (y 5..19 of a 24 viewBox), which is the
-    /// design system's transport rule rather than a coincidence — the read-out is one small slot
-    /// that swaps glyphs under a running clock, and a family drawn to a common band does not shift
-    /// optical weight when the state flips. Do not rescale either mark to "fill the box".
-    ///
-    /// Two `<path>` ELEMENTS rather than one path's subpaths, which the module doc's rule 1 would
-    /// normally forbid — permitted for exactly [`Icon::Crowd`]'s reason: the triangles do not touch
-    /// (0.8 units apart), so there is no join for the alpha composite to crease along.
-    Previous,
-    Next,
-    Rewind,
-    /// See [`Icon::Rewind`].
-    FastForward,
     /// Counter-clockwise circular arrow (↺) — **the detail hero's restart disc, and only that**.
     ///
     /// It is the same ACTION as [`Icon::PlayStart`], which is normally how a second mark gets
@@ -144,9 +122,6 @@ pub enum Icon {
     PlayStart,
     /// An X — "remove this" (the item menu's Remove from Continue Watching row).
     Close,
-    /// A horizontal ellipsis — "more options". The player transport's third control disc, which
-    /// opens the overflow popover (`appkit/more_menu.rs`). Overflow, so it sits at the END of the row.
-    More,
     /// The magnifier — the only pill in the shared top strip that is a MARK instead of a word
     /// (`ui_kits/tv-app/SearchScreen.jsx`). Drawn at 1.15× the strip's own type rung, inked exactly as a
     /// label would be, so it reads as one of the row rather than as an ornament on it.
@@ -237,10 +212,85 @@ pub enum Icon {
     Plus,
     /// An open padlock — a server reached without encryption (`screens::jf_login`).
     LockOpen,
+    /// Remix Icon `shuffle-line` (Apache-2.0): the Library's Shuffle control (Litefin 6).
+    Shuffle,
+    /// Remix Icon `filter-3-line`, three falling bars: the Library's Sort control (Litefin 6).
+    Sort,
+    /// Remix Icon `filter-line`, a funnel: the Library's Filter control (Litefin 6).
+    Filter,
+    /// Remix Icon `layout-grid-line`: the Library's View Mode control (Litefin 6).
+    ViewMode,
+    /// Litefin's rail marks (`docs/litefin-look.md` 3), Remix Icon paths as its sidebar draws
+    /// them: the OUTLINE variant idle, the `*Fill` variant on the current page or under focus.
+    /// Outlines punch their counters with opposite-winding subpaths, which is the hole the
+    /// nonzero rule is meant to make here.
+    Home,
+    HomeFill,
+    SearchLine,
+    SearchFill,
+    Libraries,
+    LibrariesFill,
+    Settings,
+    SettingsFill,
+    /// …and the Libraries popover's row marks, by library type.
+    LibraryMovies,
+    LibraryMoviesFill,
+    LibraryTv,
+    LibraryTvFill,
+    /// The rail's account item when the user has no picture.
+    Account,
+    AccountFill,
+    /// A filled five-point star (Remix Icon `star-fill`) — the detail meta row's community rating
+    /// mark, tinted [`crate::ui::theme::RATING_STAR`].
+    Star,
+    /// The player OSD's previous-item button at rest; [`Icon::SkipBackFill`] while focused. Remix Icon, as Litefin draws them (`docs/litefin-look.md` 10): every OSD button shows the outline at rest and the filled cut on focus.
+    SkipBack,
+    SkipBackFill,
+    /// The OSD's next-item button (outline / [`Icon::SkipForwardFill`]).
+    SkipForward,
+    SkipForwardFill,
+    /// The OSD's previous-chapter button (outline / [`Icon::RewindStartFill`]).
+    RewindStart,
+    RewindStartFill,
+    /// The OSD's next-chapter button (outline / [`Icon::SpeedEndFill`]).
+    SpeedEnd,
+    SpeedEndFill,
+    /// The OSD's rewind button: back the Skip interval (Litefin has one cut, worn focused and not).
+    Replay10,
+    /// The OSD's forward button (one cut, as [`Icon::Replay10`]).
+    Forward10,
+    /// The OSD's play/pause circle while paused (outline / [`Icon::PlayFill`]).
+    PlayLine,
+    PlayFill,
+    /// The OSD's play/pause circle while playing (one cut).
+    PauseLine,
+    /// The OSD's subtitles button (outline / [`Icon::ClosedCaptioningFill`]).
+    ClosedCaptioning,
+    ClosedCaptioningFill,
+    /// The OSD's audio button (outline / [`Icon::SpeakerFill`]).
+    Speaker,
+    SpeakerFill,
+    /// The OSD's chapters button (outline / [`Icon::BookOpenFill`]).
+    BookOpen,
+    BookOpenFill,
+    /// The app's own mark, the jellyfish of `assets/logo.svg` with its play knocked out, as a mask:
+    /// the sign-in brand pane's logo (`widgets::draw_login_brand`).
+    BrandMark,
+    /// A closed padlock, outlined — the password input's mark (`screens::jf_login`).
+    Lock,
+    /// Remix Icon's heart, outline and filled — the detail page's Favorite action, as Litefin's
+    /// details draw it (`docs/litefin-look.md` 5 Actions row).
+    Heart,
+    HeartFill,
+    /// The rail's Favorites (a heart) and Random (a die with pips) items, outline and filled, as
+    /// Litefin's other rail marks ([`Icon::Home`]).
+    Favorites,
+    FavoritesFill,
+    Random,
+    RandomFill,
 }
 
-/// **Where a mark's INK sits inside its 24-unit viewBox**, as `(left, right)` fractions — and
-/// [`band`] below, the vertical half of the same question.
+/// **Where a mark's INK sits inside its 24-unit viewBox**, as `(left, right)` fractions.
 ///
 /// Here rather than in the screens because it is a property of the ASSET. Two screens had already
 /// transcribed it independently and in two different shapes — `player_hud`'s transport slot carried
@@ -254,33 +304,16 @@ pub enum Icon {
 /// and what every caller wanted before any of this existed.
 pub(crate) const fn ink_x(id: Icon) -> (f32, f32) {
     match id {
-        Icon::Pause => (7.0 / 24.0, 17.0 / 24.0),
         Icon::Play => (6.0 / 24.0, 20.0 / 24.0),
-        Icon::Rewind | Icon::FastForward => (2.6 / 24.0, 21.4 / 24.0),
         // One entry for the mirrored pair: the reflected path has the same ink bounds.
         Icon::Chevron | Icon::ChevronLeft => (7.5 / 24.0, 16.5 / 24.0),
         _ => (0.0, 1.0),
     }
 }
 
-/// A mark's ink HEIGHT as a fraction of its viewBox. The transport family — rewind, pause,
-/// fast-forward — is authored to one 14-unit band precisely so a small player HUD never shifts
-/// weight when the state flips, and `play.svg` is the one member that is NOT: it spans y=4..20, so
-/// 16 units, because it predates that slot and is worn elsewhere at its own size. A caller drawing
-/// the family in one slot scales by `band(Pause) / band(id)` and the odd one out stops being the
-/// player HUD's private problem.
-pub(crate) const fn band(id: Icon) -> f32 {
-    match id {
-        Icon::Pause | Icon::Rewind | Icon::FastForward => 14.0 / 24.0,
-        Icon::Play => 16.0 / 24.0,
-        _ => 1.0,
-    }
-}
-
 fn src(id: Icon) -> &'static str {
     match id {
         Icon::Agreement => include_str!("../../../assets/icons/agreement.svg"),
-        Icon::Cc => include_str!("../../../assets/icons/cc.svg"),
         Icon::Audio => include_str!("../../../assets/icons/audio.svg"),
         Icon::Check => include_str!("../../../assets/icons/check.svg"),
         Icon::Chevron => include_str!("../../../assets/icons/chevron.svg"),
@@ -291,9 +324,6 @@ fn src(id: Icon) -> &'static str {
         Icon::MinusCircleFill => include_str!("../../../assets/icons/minus-circle-fill.svg"),
         Icon::Minus => include_str!("../../../assets/icons/minus.svg"),
         Icon::Play => include_str!("../../../assets/icons/play.svg"),
-        Icon::Pause => include_str!("../../../assets/icons/pause.svg"),
-        Icon::Rewind => include_str!("../../../assets/icons/rewind.svg"),
-        Icon::FastForward => include_str!("../../../assets/icons/fast-forward.svg"),
         Icon::Restart => include_str!("../../../assets/icons/restart.svg"),
         Icon::Trailer => include_str!("../../../assets/icons/trailer.svg"),
         Icon::Info => include_str!("../../../assets/icons/info.svg"),
@@ -305,9 +335,6 @@ fn src(id: Icon) -> &'static str {
         Icon::Collection => include_str!("../../../assets/icons/collection.svg"),
         Icon::PlayStart => include_str!("../../../assets/icons/play-start.svg"),
         Icon::Close => include_str!("../../../assets/icons/close.svg"),
-        Icon::Previous => include_str!("../../../assets/icons/previous.svg"),
-        Icon::Next => include_str!("../../../assets/icons/next.svg"),
-        Icon::More => include_str!("../../../assets/icons/more.svg"),
         Icon::Search => include_str!("../../../assets/icons/search.svg"),
         Icon::Tomato => include_str!("../../../assets/icons/tomato.svg"),
         Icon::TomatoCalyx => include_str!("../../../assets/icons/tomato-calyx.svg"),
@@ -328,7 +355,53 @@ fn src(id: Icon) -> &'static str {
         Icon::Server => include_str!("../../../assets/icons/server.svg"),
         Icon::Phone => include_str!("../../../assets/icons/phone.svg"),
         Icon::Plus => include_str!("../../../assets/icons/plus.svg"),
+        Icon::Star => include_str!("../../../assets/icons/star-fill.svg"),
         Icon::LockOpen => include_str!("../../../assets/icons/lock-open.svg"),
+        Icon::Shuffle => include_str!("../../../assets/icons/shuffle.svg"),
+        Icon::Sort => include_str!("../../../assets/icons/sort.svg"),
+        Icon::Filter => include_str!("../../../assets/icons/filter.svg"),
+        Icon::ViewMode => include_str!("../../../assets/icons/view-mode.svg"),
+        Icon::Home => include_str!("../../../assets/icons/home-line.svg"),
+        Icon::HomeFill => include_str!("../../../assets/icons/home-fill.svg"),
+        Icon::SearchLine => include_str!("../../../assets/icons/search-line.svg"),
+        Icon::SearchFill => include_str!("../../../assets/icons/search-fill.svg"),
+        Icon::Libraries => include_str!("../../../assets/icons/libraries-line.svg"),
+        Icon::LibrariesFill => include_str!("../../../assets/icons/libraries-fill.svg"),
+        Icon::Settings => include_str!("../../../assets/icons/settings-line.svg"),
+        Icon::SettingsFill => include_str!("../../../assets/icons/settings-fill.svg"),
+        Icon::LibraryMovies => include_str!("../../../assets/icons/library-movies-line.svg"),
+        Icon::LibraryMoviesFill => include_str!("../../../assets/icons/library-movies-fill.svg"),
+        Icon::LibraryTv => include_str!("../../../assets/icons/library-tv-line.svg"),
+        Icon::LibraryTvFill => include_str!("../../../assets/icons/library-tv-fill.svg"),
+        Icon::Account => include_str!("../../../assets/icons/account-line.svg"),
+        Icon::AccountFill => include_str!("../../../assets/icons/account-fill.svg"),
+        Icon::SkipBack => include_str!("../../../assets/icons/skip-back-line.svg"),
+        Icon::SkipBackFill => include_str!("../../../assets/icons/skip-back-fill.svg"),
+        Icon::SkipForward => include_str!("../../../assets/icons/skip-forward-line.svg"),
+        Icon::SkipForwardFill => include_str!("../../../assets/icons/skip-forward-fill.svg"),
+        Icon::RewindStart => include_str!("../../../assets/icons/rewind-start-line.svg"),
+        Icon::RewindStartFill => include_str!("../../../assets/icons/rewind-start-fill.svg"),
+        Icon::SpeedEnd => include_str!("../../../assets/icons/speed-end-line.svg"),
+        Icon::SpeedEndFill => include_str!("../../../assets/icons/speed-end-fill.svg"),
+        Icon::Replay10 => include_str!("../../../assets/icons/replay-10-line.svg"),
+        Icon::Forward10 => include_str!("../../../assets/icons/forward-10-line.svg"),
+        Icon::PlayLine => include_str!("../../../assets/icons/play-line.svg"),
+        Icon::PlayFill => include_str!("../../../assets/icons/play-fill.svg"),
+        Icon::PauseLine => include_str!("../../../assets/icons/pause-line.svg"),
+        Icon::ClosedCaptioning => include_str!("../../../assets/icons/closed-captioning-line.svg"),
+        Icon::ClosedCaptioningFill => include_str!("../../../assets/icons/closed-captioning-fill.svg"),
+        Icon::Speaker => include_str!("../../../assets/icons/speaker-line.svg"),
+        Icon::SpeakerFill => include_str!("../../../assets/icons/speaker-fill.svg"),
+        Icon::BookOpen => include_str!("../../../assets/icons/book-open-line.svg"),
+        Icon::BookOpenFill => include_str!("../../../assets/icons/book-open-fill.svg"),
+        Icon::BrandMark => include_str!("../../../assets/icons/brand-mark.svg"),
+        Icon::Lock => include_str!("../../../assets/icons/lock.svg"),
+        Icon::Heart => include_str!("../../../assets/icons/heart-line.svg"),
+        Icon::HeartFill => include_str!("../../../assets/icons/heart-fill.svg"),
+        Icon::Favorites => include_str!("../../../assets/icons/favorites-line.svg"),
+        Icon::FavoritesFill => include_str!("../../../assets/icons/favorites-fill.svg"),
+        Icon::Random => include_str!("../../../assets/icons/random-line.svg"),
+        Icon::RandomFill => include_str!("../../../assets/icons/random-fill.svg"),
     }
 }
 
@@ -448,32 +521,11 @@ pub(crate) fn draw(p: Painter, id: Icon, r: Rect, tint: [f32; 4]) {
 mod ink_tests {
     use super::*;
 
-    /// **The transport family shares one band, and `Play` is the documented exception.** This is
-    /// the invariant `player_hud`'s slot depends on — it scales every mark by
-    /// `band(Pause) / band(id)` so the read-out never shifts weight as the state flips — and the
-    /// way it breaks is a FIFTH transport glyph added later, authored to its own box, with nothing
-    /// to notice. A `Skip +10` chevron pair is the obvious next one.
-    #[test]
-    fn the_transport_family_is_one_band() {
-        let b = band(Icon::Pause);
-        for id in [Icon::Rewind, Icon::FastForward] {
-            assert_eq!(band(id), b, "every travel mark must share pause's band");
-        }
-        assert_ne!(
-            band(Icon::Play),
-            b,
-            "play.svg is the off-band member; the scale exists for it"
-        );
-    }
-
     /// Ink bounds are ordered and inside the viewBox — the shape every caller assumes.
     #[test]
     fn ink_bounds_are_sane() {
         for id in [
-            Icon::Pause,
             Icon::Play,
-            Icon::Rewind,
-            Icon::FastForward,
             Icon::Chevron,
             Icon::ChevronLeft,
             Icon::Check,
@@ -593,6 +645,22 @@ mod ink_tests {
             let alpha = |x: i32, y: i32| rgba[((y * size + x) * 4 + 3) as usize];
             let max_alpha = (0..size).flat_map(|y| (0..size).map(move |x| alpha(x, y))).max().unwrap();
             assert_eq!(max_alpha, 255, "WifiSlash never reaches full opacity at {size}px");
+        }
+    }
+
+    /// The rail's Favorites and Random marks rasterize at the rail's 28px and its 1.08 pop: ink
+    /// somewhere, and the outline's counter left open (the heart's and the die's middles are clear).
+    #[test]
+    fn the_favorites_and_random_marks_rasterize_with_their_counters_open() {
+        for px in [28, 30] {
+            for (id, hollow) in [(Icon::Favorites, true), (Icon::FavoritesFill, false), (Icon::Random, true), (Icon::RandomFill, false)] {
+                let rgba = nj_gfx::svg::rasterize(src(id), px, px).unwrap_or_else(|| panic!("{id:?} failed at {px}px"));
+                let alpha = |x: i32, y: i32| rgba[((y * px + x) * 4 + 3) as usize];
+                assert_eq!((0..px * px).map(|i| alpha(i % px, i / px)).max(), Some(255), "{id:?} draws ink at {px}px");
+                // a point between the die's pips / inside the heart's outline
+                let (x, y) = if matches!(id, Icon::Random | Icon::RandomFill) { (px * 8 / 24, px * 12 / 24) } else { (px / 2, px * 10 / 24) };
+                assert_eq!(alpha(x, y) < 64, hollow, "{id:?} at ({x},{y}): outline open, fill solid");
+            }
         }
     }
 }

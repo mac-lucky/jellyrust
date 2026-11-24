@@ -1,0 +1,10 @@
+{
+  "settings.login.brand": {
+    "value": "JellyRust",
+    "description": "The product name in the sign-in brand pane; a name, not translated."
+  },
+  "settings.login.tagline": {
+    "value": "Your Jellyfin library on the big screen.",
+    "description": "One line under the product name on the sign-in and who's-watching screens."
+  }
+}

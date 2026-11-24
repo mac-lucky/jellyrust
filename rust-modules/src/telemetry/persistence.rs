@@ -1305,7 +1305,7 @@ mod upgrade_tests {
                     let rev = self.record.as_ref().and_then(|r| r["_rev"].as_u64()).unwrap_or(0) + 1;
                     next["_rev"] = serde_json::json!(rev);
                     self.record = Some(next);
-                    Ok(serde_json::json!({"returnValue":true,"results":[{"id":"njstate.stable","rev":rev}]}))
+                    Ok(serde_json::json!({"returnValue":true,"results":[{"id":"jrstate.stable","rev":rev}]}))
                 }
                 // The helper's one-time legacy-id move (issue #39): `find` over our own kind, and a
                 // purge that only removes the record if it still carries the id asked for.
@@ -1330,7 +1330,7 @@ mod upgrade_tests {
                 ..Default::default()
             },
             nj_platform::storage::state::Flavor::Stable,
-            "com.sostk.nativejelly.storage".into(),
+            "com.macluckylab.jellyrust.storage".into(),
         )
     }
 
@@ -1339,7 +1339,7 @@ mod upgrade_tests {
     fn backend_066() -> nj_platform::storage::backend::Backend<Db8> {
         let mut b = backend(Some(serde_json::from_str(DB8_066).unwrap()));
         b.migrate_legacy().unwrap();
-        assert_eq!(b.rpc.record.as_ref().unwrap()["_id"], "njstate.stable");
+        assert_eq!(b.rpc.record.as_ref().unwrap()["_id"], "jrstate.stable");
         b.rpc.puts = 0;
         b
     }

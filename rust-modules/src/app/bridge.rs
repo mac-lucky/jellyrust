@@ -40,7 +40,7 @@ use std::ffi::CStr;
 
 use crate::screens::family::SettingsPage;
 use crate::screens::player::HudPolicy;
-use crate::screens::registry::{AppArg, AppFx, AppMounter, AppMsg, ConsentCmd, ContentArg, ContentReq, HomeCmd, HomeLike, HomeReq, HomeTab, ItemMenuKind, LibraryReq, LoopReq, PageMemory};
+use crate::screens::registry::{AppArg, AppFx, AppMounter, AppMsg, ConsentCmd, ContentArg, ContentReq, HomeCmd, HomeLike, HomeReq, ItemMenuKind, LibraryReq, LoopReq, PageMemory};
 use crate::stores::{StoreCmd, StoreEv, StoreId};
 use crate::ui::containers::modal::{HostRender, HostUpdate, Phase, Style};
 use crate::ui::dispatch::{CxParts, Dispatcher, FrameReport, Rig, Split};
@@ -56,7 +56,7 @@ use nj_machine::machine::{
 };
 use nj_machine::present::Present;
 use crate::ui::screen::{
-    At, DrawFrame, FocusSource, Focusable, ReturnState, Screen, ScreenEvent,
+    At, DrawFrame, FocusSource, Focusable, ReturnState, ScreenEvent,
 };
 
 
@@ -80,6 +80,23 @@ fn is_settings(a: &AppArg) -> bool {
 fn is_first_run_consent(a: &AppArg) -> bool {
     matches!(a, AppArg::FirstRunConsent(_))
 }
+
+/// What the rail shows this frame: the current page's slot, the library on screen, whether the
+/// popover is open, and where the remote is on the rail.
+#[derive(Default)]
+struct RailState {
+    active: Option<usize>,
+    library: Option<crate::screens::registry::LibrarySectionIdentity>,
+    open: bool,
+    focus: crate::ui::widgets::RailFocus,
+}
+
+/// The wall clock the rail's clock reads. A host test reads a fixed noon instead, so no frame
+/// of the suite depends on when it runs.
+#[cfg(not(test))]
+const RAIL_CLOCK: (fn() -> i64, fn(i64) -> Option<u32>) = (super::chrome::unix_now, super::chrome::local_minute);
+#[cfg(test)]
+const RAIL_CLOCK: (fn() -> i64, fn(i64) -> Option<u32>) = (|| 0, |_| Some(12 * 60));
 
 /// Core-side shape of the Chrome refresh boundary. The retained directory is explicit so Chrome
 /// always reads this Bridge's captured Browse publication.
@@ -335,12 +352,24 @@ pub(crate) struct Bridge {
     section_hubs: crate::stores::browse::HubsSnapshot,
     search: crate::stores::search::SearchSnapshot,
     chrome: super::chrome::ChromeSnapshot,
-    chrome_selection: u32,
-    /// The shared top bar's render state — the strip's scroll/capsules/chip unfurl and the tab
-    /// track's glass band (restructure phase 12, PX-WIDGETS, review finding 10). `Bridge` is this
-    /// bar's one reachable owner: the only `Rig::draw_chrome` implementation, and the only place
-    /// `update_home_chrome` is called from.
-    strip: crate::ui::widgets::StripRender,
+    /// The shared rail's motion — its focus pops, label pills and popover (restructure phase 12,
+    /// PX-WIDGETS). `Bridge` is the rail's one reachable owner: the only `Rig::draw_chrome`
+    /// implementation, and the only place `update_chrome` is called from.
+    rail: crate::ui::widgets::RailRender,
+    /// Rail activations the dispatcher handed over this frame, answered after it by
+    /// [`chrome_requests`].
+    chrome_reqs: Vec<(EntryId, u32, ReturnState<u32, PageMemory>)>,
+    /// What the rail shows this frame, captured with its members.
+    rail_state: RailState,
+    /// The dev `rail` trigger has been applied or given up on (`dev::scenarios::rail_arm`).
+    pub(crate) dev_rail_done: bool,
+    /// …and the dev `favorites`, `random` and `library` triggers (`dev::scenarios`).
+    pub(crate) dev_favorites_done: bool,
+    pub(crate) dev_random_done: bool,
+    pub(crate) dev_library_done: bool,
+    /// The rail's Random pick in flight: the page it was pressed on and the worker's answer, a
+    /// film or series to open, polled by [`chrome_requests`].
+    random: Option<(EntryId, std::sync::mpsc::Receiver<Option<(crate::catalog::ServerId, String)>>)>,
     home_commands: std::collections::VecDeque<HomeCmd>,
     library_commands: std::collections::VecDeque<crate::screens::registry::LibraryCmd>,
     consent: ConsentMachine,
@@ -550,8 +579,14 @@ impl Bridge {
             section_hubs: reads.section_hubs,
             search: reads.search,
             chrome: super::chrome::ChromeSnapshot::default(),
-            chrome_selection: 0,
-            strip: crate::ui::widgets::StripRender::new(),
+            rail: crate::ui::widgets::RailRender::new(),
+            chrome_reqs: Vec::new(),
+            rail_state: RailState::default(),
+            dev_rail_done: false,
+            dev_favorites_done: false,
+            dev_random_done: false,
+            dev_library_done: false,
+            random: None,
             home_commands: std::collections::VecDeque::new(),
             library_commands: std::collections::VecDeque::new(),
             consent: ConsentMachine::from_initial(consent),
@@ -644,14 +679,6 @@ impl Bridge {
         Some((item, crate::ui::popover::Opener { rect: Some(rect), ..crate::ui::popover::Opener::NONE }))
     }
 
-    pub(crate) fn search_tab_available(&self, tab: HomeTab) -> bool {
-        match tab {
-            HomeTab::Movies => self.directory.view().preferred(crate::browse::SecKind::Movie).is_some(),
-            HomeTab::Shows => self.directory.view().preferred(crate::browse::SecKind::Show).is_some(),
-            _ => true,
-        }
-    }
-
     pub(crate) fn library_selection(&self, d: &Dispatcher<AppHost>, entry: EntryId, focus: Option<FocusKey<u32>>)
         -> Option<(crate::catalog_fetch::PmsMovie, crate::ui::popover::Opener)> {
         let page = d.nav.entry(entry)?.inst.as_ref()?.screen.as_any()?.downcast_ref::<crate::screens::library::LibraryScreen>()?;
@@ -722,10 +749,39 @@ impl Bridge {
         matches!(page.probe_viewport(d.input.engine.current(InputOwner::Entry(entry.id))).0, "grid" | "shelf")
     }
 
-    pub(crate) fn enter_library(&mut self, kind: crate::browse::SecKind) {
-        self.mounter.library_kind = Some(kind);
+    /// Aim the Library at `section`: the seed a fresh mount opens on, and the command a mounted
+    /// page teleports with.
+    pub(crate) fn enter_library(&mut self, section: crate::screens::registry::LibrarySectionIdentity) {
+        self.mounter.library_section = Some(section.clone());
         self.library_commands.clear();
-        self.library_commands.push_back(crate::screens::registry::LibraryCmd::Enter(kind));
+        self.library_commands.push_back(crate::screens::registry::LibraryCmd::Enter(section));
+    }
+
+    /// The store's current library, as the rail's popover addresses it.
+    #[cfg(test)]
+    pub(crate) fn current_library_for_test(&self) -> crate::screens::registry::LibrarySectionIdentity {
+        let directory = self.directory.view();
+        let section = &directory.sections()[directory.current().expect("a current library")];
+        crate::screens::registry::LibrarySectionIdentity { sid: section.sid.expect("a server"), key: section.key }
+    }
+
+    /// The `n`th library of the rail's popover, in the server's view order.
+    pub(crate) fn library_at(&self, n: usize) -> Option<crate::screens::registry::LibrarySectionIdentity> {
+        self.chrome.library_at(n)
+    }
+
+    /// The library the dev `library[=<n>]` trigger names: the `n`th of the popover, or with no
+    /// number the server's preferred Movies library (else the first). `None` until the directory
+    /// lists it; `Err` for a value that is not a number.
+    pub(crate) fn dev_library(&self, value: &str) -> Result<Option<crate::screens::registry::LibrarySectionIdentity>, ()> {
+        if !value.is_empty() {
+            return value.parse::<usize>().map(|n| self.library_at(n)).map_err(|_| ());
+        }
+        let directory = self.directory.view();
+        Ok(directory.preferred(crate::stores::browse::SecKind::Movie)
+            .and_then(|i| directory.sections().get(i))
+            .and_then(|s| Some(crate::screens::registry::LibrarySectionIdentity { sid: s.sid?, key: s.key }))
+            .or_else(|| self.library_at(0)))
     }
 
     fn deliver_library_commands(&mut self, d: &mut Dispatcher<AppHost>) {
@@ -806,27 +862,67 @@ impl Bridge {
         self.with_home(d, |home, _, _| home.snap_pos()).unwrap_or(0.0)
     }
 
+    /// Publish the rail for the top page: its members, which item is the page's own, and the
+    /// popover's lifetime — it closes once focus has left its rows, or the page under it changed.
     fn capture_chrome(&mut self, d: &mut Dispatcher<AppHost>) {
-        let route = d.top_arg().cloned().unwrap_or(AppArg::Home);
-        let route = &route;
-        let search = *route == AppArg::Search;
-        if matches!(route, AppArg::Home | AppArg::Library) || search {
-            d.nav.tabs.strip_fallback = Some(if search { crate::ui::dispatch::STRIP_BASE + 3 } else { crate::screens::home::STRIP_HOME_ELEM });
-            if let Some(io) = &self.home_io {
-                refresh_chrome(&mut self.chrome, &self.measure, self.directory.view(),
-                    Some((&io.profile, &io.preferences)));
-            } else {
-                refresh_chrome(&mut self.chrome, &self.measure, self.directory.view(), None);
-            }
-            self.chrome_selection = if *route == AppArg::Library {
-                self.directory.view().current().map(|i| self.chrome.library_selection(self.directory.view().sections()[i].kind)).unwrap_or(0)
-            } else if search { self.chrome.search_selection() } else { 0 };
-            let selected = self.navigation_presentation().view_tab.unwrap_or(self.chrome_selection) as i32;
-            self.chrome.members(selected, Self::home_focus(d), self.strip.scroll_pos(), &mut d.nav.tabs.strip);
-        } else {
+        use crate::ui::containers::tabs::POPOVER;
+        // The clock runs on the sign-in pages too, which wear no rail (`draw_page_clock`).
+        let (now, local) = RAIL_CLOCK;
+        if self.chrome.tick_clock(now(), local) {
+            nj_machine::idle::invalidate();
+        }
+        let rail = crate::ui::dispatch::rail_entry(&d.nav).and_then(|id| d.nav.entry(id)).map(|e| e.arg.clone());
+        let Some(route) = rail.filter(Self::draws_chrome_for) else {
             d.nav.tabs.strip.clear();
             d.nav.tabs.strip_fallback = None;
+            d.nav.tabs.strip_active = None;
+            d.nav.tabs.popover_opener = None;
+            self.rail_state = RailState::default();
+            return;
+        };
+        if let Some(io) = &self.home_io {
+            refresh_chrome(&mut self.chrome, &self.measure, self.directory.view(),
+                Some((&io.profile, &io.preferences)));
+        } else {
+            refresh_chrome(&mut self.chrome, &self.measure, self.directory.view(), None);
         }
+        let focus = Self::rail_focus(d);
+        let in_popover = focus.is_some_and(|key| d.nav.tabs.strip.iter().any(|m| m.elem == key.elem && m.group == POPOVER));
+        if !in_popover || self.chrome.rows() == 0 {
+            d.nav.tabs.close_popover();
+        }
+        let open = d.nav.tabs.popover_opener.is_some();
+        self.chrome.members(open, &mut d.nav.tabs.strip);
+        let directory = self.directory.view();
+        // The library on screen is the top PAGE's, Settings over it included.
+        let library = (d.top_arg() == Some(&AppArg::Library)).then(|| directory.current()
+            .and_then(|i| directory.sections().get(i))
+            .and_then(|s| Some(crate::screens::registry::LibrarySectionIdentity { sid: s.sid?, key: s.key })))
+            .flatten();
+        let active = self.rail_slot_of(&route);
+        d.nav.tabs.strip_fallback = Some(super::chrome::item_key(super::chrome::Dest::Home));
+        d.nav.tabs.strip_active = active.and_then(|slot| d.nav.tabs.strip.get(slot)).map(|m| m.elem);
+        self.rail_state = RailState { active, library, open, focus: self.chrome.focus(focus) };
+    }
+
+    /// The rail slot of the destination a page argument is, if it is one.
+    fn rail_slot_of(&self, arg: &AppArg) -> Option<usize> {
+        use super::chrome::Dest;
+        self.chrome.slot_of(match arg {
+            AppArg::Home => Dest::Home,
+            AppArg::Favorites => Dest::Favorites,
+            AppArg::Search => Dest::Search,
+            AppArg::Library => Dest::Libraries,
+            AppArg::Settings(_) => Dest::Settings,
+            _ => return None,
+        })
+    }
+
+    /// Where the remote is on the entry the rail belongs to (`dispatch::rail_entry`): the top page,
+    /// or the Settings surface while it is up.
+    fn rail_focus(d: &Dispatcher<AppHost>) -> Option<FocusKey<u32>> {
+        let entry = crate::ui::dispatch::rail_entry(&d.nav)?;
+        d.input.engine.current(InputOwner::Entry(entry))
     }
 
     /// Return publication changes so the frame can coalesce them with store notices.
@@ -857,20 +953,18 @@ impl Bridge {
         (browse_changed, hubs_changed, search_changed)
     }
 
-    pub(crate) fn update_home_chrome(&mut self, d: &mut Dispatcher<AppHost>,
-        glass: &mut crate::ui::frame::glass::GlassPlan, dt: f32) {
-        let selected = self.navigation_presentation().view_tab.unwrap_or(self.chrome_selection) as i32;
-        let focus = Self::home_focus(d);
-        let labels = self.chrome.labels();
-        let chrome_focus = self.chrome.focus(focus);
-        self.strip.update(labels, selected, chrome_focus, dt);
-        glass.step_tab_band(dt);
-        self.chrome.members(selected, focus, self.strip.scroll_pos(), &mut d.nav.tabs.strip);
+    /// Step the rail's motion toward this frame's focus — once per frame from every rail-wearing
+    /// page's arm of the loop.
+    pub(crate) fn update_chrome(&mut self, d: &Dispatcher<AppHost>, dt: f32) {
+        let focus = self.chrome.focus(Self::rail_focus(d));
+        let rows = if self.rail_state.open { self.chrome.rows() } else { 0 };
+        self.rail.update(self.chrome.slots(), rows, focus, dt);
+        self.rail_state.focus = focus;
     }
 
     #[cfg(test)]
-    fn seed_chrome_for_test(&mut self, name: &str, initial: &str, labels: &[&str]) {
-        self.chrome.seed_for_test(name, initial, labels, &self.measure);
+    fn seed_chrome_for_test(&mut self, name: &str) {
+        self.chrome.seed_for_test(name, &self.measure);
     }
 
     pub(crate) fn home_command(&mut self, command: HomeCmd) -> bool {
@@ -902,7 +996,7 @@ impl Bridge {
         let Some(entry) = d.nav.top_page() else { return false };
         let Some(home) = entry.inst.as_ref().and_then(|i| i.screen.as_any())
             .and_then(|s| s.downcast_ref::<crate::screens::home::HomeScreen>()) else { return false };
-        if <crate::screens::home::HomeScreen as Screen<AppHost>>::strip_reachable(home) { return false; }
+        if home.snap_pos() < 0.5 { return false; }
         let parts = CxParts { tick: Tick { ms: 0, dt_us: 0 }, press: Default::default(),
             focus: nj_machine::machine::FocusRead { current: Self::home_focus(d) , ..Default::default() }, owner: InputOwner::Entry(entry.id) };
         let cx = parts.cx::<AppHost>(self.views(), &self.measure);
@@ -1234,18 +1328,11 @@ impl Bridge {
     pub(crate) fn recorded_client(&self, id: u32) -> Option<&'static crate::catalog::Client> {
         self.recorded_clients.get(&id).copied()
     }
-    /// Does [`Rig::draw_chrome`] paint the shared top bar for this argument? Pulled out of that
-    /// method as its own named predicate — rather than inlined as a `matches!` — for two reasons:
-    /// it is DERIVED from `ScreenArg::chrome()` (`AppArg::chrome` in `screens/registry.rs`, which
-    /// is `nav::route_wears_tab_bar`'s body in its new home) instead of listing Home/Library/Search
-    /// a second time. That one test is the whole of the continuous-chrome rule, and a literal
-    /// `Route::Home | Route::Library` guard
-    /// here once drifted from it silently when Search became a third bar-wearing route:
-    /// `capture_chrome`/`ChromeSnapshot` kept publishing Search's strip and the dispatcher kept
-    /// routing its chrome pass to `draw_chrome`, but the guard returned before ever painting the
-    /// pills or the chip it published); and it gives a host test something to call directly —
-    /// `draw_chrome`'s own body calls into real text measurement with no font loaded on a host
-    /// test, so a test cannot drive it end to end and must instead pin the exact decision it makes.
+    /// Does [`Rig::draw_chrome`] paint the shared rail for this argument? A named predicate
+    /// DERIVED from `ScreenArg::chrome()` (`AppArg::chrome` in `screens/registry.rs`) rather than a
+    /// second list of rail pages: `capture_chrome` publishes members for exactly the pages this
+    /// paints, so the two cannot drift. It also gives a host test something to call directly —
+    /// `draw_chrome`'s own body rasterizes, so a test pins the exact decision it makes.
     /// A surface argument answers `Chrome::None` for itself and never reaches this: the two menus
     /// have been surfaces since phase 10, so the page UNDER one is the top page and answers for
     /// itself. `route_wears_tab_bar`'s old `page_of` resolution — "which page is this popover
@@ -1283,25 +1370,29 @@ impl Bridge {
 
 impl Rig<AppHost> for Bridge {
     fn draw_chrome(&mut self, arg: &AppArg, _parts: &CxParts<u32>,
-        nav: crate::ui::screen::NavPresentation,
-        glass: Option<&mut crate::ui::frame::glass::GlassPlan>) {
+        nav: crate::ui::screen::NavPresentation) {
         if !Self::draws_chrome_for(arg) { return; }
-        let Some(glass) = glass else { return };
         let p = crate::ui::Painter::root().alpha(nav.chrome_alpha);
-        let chrome = self.chrome.read(self.strip.chip_expand_pos());
-        self.strip.draw(chrome.labels, p, glass.tab_band_mut());
-        crate::ui::widgets::profile_chip_with(
-            p,
-            chrome.profile,
-            chrome.chip_expand,
-            glass.tab_face(),
-        );
+        // While a destination is queued its item is already the active one, on the press frame.
+        let active = nav.view_tab.map(|slot| slot as usize).or(self.rail_state.active);
+        self.rail.draw(p, self.chrome.rail(active, self.rail_state.open, self.rail_state.library.as_ref()));
+        crate::ui::widgets::draw_clock(p, self.chrome.clock());
     }
-    /// See [`crate::ui::dispatch::Rig::scrim_chrome_read`] — the account menu's chip lift borrows
-    /// the SAME captured profile, labels and unfurl [`Bridge::draw_chrome`] used. The dispatcher
-    /// adds this frame's material from `GlassPlan`; neither value crosses through a static.
+    /// Litefin's global clock is on every page but the player's (`ui/GlobalClock.js`, hidden only by
+    /// `PlayerPage`), so the sign-in pages, which wear no rail, draw it alone.
+    fn draw_page_clock(&mut self, arg: &AppArg, nav: crate::ui::screen::NavPresentation) {
+        if matches!(arg, AppArg::Login | AppArg::Profiles | AppArg::Onboard) {
+            crate::ui::widgets::draw_clock(crate::ui::Painter::root().alpha(nav.chrome_alpha), self.chrome.clock());
+        }
+    }
+    /// See [`crate::ui::dispatch::Rig::scrim_chrome_read`] — the account menu's avatar lift
+    /// borrows the SAME captured avatar and focus [`Bridge::draw_chrome`] used; neither value
+    /// crosses through a static.
     fn scrim_chrome_read(&self) -> Option<crate::ui::widgets::ChromeRead<'_>> {
-        Some(self.chrome.read(self.strip.chip_expand_pos()))
+        Some(self.chrome.read(self.rail.slot_focus(self.chrome.slots() - 1)))
+    }
+    fn strip_activate(&mut self, entry: EntryId, elem: u32, ret: ReturnState<u32, PageMemory>) {
+        self.chrome_reqs.push((entry, elem, ret));
     }
     fn page_alpha(&self) -> f32 { crate::ui::nav::page_alpha() }
     fn navigation_presentation(&self) -> crate::ui::screen::NavPresentation {
@@ -1562,6 +1653,7 @@ impl Bridge {
             AppFx::Player(req) => self.player_reqs.push(req),
             AppFx::ItemMenu(req) => self.item_menu_reqs.push(req),
             AppFx::JfAuth(command) => super::jf_login::execute(self, command),
+            AppFx::Favorites { reply } => fetch_favorites(reply),
         }
     }
 
@@ -1909,7 +2001,7 @@ fn frame_ingest(
     // settled test, the navblur prototype). One writer, immediately after the container's own
     // frame, from the container's own transition — see `ui::nav`'s module doc.
     let tab = d.nav.tabs.stack.pending_dest()
-        .and_then(|arg| pill_of_arg(arg, rig.directory.view()));
+        .and_then(|arg| rig.rail_slot_of(arg));
     crate::ui::nav::publish(d.nav.tabs.stack.page_alpha(), d.nav.tabs.stack.chrome_alpha(), tab);
     // **The heartbeat's `route=` word IS the top page's own name** (§15.2). It used to be
     // `route_word(app.route)` with this line asserting the two agreed every frame; there is one
@@ -2020,14 +2112,14 @@ fn page_probe(d: &Dispatcher<AppHost>, rig: &Bridge) -> String {
         let cx = parts.cx::<AppHost>(rig.views(), &rig.measure);
         let position = home.grid_position::<AppHost>(focus, &cx);
         let (row, col) = position.map(|(r, c)| (r as i64, c as i64)).unwrap_or((-1, -1));
-        let hf = match rig.chrome.focus(focus) {
-            crate::ui::widgets::TopFocus::Chip => -1,
-            crate::ui::widgets::TopFocus::Pill(i) => -(i as i64 + 2),
-            crate::ui::widgets::TopFocus::Away => focus.filter(|key| key.elem < 2).map_or(-1, |key| key.elem as i64),
+        let hf = match rail_probe(&rig.chrome, focus) {
+            RailProbe::Avatar => -1,
+            RailProbe::Item(i) => -(i as i64 + 2),
+            RailProbe::Away => focus.filter(|key| key.elem < 2).map_or(-1, |key| key.elem as i64),
         };
         let grid = home.snap_target() >= 0.5;
         let mut out = format!(" snapt={} snapp={} hf={hf} row={row} col={col}", grid as u8,
-            (!<crate::screens::home::HomeScreen as Screen<AppHost>>::strip_reachable(home)) as u8);
+            u8::from(home.snap_pos() >= 0.5));
         crate::focusprobe::push_item(&mut out, if grid { home.focused_item::<AppHost>(focus, &cx) } else { home.hero_item::<AppHost>(&cx) });
         return out;
     }
@@ -2039,8 +2131,8 @@ fn page_probe(d: &Dispatcher<AppHost>, rig: &Bridge) -> String {
             focus: nj_machine::machine::FocusRead { current: focus , ..Default::default() }, owner: InputOwner::Entry(page.id) };
         let cx = parts.cx::<AppHost>(rig.views(), &rig.measure);
         let menu = d.top_surface_name() == Some("library_menu");
-        let pill = if menu { -1 } else { match rig.chrome.focus(focus) {
-            crate::ui::widgets::TopFocus::Pill(index) => index as i32, _ => -1,
+        let pill = if menu { -1 } else { match rail_probe(&rig.chrome, focus) {
+            RailProbe::Item(index) => index as i32, _ => -1,
         }};
         let item = library.focused_item(focus, &cx);
         let (region, row, col, x, y) = library.probe_viewport(focus);
@@ -2055,16 +2147,16 @@ fn page_probe(d: &Dispatcher<AppHost>, rig: &Bridge) -> String {
         let Some(search) = page.inst.as_ref().and_then(|i| i.screen.as_any())
             .and_then(|s| s.downcast_ref::<crate::screens::search::SearchScreen>()) else { return String::new() };
         let focus = d.input.engine.current(InputOwner::Entry(page.id));
-        // The shared bar decides Chip/Strip first — those elems live outside this screen's own
-        // group space (`SearchScreen::probe`'s doc), so asking the screen about them would just
-        // be asking it about a `FocusKey` it has no group for and getting the same default back.
-        let top = rig.chrome.focus(focus);
+        // The rail decides Chip/Strip first — those elems live outside this screen's own group
+        // space (`SearchScreen::probe`'s doc), so asking the screen about them would just be
+        // asking it about a `FocusKey` it has no group for and getting the same default back.
+        let top = rail_probe(&rig.chrome, focus);
         let (zone, row, col, recent, card) = match top {
-            crate::ui::widgets::TopFocus::Chip => ("Chip", -1i64, -1i64, -1i64, false),
-            crate::ui::widgets::TopFocus::Pill(_) => ("Strip", -1i64, -1i64, -1i64, false),
-            crate::ui::widgets::TopFocus::Away => search.probe(focus),
+            RailProbe::Avatar => ("Chip", -1i64, -1i64, -1i64, false),
+            RailProbe::Item(_) => ("Strip", -1i64, -1i64, -1i64, false),
+            RailProbe::Away => search.probe(focus),
         };
-        let pill = match top { crate::ui::widgets::TopFocus::Pill(i) => i as i64, _ => -1 };
+        let pill = match top { RailProbe::Item(i) => i as i64, _ => -1 };
         return format!(" zone={zone} editing={} row={row} col={col} recent={recent} pill={pill} card={} below={} clear={}",
             u8::from(search.is_editing()), u8::from(card), search.probe_below(), search.recents_shown());
     }
@@ -2550,6 +2642,7 @@ pub(crate) fn follow_auth_landing(pages: &mut Dispatcher<AppHost>, bridge: &mut 
         crate::route::restore_root_back(saved.root_back());
         crate::route::restore_instant_dpad_seeking(saved.instant_dpad_seeking());
         crate::route::restore_episode_navigation(saved.episode_navigation());
+        crate::route::restore_voice_preference(saved.voice_preference());
         crate::player::restore_subtitle_tone(saved.subtitle_tone());
         crate::player::restore_audio_enhancements(saved.audio_enhancements());
         let endpoints = super::boot::install_pms_owned(bridge, &c.origin,
@@ -2680,65 +2773,209 @@ pub(crate) fn nav_push_with_return(
     d.request_with_return(MachineId::Nav, NavOp::Push(arg), ret);
 }
 
-/// **Which PILL of the shared strip a page argument is**, for the pending selection the capsule
-/// travels to. `None` for everything that is not a strip destination, which is most of the
-/// alphabet — the row shows no pending selection while a detail page is coming up.
+/// **Answer the rail activations the dispatcher handed over this frame** — the one door for
+/// every rail control, on every page that wears it, so no screen maps a rail key of its own.
+/// A press belongs to the page that was on top when it was made; one whose page has since left
+/// the top is dropped.
+pub(crate) fn chrome_requests(d: &mut Dispatcher<AppHost>, rig: &mut Bridge) {
+    for (entry, elem, ret) in std::mem::take(&mut rig.chrome_reqs) {
+        if crate::ui::dispatch::rail_entry(&d.nav) != Some(entry) { continue; }
+        let Some(control) = rig.chrome.control(elem) else { continue };
+        rail_activate(d, rig, entry, elem, control, ret);
+    }
+    land_random(d, rig);
+}
+
+/// What each rail control does. A new rail destination is one arm here.
 ///
-/// The Library's pill is its TYPE, and the argument carries none (which library the grid shows is
-/// the `browse` store's business): the answer is the section the store is pointing at, which
-/// `nav_tab`'s `LibraryCmd::Enter` has already aimed.
-fn pill_of_arg(arg: &AppArg, directory: crate::stores::browse::DirectoryView<'_>) -> Option<usize> {
-    use crate::app::chrome::{pill_of, Pill};
-    match arg {
-        AppArg::Home => pill_of(directory, Pill::Home),
-        AppArg::Search => pill_of(directory, Pill::Search),
-        AppArg::Library => {
-            let kind = directory.current().map(|i| directory.sections()[i].kind)?;
-            pill_of(directory, Pill::Section(kind))
+/// **Over Settings the rail leaves it**, as Litefin's router leaves its Settings page: every
+/// control but Settings itself and the Libraries popover dismisses the surface first (the account
+/// menu opens over the page, where its dim belongs), and navigates with the page's own return
+/// state rather than the surface's.
+fn rail_activate(d: &mut Dispatcher<AppHost>, rig: &mut Bridge, entry: EntryId, elem: u32,
+    control: super::chrome::Control, ret: ReturnState<u32, PageMemory>) {
+    use super::chrome::{Control, Dest};
+    let over_settings = d.nav.is_surface(entry);
+    let ret = if over_settings {
+        if !matches!(control, Control::Item(Dest::Settings | Dest::Libraries)) {
+            d.request(MachineId::Nav, NavOp::Dismiss(entry));
         }
-        _ => None,
+        None
+    } else {
+        Some(ret)
+    };
+    match control {
+        // Home on Home: nothing to navigate to, but a transition queued a moment ago is still
+        // withdrawable, and that is what this press means.
+        Control::Item(Dest::Home) if matches!(d.top_arg(), Some(AppArg::Home)) => { if !over_settings { nav_cancel(d); } }
+        Control::Item(Dest::Home) => nav_home(d, ret),
+        Control::Item(Dest::Favorites) => nav_peer(d, AppArg::Favorites, ret),
+        Control::Item(Dest::Search) => nav_peer(d, AppArg::Search, ret),
+        Control::Item(Dest::Random) => pick_random(d, rig, None),
+        Control::Item(Dest::Libraries) => open_rail_popover(d, rig, entry, elem),
+        Control::Item(Dest::Settings) => open_settings(d),
+        Control::Account => open_account_menu(d),
+        Control::Library(section) => {
+            // The row goes with the popover: focus, and the way back, return to the item that
+            // opened it, as LEFT out of the popover does.
+            let opener = d.nav.tabs.close_popover().map(|elem| FocusKey { entry, elem });
+            if opener.is_some() { d.set_focus_in(opener, Some(crate::ui::containers::tabs::STRIP)); }
+            let ret = ret.map(|ret| ReturnState { focus: opener.or(ret.focus), ..ret });
+            open_library(d, rig, section, ret);
+        }
     }
 }
 
-/// **A press on the shared top strip** — the ONE door for its four destinations, so the seed or
-/// command each one carries cannot be forgotten at one of the three screens that wear the bar.
-///
-/// It is `app::nav`'s four `Nav` variants, minus the enum: what each arm did BESIDE the flip is a
-/// seed or a queued command that the destination's mount consumes, so it is set at the PRESS and
-/// spent when the page comes up — which is where the fade floor used to run it, at alpha 0.
-///
-/// **`nav_peer`, not `nav_root`**, and the difference is the Library: the three pills are peers
-/// that stand on Home, but a Movies→Shows press is not a navigation at all, it is a TELEPORT
-/// inside one page (`LibraryCmd::Enter`, the store swap and `restore_view`'s scroll jump). Rooting
-/// there would retire the entry and remount the screen, throwing away the viewport memory the
-/// teleport exists to restore.
-pub(crate) fn nav_tab(
-    d: &mut Dispatcher<AppHost>, rig: &mut Bridge, tab: HomeTab,
-    focus_pill: Option<crate::app::chrome::Pill>,
-    ret: Option<ReturnState<u32, PageMemory>>,
-) {
-    use crate::app::chrome::Pill;
-    let arg = match tab {
-        HomeTab::Home => {
-            // Keep the pill the user was standing on under focus. An IDENTITY, not an index: a
-            // pill can appear or disappear while the dip runs, and `HomeCmd::FocusStrip` is
-            // delivered when Home MOUNTS, not now.
-            if let Some(pill) = focus_pill.filter(|pill| crate::app::chrome::pill_of(rig.directory.view(), *pill).is_some()) {
-                let want = match pill {
-                    Pill::Home => HomeTab::Home,
-                    Pill::Search => HomeTab::Search,
-                    Pill::Section(crate::browse::SecKind::Movie) => HomeTab::Movies,
-                    Pill::Section(crate::browse::SecKind::Show) => HomeTab::Shows,
-                };
-                rig.home_command(HomeCmd::FocusStrip(want));
-            }
-            AppArg::Home
-        }
-        HomeTab::Movies => { rig.enter_library(crate::browse::SecKind::Movie); AppArg::Library }
-        HomeTab::Shows => { rig.enter_library(crate::browse::SecKind::Show); AppArg::Library }
-        HomeTab::Search => AppArg::Search,
+/// **Random** (`Sidebar.js:_onRandomClick`): one random film or series of the browsed server,
+/// read on a worker, whose page opens when it lands. One pick at a time; the answer is for the
+/// page it was pressed on, so it is dropped if another page has come up meanwhile. `library`
+/// narrows the pick to one library, the Library page's Shuffle (`Jf::library_random`).
+pub(crate) fn pick_random(d: &mut Dispatcher<AppHost>, rig: &mut Bridge,
+    library: Option<(crate::catalog::ServerId, i64)>) {
+    if rig.random.is_some() { return; }
+    if let Some(io) = &mut rig.home_io {
+        io.failure = Some("unsupported controlled Random pick");
+        return;
+    }
+    let Some(page) = d.nav.top_page().map(|page| page.id) else { return };
+    let sid = library.map_or_else(crate::catalog::current_server, |(sid, _)| sid);
+    let Some(client) = crate::catalog::client_for(sid) else { return };
+    let (reply, rx) = std::sync::mpsc::channel();
+    rig.random = Some((page, rx));
+    // A refused spawn drops the sender, which ends the pick.
+    nj_base::task::spawn_small("random", move || {
+        let picked = client.jf().and_then(|jf| match library {
+            Some((_, section)) => jf.library_random(section),
+            None => jf.random_title(),
+        }).map(|it| (sid, crate::jf::ids::rating_key(&it.id)));
+        let _ = reply.send(picked);
+        nj_machine::idle::invalidate();
+    });
+}
+
+/// Open the Random pick once it is in.
+fn land_random(d: &mut Dispatcher<AppHost>, rig: &mut Bridge) {
+    let Some((page, rx)) = &rig.random else { return };
+    let page = *page;
+    let picked = match rx.try_recv() {
+        Ok(picked) => picked,
+        Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
     };
-    nav_peer(d, arg, ret);
+    rig.random = None;
+    let Some((sid, rk)) = picked else { return };
+    if d.nav.top_page().map(|top| top.id) != Some(page) || d.nav.modals.input_owner().is_some() { return; }
+    open_detail(d, rig, sid, &rk, None, None);
+}
+
+/// The Favorites page's lists (`AppFx::Favorites`), read on a worker from the browsed server. A
+/// refused spawn, or no server, drops the sender, which the page reads as no answer.
+fn fetch_favorites(reply: std::sync::mpsc::Sender<Option<(crate::catalog::ServerId,
+    Vec<(crate::jf::favorites::Favorite, Vec<crate::jf::models::BaseItemDto>)>)>>) {
+    let sid = crate::catalog::current_server();
+    let Some(client) = crate::catalog::client_for(sid) else { return };
+    nj_base::task::spawn_small("favorites", move || {
+        let _ = reply.send(client.jf().and_then(|jf| jf.favorites()).map(|lists| (sid, lists)));
+        nj_machine::idle::invalidate();
+    });
+}
+
+/// Open the Libraries popover from rail item `opener`, focus on the library on screen (or the
+/// first), as Litefin's floating list does.
+fn open_rail_popover(d: &mut Dispatcher<AppHost>, rig: &mut Bridge, entry: EntryId, opener: u32) {
+    use crate::ui::containers::tabs::POPOVER;
+    if rig.chrome.rows() == 0 { return; }
+    d.nav.tabs.popover_opener = Some(opener);
+    rig.chrome.members(true, &mut d.nav.tabs.strip);
+    rig.rail_state.open = true;
+    let current = rig.rail_state.library.as_ref().and_then(|section| rig.chrome.library_key(section));
+    let first = d.nav.tabs.strip.iter().find(|m| m.group == POPOVER).map(|m| m.elem);
+    if let Some(elem) = current.or(first) {
+        d.set_focus_in(Some(FocusKey { entry, elem }), Some(POPOVER));
+        nj_machine::idle::invalidate();
+    }
+}
+
+/// The dev `rail` trigger: put the remote on rail slot `what` (a number), or open the Libraries
+/// popover (`libraries`), on the entry the rail belongs to (the page on top, or Settings). `false`
+/// while nothing wears the rail yet.
+pub(crate) fn dev_rail(d: &mut Dispatcher<AppHost>, rig: &mut Bridge, what: &str) -> bool {
+    use crate::ui::containers::tabs::STRIP;
+    let Some(entry) = crate::ui::dispatch::rail_entry(&d.nav).filter(|id| d.nav.entry(*id).is_some_and(|e| e.inst.is_some()))
+        else { return false };
+    let column: Vec<u32> = d.nav.tabs.strip.iter().filter(|m| m.group == STRIP).map(|m| m.elem).collect();
+    if column.is_empty() { return false; }
+    if what == "libraries" {
+        let Some(opener) = rig.chrome.slot_of(super::chrome::Dest::Libraries).and_then(|slot| column.get(slot).copied())
+            else { return false };
+        open_rail_popover(d, rig, entry, opener);
+        return true;
+    }
+    let Some(&elem) = what.parse::<usize>().ok().and_then(|slot| column.get(slot)) else { return false };
+    let from = d.focus();
+    let to = FocusKey { entry, elem };
+    d.set_focus_in(Some(to), Some(STRIP));
+    // …and tell the page, as an engine move would, so it stops drawing its own focus.
+    if let Some(inst) = d.nav.instance_of(entry) {
+        d.emit(MachineId::Input, Fx::Deliver(MachineId::Instance(inst), Delivery::Screen(ScreenEvent::FocusMoved {
+            from, to, by: crate::ui::screen::By::Restore })));
+    }
+    nj_machine::idle::invalidate();
+    true
+}
+
+/// The dev `random` trigger: the rail's Random pick, as its OK makes it.
+pub(crate) fn dev_random(d: &mut Dispatcher<AppHost>, rig: &mut Bridge) {
+    pick_random(d, rig, None);
+}
+
+/// The dev `favorites=<row>` trigger: put the remote on the first card of row `row` of the
+/// Favorites page on top. `false` until that row has landed.
+pub(crate) fn dev_favorites_row(d: &mut Dispatcher<AppHost>, row: usize) -> bool {
+    let Some(page) = d.nav.top_page() else { return false };
+    let entry = page.id;
+    let Some(seat) = page.inst.as_ref().and_then(|inst| inst.screen.as_any())
+        .and_then(|any| any.downcast_ref::<crate::screens::favorites::FavoritesScreen>())
+        .and_then(|screen| screen.first_card(row)) else { return false };
+    d.set_focus_in(Some(FocusKey { entry, elem: seat.0 }), Some(seat.1));
+    nj_machine::idle::invalidate();
+    true
+}
+
+/// **Back to Home**, the root every rail destination stands on.
+pub(crate) fn nav_home(d: &mut Dispatcher<AppHost>, ret: Option<ReturnState<u32, PageMemory>>) {
+    nav_peer(d, AppArg::Home, ret);
+}
+
+/// **Show ONE library** — the rail popover's row, and the dev `library=<n>` trigger. On the
+/// Library page it is a TELEPORT inside that page (`LibraryCmd::Enter`, the store swap and
+/// `restore_view`'s scroll jump), never a second page; anywhere else it is a peer of Home whose
+/// mount opens on `section`.
+pub(crate) fn open_library(d: &mut Dispatcher<AppHost>, rig: &mut Bridge,
+    section: crate::screens::registry::LibrarySectionIdentity, ret: Option<ReturnState<u32, PageMemory>>) {
+    if matches!(d.top_arg(), Some(AppArg::Library)) {
+        if rig.rail_state.library.as_ref() != Some(&section) { rig.enter_library(section); }
+        return;
+    }
+    rig.enter_library(section);
+    nav_peer(d, AppArg::Library, ret);
+}
+
+/// Where the remote is on the rail, as the focus probe spells it.
+enum RailProbe {
+    Avatar,
+    Item(usize),
+    Away,
+}
+
+fn rail_probe(chrome: &super::chrome::ChromeSnapshot, focus: Option<FocusKey<u32>>) -> RailProbe {
+    let at = chrome.focus(focus);
+    match (at.slot, at.row) {
+        (Some(slot), _) if slot + 1 == chrome.slots() => RailProbe::Avatar,
+        (Some(slot), _) => RailProbe::Item(slot),
+        (None, Some(row)) => RailProbe::Item(chrome.slots() + row),
+        (None, None) => RailProbe::Away,
+    }
 }
 
 /// A peer of Home: select that pill unless it is already the page on top.
@@ -2838,8 +3075,15 @@ pub(crate) fn open_add_user(d: &mut Dispatcher<AppHost>, bridge: &mut Bridge) {
 
 /// The sign-in page, opened as `opening` rather than as a first sign-in.
 pub(crate) fn open_login_as(d: &mut Dispatcher<AppHost>, bridge: &mut Bridge, opening: crate::screens::jf_login::Opening) {
-    bridge.mounter.login_opening = Some(opening);
+    bridge.login_opens_as(opening);
     nav_root(d, AppArg::Login);
+}
+
+impl Bridge {
+    /// The next sign-in page mounted opens as `opening` — for the boot, which roots the tree itself.
+    pub(crate) fn login_opens_as(&mut self, opening: crate::screens::jf_login::Opening) {
+        self.mounter.login_opening = Some(opening);
+    }
 }
 
 pub(crate) fn switch_profile(d: &mut Dispatcher<AppHost>) {
@@ -3396,6 +3640,10 @@ mod library_deferred_tests;
 #[cfg(test)]
 #[path = "library_navigation_tests.rs"]
 mod library_navigation_tests;
+
+#[cfg(test)]
+#[path = "rail_settings_tests.rs"]
+mod rail_settings_tests;
 
 #[cfg(test)]
 #[path = "library_host_freeze_tests.rs"]

@@ -29,7 +29,7 @@ use crate::catalog::ServerId;
 use crate::stores::metadata::MetadataCmd;
 use crate::stores::viewstate::ViewStateCmd;
 use crate::stores::{StoreCmd, StoreId};
-use crate::ui::card_row::{self, CardRow, RowStyle};
+use crate::ui::card_row::{self, CardRow};
 use crate::ui::frame::Budget;
 use crate::ui::hero_logo::{HeroLogo, LogoRung};
 use crate::ui::label::HAlign;
@@ -38,16 +38,15 @@ use nj_machine::machine::{
     Leave, LogicalState, Machine, Tick,
 };
 use nj_machine::present::{PresentEvent, Provenance};
-use crate::ui::text_lift::{lifted, TextLift, TEXT_LIFT_SCALE, TOP_CENTRE};
+use crate::ui::text_lift::TextLift;
 use crate::ui::screen::{
     Activate, At, AxisMask, By, Dir, DrawFrame, EdgeRule, ElemKind, Enter, FocusSource, Focusable,
     GroupKind, GroupSpec, HitSource, Hover, Placed, RenderStrategy, Screen, ScreenEvent, Seat,
     Step, Stop,
 };
-use crate::ui::widgets::{
-    AmbientWash, Button, CircleButton, ControlGround, ControlPalette, CtlPop, PosterMark, TabStrip,
-};
-use crate::ui::{hero_alpha, theme, Env, Painter, Rect, Spring, View};
+use crate::ui::detail_layout::PosterShape;
+use crate::ui::widgets::{Button, CtlPop, PosterMark, TabStrip};
+use crate::ui::{theme, Env, Painter, Rect, Spring, View};
 use std::borrow::Cow;
 use std::cell::Cell;
 
@@ -57,25 +56,6 @@ const FIRST_ITEM_ELEM: u32 = 2048;
 
 const SECTION_GAP: f32 = theme::space::XL;
 const TAB_EP_GAP: f32 = theme::space::MD;
-/// How present the pinned compact title is: the hero's own fade brings it IN, and the first block
-/// below the hero taking its first stretch of travel takes it out again.
-///
-/// `first_top` is the SETTLED top of that block, so `first_top - TOP_MARGIN` is the scroll at which
-/// it has come to rest under the title — every pixel past that is the block moving up THROUGH the
-/// title's band, which is the moment the owner asked for it to be gone. Pure, and separate from the
-/// draw, because the direction of this ramp is the whole rule and both wrong directions shipped to
-/// the panel once each.
-fn compact_title_alpha(scroll: f32, first_top: f32, hero_visible: f32) -> f32 {
-    let hide_at = (first_top - crate::ui::detail_layout::TOP_MARGIN).max(0.0);
-    let travelled = ((scroll - hide_at) / COMPACT_TITLE_FADE).clamp(0.0, 1.0);
-    ((1.0 - hero_visible) * (1.0 - travelled)).clamp(0.0, 1.0)
-}
-
-const HERO_FADE: f32 = 400.0;
-/// Over how much scroll the pinned compact title leaves once the first below-hero block starts to
-/// travel. Half the hero's own fade: the title is chrome the page has already handed over, so it
-/// should be gone by the time the block above it is properly on its way.
-const COMPACT_TITLE_FADE: f32 = 200.0;
 const EP_SCALE_MAX: usize = 40;
 const K_SCROLL: f32 = crate::ui::consts::K_SCROLL;
 const K_STRIP_SCROLL: f32 = 240.0;
@@ -133,15 +113,8 @@ pub(crate) struct DetailScreen {
     preview_prose: f32,
     preview_synopsis: f32,
     preview_chrome: f32,
-    /// The hero scrim/wedge strength — chases `view.field` (1.0 idle, `PREVIEW_FIELD` once a
-    /// picture is up) and eases to 0.0 once full-trailer mode owns the screen, where the page has
-    /// no ink left up there to protect and the transport brings its own scrim at the bottom.
-    preview_field: f32,
-    /// The bottom-anchored base scrim's own alpha multiplier — 1.0 normal (leaves
-    /// `detail_layout::base_scrim_a`'s own scroll-driven value untouched), eased to 0.0 in
-    /// full-trailer mode for the same reason as the wedge above.
-    /// A separate scalar from [`preview_field`](Self::preview_field): that one drives the corner
-    /// wedge, this one the bottom gradient — distinct layers per `draw_backdrop`.
+    /// The backdrop ramp's strength — 1.0 normal, eased to 0.0 in full-trailer mode, where the
+    /// page has no ink left to protect and the transport brings its own scrim at the bottom.
     preview_base_scrim: f32,
     /// 0 = full hero position/size, 1 = fully collapsed to the top-left compact spot while a
     /// trailer plays in the background. A geometric transform, so it is a critically-damped
@@ -199,11 +172,6 @@ pub(crate) struct DetailScreen {
     /// shelves land AS the glide reaches them, and each landing would snap the page back. Not in
     /// the canon: what it decides is `scroll_target`, which is.
     free: bool,
-    episode_scroll: Spring,
-    /// The episode strip is where the pointer's sideways glide put it (`InputKind::Pan`): the tick
-    /// stops steering it to the focused episode until a key's move or a click. Like `free`, not in
-    /// the canon.
-    episode_free: bool,
     tab_scroll: Spring,
     episode_scale: [Spring; EP_SCALE_MAX],
     /// Each episode label block's focus lift, earned by the TEXT stop alone (the plate also shows
@@ -218,19 +186,10 @@ pub(crate) struct DetailScreen {
     cast: CardRow,
     tabs: TabStrip,
     season_pop: CtlPop<1>,
-    ctl_pop: CtlPop<5>,
-    disc_unfurl: [Spring; 3],
+    ctl_pop: CtlPop<7>,
     season_metrics: season::Metrics,
     about_rows: about::Rows,
-    /// The page's own keyed ground. Deliberately a bare [`AmbientWash`] and not the shared
-    /// `PageGround`, which is the browsing screens' policy: that type draws itself whenever it is
-    /// not flat and dithers unconditionally, and both are wrong here. This wash must not be laid
-    /// over a live video plane at all ([`keyed_ground_over_plane`]), which is a per-frame answer
-    /// `PageGround` does not offer and should not. (Its dither is not a question: every wash
-    /// dithers, the photograph sliding over it included — `gfx::draw_ambient`.)
-    ground: AmbientWash,
-    /// The catalog row for this item, captured ONCE at [`new`](Self::new) — the same
-    /// construction-time-only snapshot [`ground`](Self::ground)'s blur envelope takes. This is a
+    /// The catalog row for this item, captured ONCE at [`new`](Self::new). This is a
     /// fallback used only before/if `metadata::current()` has a `Detail` for this item (see
     /// [`selected`](Self::selected)'s callers); it is never re-read from the catalog afterward, so
     /// a hub republish while this page is open does not change what it reports.
@@ -388,10 +347,6 @@ impl Drop for LayoutPin<'_> {
 impl DetailScreen {
     pub(crate) fn new(entry: EntryId, sid: ServerId, rk: String, hubs: crate::catalog_fetch::HubsView<'_>) -> Self {
         let selected = hubs.find(sid, &rk).cloned();
-        let mut ground = AmbientWash::flat(theme::SURFACE_APP);
-        if let Some(m) = selected.as_ref().filter(|m| m.has_blur) {
-            ground.jump(AmbientWash::keyed(m.blur, [AmbientWash::GROUND_W; 4]));
-        }
         Self {
             entry,
             sid,
@@ -410,7 +365,6 @@ impl DetailScreen {
             preview_prose: 1.0,
             preview_synopsis: 1.0,
             preview_chrome: 1.0,
-            preview_field: 1.0,
             preview_base_scrim: 1.0,
             preview_logo: Spring::at(0.0),
             preview_played_for: None,
@@ -424,8 +378,6 @@ impl DetailScreen {
             scroll: Spring::at(0.0),
             scroll_target: 0.0,
             free: false,
-            episode_scroll: Spring::at(0.0),
-            episode_free: false,
             tab_scroll: Spring::at(0.0),
             episode_scale: [Spring::at(1.0); EP_SCALE_MAX],
             episode_text_lift: [TextLift::new(); EP_SCALE_MAX],
@@ -438,10 +390,8 @@ impl DetailScreen {
             tabs: TabStrip::new(),
             season_pop: CtlPop::new(),
             ctl_pop: CtlPop::new(),
-            disc_unfurl: [Spring::at(0.0); 3],
             season_metrics: season::Metrics::new(),
             about_rows: about::Rows::new(),
-            ground,
             selected,
             spin_ms: 0.0,
             spin_phase: nj_machine::motion::Phase::default(),
@@ -702,7 +652,6 @@ impl DetailScreen {
                 i,
                 row,
                 self.section_top(2, d, measure) - self.scroll.pos,
-                self.episode_scroll.pos,
                 self.episode_scale.get(i).map(|s| s.pos).unwrap_or(1.0) * f.press.scale,
                 &self.episode_lift(i),
                 f.measure,
@@ -757,20 +706,36 @@ impl DetailScreen {
         self.compute_hero_chain(None, measure)
     }
 
+    /// The posterLeft column, measured: the title's and the overview's wrapped heights and which
+    /// optional rows the item fills (`detail_layout::split_chain` stacks them).
     fn compute_hero_chain(
         &self,
         d: Option<&Detail>,
         measure: &dyn nj_machine::machine::Measure,
     ) -> crate::ui::detail_layout::HeroChain {
-        let (lead, synopsis) = hero_blurb(d, self.selected());
-        let synopsis_h = crate::ui::hero_synopsis(&synopsis, &lead)
-            .with_measure(measure)
-            .measure_h(crate::ui::detail_layout::HERO_TEXT_W);
-        crate::ui::detail_layout::hero_chain(
-            synopsis_h,
-            d.is_some_and(|detail| !detail.ratings.is_empty()),
-            measure,
-        )
+        use crate::ui::detail_layout as lay;
+        let title = d
+            .map(|d| d.title.as_str())
+            .or_else(|| self.selected().map(|m| m.title.as_str()))
+            .unwrap_or(nj_platform::i18n::msg::browse_library_loading());
+        let overview = hero_blurb(d, self.selected());
+        let overview_h = if overview.is_empty() {
+            0.0
+        } else {
+            hero_overview(overview, measure).measure_h(lay::INFO_W)
+        };
+        let (_, shape) = Self::poster_of(d, self.selected());
+        lay::split_chain(lay::HeroInput {
+            title_h: hero_title(title, measure).measure_h(lay::TITLE_W),
+            original: d.is_some_and(|d| hero::original_title(d).is_some()),
+            episode: d.is_some_and(|d| hero::episode_line(d).is_some()),
+            meta: d.is_some_and(|d| !hero::meta_runs(d, None, &SCORE_ART).is_empty()),
+            pills: d.is_some_and(|d| !hero::tech_pills(d).is_empty()),
+            tagline: d.is_some_and(|d| !d.tagline.is_empty()),
+            overview_h,
+            more: d.is_some(),
+            poster_h: shape.h(),
+        })
     }
 
     /// Pin [`layout`](Self::layout) for one walk ([`LayoutPin`]). Validates first, so a pinned
@@ -808,17 +773,14 @@ impl DetailScreen {
     /// it is a spring, and folding it into [`LayoutStamp`] would rebuild the whole flow — episode
     /// text measurement included — on every frame of every focus move. [`DetailScreen::band_open`]
     /// is what the cached number is lifted by at read time.
-    fn section_block_h(
-        section: i32,
-        d: &Detail,
-        measure: &dyn nj_machine::machine::Measure,
-    ) -> f32 {
+    fn section_block_h(section: i32, d: &Detail) -> f32 {
         match section {
             1 => season::ROW_H,
-            2 => episodes::block_h(d, measure),
+            2 => episodes::block_h(d),
             3 => related::block_h(0.0),
             7 => collection::block_h(0.0),
             4 => cast::block_h(),
+            5 => about::block_h(d),
             6 => extras::block_h(0.0),
             _ => 0.0,
         }
@@ -863,6 +825,8 @@ impl DetailScreen {
     fn section_gap(section: i32, next: Option<i32>) -> f32 {
         match section {
             1 if next == Some(2) => TAB_EP_GAP,
+            5 => about::GAP_BELOW,
+            2 => episodes::LIST_BOTTOM,
             3 | 4 | 6 | 7 => crate::ui::consts::UNDER_LABEL_AIR,
             _ => SECTION_GAP,
         }
@@ -875,7 +839,7 @@ impl DetailScreen {
         stamp: LayoutStamp,
     ) -> LayoutCache {
         let chain = self.compute_hero_chain(Some(d), measure);
-        let content_top = chain.btn_y + hero::CD + theme::space::XL;
+        let content_top = chain.content_top;
         let (sections, n) = self.sections(Some(d));
         let live = &sections[..n];
         let mut top = [0.0f32; section::SLOTS];
@@ -888,11 +852,14 @@ impl DetailScreen {
                 top[si] = y;
                 seen |= 1 << si;
             }
-            let h = Self::section_block_h(sec, d, measure);
+            let h = Self::section_block_h(sec, d);
             if si < section::SLOTS {
                 block[si] = h;
             }
-            y += h + Self::section_gap(sec, live.get(pos + 1).copied());
+            // An empty block (a rich-metadata table with no rows) takes no gap either.
+            if h > 0.0 {
+                y += h + Self::section_gap(sec, live.get(pos + 1).copied());
+            }
         }
         LayoutCache {
             stamp,
@@ -909,7 +876,7 @@ impl DetailScreen {
         if let Some(d) = self.detail(meta) {
             self.ensure_layout(d, measure).content_top
         } else {
-            self.compute_hero_chain(None, measure).btn_y + hero::CD + theme::space::XL
+            self.compute_hero_chain(None, measure).content_top
         }
     }
 
@@ -917,6 +884,9 @@ impl DetailScreen {
         let mut out = [0; section::SLOTS];
         let mut n = 1;
         if let Some(d) = d {
+            // Litefin's rich-metadata table sits directly under the split (5).
+            out[n] = section::SectionId::About.raw();
+            n += 1;
             if d.is_show && !d.seasons.is_empty() {
                 out[n] = section::SectionId::Season.raw();
                 n += 1;
@@ -941,8 +911,6 @@ impl DetailScreen {
                 out[n] = section::SectionId::Related.raw();
                 n += 1;
             }
-            out[n] = section::SectionId::About.raw();
-            n += 1;
         }
         (out, n)
     }
@@ -993,7 +961,7 @@ impl DetailScreen {
         if (1..section::SLOTS).contains(&si) && c.seen & (1 << si) != 0 {
             return c.block[si] + self.band_open(section);
         }
-        Self::section_block_h(section, d, measure) + self.band_open(section)
+        Self::section_block_h(section, d) + self.band_open(section)
     }
 
     fn locate(&self, elem: u32, meta: crate::metadata::MetadataView<'_>) -> Option<Located> {
@@ -1132,16 +1100,12 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
         let meta = H::metadata(cx);
         let measure = cx.measure;
         let set = self.hero_set(meta);
-        let widths = hero::hero_widths(
-            cx.measure,
-            set,
-            set.restart,
-            self.disc_unfurl.map(|s| s.pos),
-            self.named_show(meta),
-        );
+        let pill = hero::hero_pill_w(cx.measure, set.restart);
         let (_, hero_n) = hero::visible_ctls(set, self.full_trailer());
-        let hero_y = self.hero_chain(measure, meta).btn_y;
-        let hero_last = hero::hero_btn_rect_at(set, hero_n.saturating_sub(1), hero_y, widths);
+        let chain = self.hero_chain(measure, meta);
+        let hero_y = chain.btn_y;
+        let hero_last = hero::hero_btn_rect_at(set, hero_n.saturating_sub(1), hero_y, pill);
+        let info_x = crate::ui::detail_layout::INFO_X;
         out.push(GroupSpec {
             id: hero::HERO_GROUP,
             kind: GroupKind::Row { wrap: false },
@@ -1154,9 +1118,9 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
                 EdgeRule::Stop,
             ],
             extent: Rect::new(
-                crate::ui::consts::MARGIN_X,
+                info_x,
                 hero_y - self.scroll_target,
-                hero_last.x + hero_last.w - crate::ui::consts::MARGIN_X,
+                hero_last.x + hero_last.w - info_x,
                 hero::CD,
             ),
             len: hero_n,
@@ -1185,17 +1149,15 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
                 }),
                 2 => out.push(GroupSpec {
                     id: episodes::EPISODES_GROUP,
-                    kind: GroupKind::Grid {
-                        cols: d.episodes.len().min(episodes::MAX_ITEMS).max(1),
-                        holes: &[],
-                    },
+                    // One row per episode, its card then its round button.
+                    kind: GroupKind::Grid { cols: 2, holes: &[] },
                     seat: Seat::Nearest,
                     reachable: AxisMask::BOTH,
                     edge: [EdgeRule::Geometric, EdgeRule::Geometric, EdgeRule::Stop, EdgeRule::Stop],
                     extent: Rect::new(
-                        crate::ui::consts::MARGIN_X,
+                        section::ROW_X,
                         top,
-                        crate::ui::consts::SCR_W - 2.0 * crate::ui::consts::MARGIN_X,
+                        crate::ui::detail_layout::INFO_R - section::ROW_X,
                         self.block_h(2, d, measure),
                     ),
                     len: d.episodes.len().min(episodes::MAX_ITEMS) * 2,
@@ -1273,7 +1235,11 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
                     elem: ElemKind::Card,
                 }),
                 5 => {
+                    // From the Show more pill under the overview down to the table's bottom.
                     let tracks = self.tracks_available(meta);
+                    let pill = show_more_rect(chain, measure);
+                    let pill_y = pill.y - self.scroll_target;
+                    let bottom = top + self.block_h(5, d, measure);
                     out.push(GroupSpec {
                         id: about::ABOUT_GROUP,
                         kind: GroupKind::Column,
@@ -1281,15 +1247,15 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
                         reachable: AxisMask::BOTH,
                         edge: [
                             EdgeRule::Geometric,
-                            EdgeRule::Stop,
+                            EdgeRule::Geometric,
                             EdgeRule::Stop,
                             EdgeRule::Stop,
                         ],
                         extent: Rect::new(
-                            crate::ui::consts::MARGIN_X,
-                            top,
-                            crate::ui::consts::SCR_W - 2.0 * crate::ui::consts::MARGIN_X,
-                            crate::ui::consts::SCR_H - crate::ui::detail_layout::TOP_MARGIN,
+                            crate::ui::detail_layout::SPLIT_X,
+                            pill_y,
+                            crate::ui::detail_layout::INFO_R - crate::ui::detail_layout::SPLIT_X,
+                            (bottom - pill_y).max(pill.h),
                         ),
                         len: 1 + usize::from(tracks),
                         elem: ElemKind::Control,
@@ -1328,13 +1294,15 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
                 row_move(i, self.detail(meta).map(|d| d.seasons.len()).unwrap_or(0), dir)
                     .and_then(season::elem)
             }
+            // The list: UP/DOWN walk the episodes in the same column, RIGHT goes from a card to
+            // its round button and LEFT back.
             Located::Episode(i, row) => match dir {
-                Dir::Left if i > 0 => episodes::elem(i - 1, row),
-                Dir::Right if self.detail(meta).is_some_and(|d| i + 1 < d.episodes.len()) => {
+                Dir::Up if i > 0 => episodes::elem(i - 1, row),
+                Dir::Down if self.detail(meta).is_some_and(|d| i + 1 < d.episodes.len().min(episodes::MAX_ITEMS)) => {
                     episodes::elem(i + 1, row)
                 }
-                Dir::Down if row == episodes::Row::Still => episodes::elem(i, episodes::Row::Text),
-                Dir::Up if row == episodes::Row::Text => episodes::elem(i, episodes::Row::Still),
+                Dir::Right if row == episodes::Row::Still => episodes::elem(i, episodes::Row::Text),
+                Dir::Left if row == episodes::Row::Text => episodes::elem(i, episodes::Row::Still),
                 _ => None,
             },
             Located::Related(i) => {
@@ -1386,18 +1354,13 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
             Located::Hero(ctl) => {
                 let set = self.hero_set(meta);
                 let i = hero::index_of(set, ctl)?;
-                let widths = hero::hero_widths(
-                    cx.measure,
-                    set,
-                    set.restart,
-                    self.disc_unfurl.map(|s| s.pos),
-                    self.named_show(meta),
-                );
+                let pill = hero::hero_pill_w(cx.measure, set.restart);
                 let base =
-                    hero::hero_btn_rect_at(set, i, self.hero_chain(measure, meta).btn_y - vertical, widths);
+                    hero::hero_btn_rect_at(set, i, self.hero_chain(measure, meta).btn_y - vertical, pill);
+                let peak = hero::ctl_peak(ctl);
                 (
-                    base.scaled(self.ctl_pop.scale(i)),
-                    base.scaled(crate::ui::widgets::CTRL_FOCUS_SCALE),
+                    base.scaled(crate::ui::widgets::action_scale(self.ctl_pop.scale(i), peak)),
+                    base.scaled(peak),
                     Some(i as u32),
                 )
             }
@@ -1416,24 +1379,16 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
             Located::Episode(i, row) => {
                 let d = d?;
                 let top = self.section_top_at(2, d, measure, at) - vertical;
-                let base = match row {
-                    episodes::Row::Still => episodes::still_rect(i, top, self.episode_scroll.pos),
-                    episodes::Row::Text => {
-                        episodes::meta_rect(d.episodes.get(i)?, i, top, self.episode_scroll.pos, measure)
+                d.episodes.get(i)?;
+                let (drawn, rest) = match row {
+                    episodes::Row::Still => {
+                        let base = episodes::still_rect(i, top);
+                        (base.scaled(self.episode_scale.get(i).map(|s| s.pos).unwrap_or(1.0)), base.scaled(episodes::FOCUS_SCALE))
                     }
-                };
-                let drawn = if row == episodes::Row::Still {
-                    base.scaled(self.episode_scale.get(i).map(|s| s.pos).unwrap_or(1.0))
-                } else {
-                    // Grows from its top edge, like `episodes::draw_cell`'s block.
-                    lifted(base, TOP_CENTRE, self.episode_lift(i).scale())
-                };
-                let rest = if row == episodes::Row::Still {
-                    base.scaled(crate::ui::theme::EP_CARD_FOCUS_SCALE)
-                } else {
-                    // Like the still's, the rest rect is the fully-lifted size, so focus-geometry
-                    // distances are measured against a stable size, not one mid-animation.
-                    lifted(base, TOP_CENTRE, TEXT_LIFT_SCALE)
+                    episodes::Row::Text => {
+                        let base = episodes::button_rect(i, top);
+                        (base, base)
+                    }
                 };
                 (drawn, rest, Some(i as u32))
             }
@@ -1480,11 +1435,11 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
             }
             Located::About(i) => {
                 let d = d?;
-                let top = self.section_top_at(5, d, measure, at) - vertical;
                 let base = if i == 0 {
-                    self.about_rows.card_rect(d, top, measure)
+                    let pill = show_more_rect(self.hero_chain(measure, meta), measure);
+                    Rect::new(pill.x, pill.y - vertical, pill.w, pill.h)
                 } else {
-                    self.about_rows.languages_rect(top, measure)
+                    self.about_rows.languages_rect(self.section_top_at(5, d, measure, at) - vertical)
                 };
                 (base, base, Some(i as u32))
             }
@@ -1558,12 +1513,16 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
                 if hero::index_of(set, ctl).is_some() {
                     return want;
                 }
-                if ctl.is_watch() {
+                let flipped = if ctl.is_watch() {
+                    hero::watch_index(set)
+                } else if ctl.is_favorite() {
+                    hero::favorite_index(set)
+                } else {
+                    None
+                };
+                if let Some(i) = flipped {
                     let (controls, _) = hero::hero_ctls(set);
-                    return FocusKey {
-                        entry: want.entry,
-                        elem: controls[hero::watch_index(set).unwrap()].elem(),
-                    };
+                    return FocusKey { entry: want.entry, elem: controls[i].elem() };
                 }
             }
         }
@@ -1587,6 +1546,13 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
         let meta = H::metadata(cx);
         let d = self.detail(meta);
         let from_i = from.index.unwrap_or(0) as usize;
+        // An episode row is one full-width object: leaving the list from its round button seats
+        // the next shelf where leaving from its card does, under the row's leading edge.
+        let mut from = from;
+        if let Some(Located::Episode(i, _)) = cx.focus.current.filter(|k| k.entry == self.entry).and_then(|k| self.locate(k.elem, meta)) {
+            let card = episodes::still_rect(i, from.rect.y);
+            from.rect = Rect::new(card.x, from.rect.y, section::POSTERS.w, from.rect.h);
+        }
         let elem = if group == hero::HERO_GROUP {
             hero::HeroCtl::Play.elem()
         } else if group == season::SEASON_GROUP {
@@ -1602,30 +1568,17 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
                 .map(|d| d.episodes.len())
                 .unwrap_or(0)
                 .min(episodes::MAX_ITEMS);
-            let i = card_row::column_near_x(
-                from.rect.cx(),
-                crate::ui::consts::MARGIN_X,
-                episodes::W + episodes::GAP,
-                episodes::W,
-                self.episode_scroll.pos,
-                n,
-                from_i,
-            );
-            let row = if d.is_some_and(|d| {
-                from.rect.cy() > self.section_top_settled(2, d, measure) - self.scroll_target + self.block_h(2, d, measure)
-            }) {
-                episodes::Row::Text
-            } else {
-                episodes::Row::Still
-            };
-            episodes::elem(i, row).unwrap_or(episodes::EPISODES_ELEM_RANGE_START)
+            // The row under the line focus came in on: the first from above, the last from below.
+            let top = d.map_or(0.0, |d| self.section_top_settled(2, d, measure) - self.scroll_target);
+            let i = episodes::row_near_y(from.rect.cy(), top, n);
+            episodes::elem(i, episodes::Row::Still).unwrap_or(episodes::EPISODES_ELEM_RANGE_START)
         } else if group == extras::EXTRAS_GROUP {
             let n = d.map(extras::len).unwrap_or(0);
             extras::elem(card_row::column_near_x(
                 from.rect.cx(),
-                crate::ui::consts::MARGIN_X,
-                RowStyle::EPISODE.w + RowStyle::EPISODE.gap,
-                RowStyle::EPISODE.w,
+                section::CARD_X,
+                section::STILLS.w + section::STILLS.gap,
+                section::STILLS.w,
                 self.extras.scroll_x(),
                 n,
                 from_i,
@@ -1635,9 +1588,9 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
             let n = d.map(|d| d.related.len()).unwrap_or(0).min(512);
             related::elem(card_row::column_near_x(
                 from.rect.cx(),
-                crate::ui::consts::MARGIN_X,
-                RowStyle::HOME.w + RowStyle::HOME.gap,
-                RowStyle::HOME.w,
+                section::CARD_X,
+                section::POSTERS.w + section::POSTERS.gap,
+                section::POSTERS.w,
                 self.related.scroll_x(),
                 n,
                 from_i,
@@ -1649,9 +1602,9 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
             let n = d.map(collection::len).unwrap_or(0);
             collection::elem(card_row::column_near_x(
                 from.rect.cx(),
-                crate::ui::consts::MARGIN_X,
-                RowStyle::HOME.w + RowStyle::HOME.gap,
-                RowStyle::HOME.w,
+                section::CARD_X,
+                section::POSTERS.w + section::POSTERS.gap,
+                section::POSTERS.w,
                 self.collection.scroll_x(),
                 n,
                 from_i,
@@ -1661,9 +1614,9 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Focusable<H> for D
             let n = d.map(|d| d.credits_len()).unwrap_or(0).min(512);
             cast::elem(card_row::column_near_x(
                 from.rect.cx(),
-                crate::ui::consts::MARGIN_X,
-                RowStyle::CAST.w + RowStyle::CAST.gap,
-                RowStyle::CAST.w,
+                section::CARD_X,
+                section::POSTERS.w + section::POSTERS.gap,
+                section::POSTERS.w,
                 self.cast.scroll_x(),
                 n,
                 from_i,
@@ -2154,15 +2107,13 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Screen<H> for Deta
             nj_gfx::gfx::frame_clear(theme::CLEAR_RGB.0, theme::CLEAR_RGB.1, theme::CLEAR_RGB.2);
         }
         let p = f.painter;
-        let nav_page_alpha = f.nav_page_alpha;
         let d = self.detail(meta);
-        self.draw_backdrop(p, d, f.measure, preview, meta);
-        let hero_vis = hero_alpha(self.scroll.pos, HERO_FADE);
-        if hero_vis > 0.01 {
-            self.draw_hero(p.translate(0.0, -self.scroll.pos).alpha(hero_vis), f, d, nav_page_alpha);
+        self.draw_backdrop(p, d, preview);
+        // The split scrolls with the page like every other block; it is culled once it has left.
+        if self.scroll.pos < self.content_top(measure, meta) {
+            self.draw_hero(p.translate(0.0, -self.scroll.pos), f, d);
         }
         if let Some(d) = d {
-            self.draw_compact_title(p, d, hero_vis, f.measure);
             let focus = f
                 .focus
                 .current
@@ -2199,7 +2150,6 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Screen<H> for Deta
                             below_hero,
                             d,
                             top,
-                            self.episode_scroll.pos,
                             match focus {
                                 Some(Located::Episode(i, row)) => Some((i, row)),
                                 _ => None,
@@ -2212,7 +2162,7 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Screen<H> for Deta
                         if meta.season_loading() {
                             crate::ui::widgets::Spinner::new(
                                 crate::ui::consts::SCR_W * 0.5,
-                                top + episodes::H * 0.5,
+                                top + episodes::ROW_H * 0.5,
                                 26.0,
                             )
                             .phase(self.spin_ms as u32)
@@ -2265,15 +2215,7 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Screen<H> for Deta
                         },
                         f.measure,
                     ),
-                    5 => self.about_rows.draw(
-                        below_hero,
-                        d,
-                        top,
-                        self.tracks_available(meta),
-                        &self.about_card_lift,
-                        &self.about_lang_lift,
-                        f.measure,
-                    ),
+                    5 => self.about_rows.draw(below_hero, top, self.about_lang_lift.factor(), f.measure),
                     _ => {}
                 }
             }
@@ -2298,7 +2240,6 @@ impl<H: ContentLike + crate::screens::registry::MetadataLike> Screen<H> for Deta
                 .or_else(|| self.selected().map(|m| m.title.as_str()))
                 .unwrap_or_default(),
             self.preview_extra(meta).map(|e| e.title.as_str()).unwrap_or_default(),
-            crate::player::preview::paused(),
             measure,
         );
 
@@ -2395,66 +2336,51 @@ impl DetailScreen {
             .unwrap_or((self.sid, self.rk.clone(), String::new()))
     }
 
+    /// The poster's art path and shape: an episode shows its landscape still, everything else its
+    /// portrait poster (5 Poster: 420x630, landscape 420x236).
+    fn poster_of(d: Option<&Detail>, selected: Option<&crate::catalog_fetch::PmsMovie>) -> (String, PosterShape) {
+        match (d, selected) {
+            (Some(d), _) if d.kind == "episode" => (d.thumb.clone(), PosterShape::Landscape),
+            (Some(d), _) => (d.thumb.clone(), PosterShape::Portrait),
+            (None, Some(m)) => (m.thumb.clone(), PosterShape::Portrait),
+            (None, None) => (String::new(), PosterShape::Portrait),
+        }
+    }
+
+    /// Litefin's fixed backdrop (5 Backdrop): the art full screen, `cover`, under a black ramp that
+    /// is solid from 88% down. It does not scroll and takes no ambient wash: the page below the
+    /// split is the ramp's black, and the rows scroll over the picture's darkened top.
     fn draw_backdrop(
         &self,
         p: Painter,
         d: Option<&Detail>,
-        measure: &dyn nj_machine::machine::Measure,
         preview: crate::player::preview::View,
-        meta: crate::metadata::MetadataView<'_>,
     ) {
-        let sf = (self.scroll.pos / (self.content_top(measure, meta) - crate::ui::detail_layout::TOP_MARGIN))
-            .clamp(0.0, 1.0);
-        let art_alpha = (1.0 - sf) * self.preview_art;
         let (sid, _, path) = self.art_identity(d);
-        let (texture, width, height) = if art_alpha > 0.01 {
-            crate::ui::widgets::resolve_tex_wh_on(sid.raw(), &path, 1920, 1080, 0)
-        } else {
-            (0, 0.0, 0.0)
-        };
-        let ground_flat = self
-            .ground
-            .is_flat(theme::SURFACE_APP, AmbientWash::FLAT_EPS);
-        let art = crate::ui::widgets::WashArt {
-            tex: texture,
-            rect: Rect::FULL.cover(width, height),
-            uv: nj_gfx::gfx::UV_FULL,
-            tint: theme::with_a(theme::dim(theme::TINT_WHITE, 1.0 - sf * 0.55), art_alpha),
-        };
-        let visible = hero_alpha(self.scroll.pos, HERO_FADE);
-        // The atmospheric ramp: nothing above the scrim's top, one straight stop to its foot.
-        let ramp = (visible > 0.01).then(|| {
-            let y0 = crate::ui::widgets::HERO_BASE_SCRIM_Y0;
-            let foot = crate::ui::detail_layout::base_scrim_a(crate::ui::consts::SCR_H, visible)
-                * self.preview_base_scrim;
-            let h = crate::ui::consts::SCR_H;
-            crate::ui::widgets::WashRamp { ink: theme::scrim(1.0), stops: [(y0, 0.0), (h, foot), (h, foot)] }
-        });
-        // The still dissolves over its ground while the page scrolls, so where the ground is drawn
-        // the ground, the still and the ramp are one pass (`AmbientWash::draw_ground`).
-        let ramp_in_ground = if keyed_ground_over_plane(preview.picture, texture, art_alpha, ground_flat) {
-            self.ground.draw_ground(p, Rect::FULL, Some(art), ramp)
-        } else {
+        if let Some(art_alpha) = self.backdrop_still_alpha() {
+            let (texture, width, height) =
+                crate::ui::widgets::resolve_tex_wh_on(sid.raw(), &path, 1920, 1080, 0);
             if texture != 0 {
-                p.tex_uv(art.tex, art.uv, art.rect, 0.0, art.tint);
+                p.tex_uv(
+                    texture,
+                    nj_gfx::gfx::UV_FULL,
+                    Rect::FULL.cover(width, height),
+                    0.0,
+                    theme::with_a(theme::TINT_WHITE, art_alpha),
+                );
             }
-            false
-        };
-        if let Some(ramp) = ramp.filter(|_| !ramp_in_ground) {
-            let y0 = ramp.stops[0].0;
-            p.rect(
-                Rect::new(0.0, y0, crate::ui::consts::SCR_W, crate::ui::consts::SCR_H - y0),
-                0.0,
-                theme::scrim(0.0),
-                theme::scrim(ramp.stops[1].1),
-                0.0,
-            );
         }
-        if visible > 0.01 {
-            crate::ui::widgets::hero_scrim(
-                p,
-                visible * self.preview_field,
-                d.is_some_and(hero::has_people),
+        let ramp = &theme::details_lf::BACKDROP_RAMP;
+        let h = crate::ui::consts::SCR_H;
+        let strength = self.preview_base_scrim;
+        for w in ramp.windows(2) {
+            let ((y0, a0), (y1, a1)) = (w[0], w[1]);
+            p.rect(
+                Rect::new(0.0, y0 * h, crate::ui::consts::SCR_W, (y1 - y0) * h),
+                0.0,
+                theme::scrim_black(a0 * strength),
+                theme::scrim_black(a1 * strength),
+                0.0,
             );
         }
         if self.scroll.pos > 0.0 && preview.picture {
@@ -2464,90 +2390,106 @@ impl DetailScreen {
         }
     }
 
-    fn draw_hero<H: ContentLike + crate::screens::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, d: Option<&Detail>, nav_page_alpha: f32) {
+    /// The backdrop still's alpha, `None` once it has gone. `preview_art` eases it out after a
+    /// trailer's picture comes up, so the still dissolves into the plane (drawn over it, under no
+    /// opaque ground: the frame is cleared through) rather than being cut on the first frame.
+    fn backdrop_still_alpha(&self) -> Option<f32> {
+        (self.preview_art > 0.01).then_some(self.preview_art)
+    }
+
+    /// The posterLeft split (5): the poster, then the info column — the clear logo in its top-right
+    /// box, the title, the episode line, the meta row, the tech pills, the actions row with the
+    /// focused control's floating name, the tagline, the overview and its Show more pill.
+    fn draw_hero<H: ContentLike + crate::screens::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, d: Option<&Detail>) {
+        use crate::ui::detail_layout as lay;
         let meta = H::metadata(cx);
         let measure = cx.measure;
-        use crate::ui::detail_layout::{HERO_TEXT_W, TITLE_BOTTOM};
-
-        let (_, rk, _) = self.art_identity(d);
         let title = d
             .map(|d| d.title.as_str())
             .or_else(|| self.selected().map(|m| m.title.as_str()))
             .unwrap_or(nj_platform::i18n::msg::browse_library_loading());
         let chrome = p.alpha(self.preview_chrome);
-        // NOT `self.preview_chrome * self.preview_synopsis`: synopsis_target already tracks
-        // chrome_target exactly (both states — background autoplay, full-trailer — target the
-        // same 1.0/0.0), so multiplying the two eased values together would fade the synopsis
-        // along the SQUARE of the intended curve instead of the same rate as the logo/title.
-        let synopsis_alpha = p.alpha(self.preview_synopsis);
-
-        // Interpolate continuously between the hero position/size and the top-left compact spot a
-        // trailer's background autoplay shrinks the logo into — `preview_logo.pos` is the spring's
-        // live 0..1 progress (see `preview_tick`). `LogoRung::lerp` keeps `HeroLogo::fit`'s
-        // constant-area solve continuous across the whole travel instead of snapping partway
-        // through it (`ui/hero_logo.rs`'s own module doc: sizing is area-based, not a height clamp).
-        let hero_band = crate::ui::hero_logo::band_h(LogoRung::Hero);
-        let compact_band = crate::ui::hero_logo::band_h(LogoRung::Compact);
-        let t = self.preview_logo.pos;
-        let lerp = |a: f32, b: f32| a + (b - a) * t;
-        let band = Rect::new(
-            lerp(crate::ui::consts::MARGIN_X, crate::ui::detail_layout::PREVIEW_LOGO_X),
-            lerp(TITLE_BOTTOM - hero_band, crate::ui::detail_layout::PREVIEW_LOGO_Y),
-            lerp(HERO_TEXT_W, crate::ui::detail_layout::PREVIEW_LOGO_MAX_W),
-            lerp(hero_band, compact_band),
-        );
-        // The pinned corner spot (`t` near 1) sits well inside the below-hero flow's own reach:
-        // `content_top(measure)` — the first section's top — is under a screen height away, so the
-        // caller's `hero_alpha`/`HERO_FADE` window (400px) was still fading the mark, semi-visible,
-        // while a section (Extras, depending on order) had already scrolled up underneath it. Ties
-        // the logo's OWN extra fade to the same "how far into the below-hero flow" fraction
-        // `draw_backdrop`'s `sf` already computes, so it is fully gone by the time the flow starts
-        // and back once scrolled to the top — and only while shrunk (`t`), so a normal hero (no
-        // preview) is untouched.
-        let hero_extent = (self.content_top(measure, meta) - crate::ui::detail_layout::TOP_MARGIN).max(1.0);
-        let logo_alpha = p.alpha(
-            self.preview_chrome * preview_logo_scroll_alpha(self.scroll.pos, hero_extent, t),
-        );
-        HeroLogo::new(self.sid.raw(), &rk, title, LogoRung::lerp(LogoRung::Hero, LogoRung::Compact, t))
-            .draw(logo_alpha, band, cx.measure);
-
-        let (lead, synopsis) = hero_blurb(d, self.selected());
-        let synopsis_view = crate::ui::hero_synopsis(&synopsis, &lead).with_measure(measure);
-        let chain = self.hero_chain(measure, meta);
-        // Two gates, and the difference is the whole behaviour. `prose` recedes the moment a
-        // picture is up: the identity line and the rating marks are how you decide whether to
-        // watch, and once the trailer itself is answering that question they are in the way.
-        // `chrome` only reaches 0 in full-trailer mode, and the rows below (facts, people) hold
-        // it — they are what the viewer reads WHILE the trailer plays, and the owner asked that
-        // nothing there vanish and come back under a playing preview.
+        // `prose` recedes the moment a trailer picture is up — the poster, the title and the meta
+        // are how you decide whether to watch, and the trailer itself answers that once it plays.
+        // `chrome` only reaches 0 in full-trailer mode: the actions row holds it.
         let prose = p.alpha(self.preview_chrome * self.preview_prose);
+        let chain = self.hero_chain(measure, meta);
+
+        let (path, shape) = Self::poster_of(d, self.selected());
+        let poster = Rect::new(lay::SPLIT_X, lay::SPLIT_TOP, lay::POSTER_W, shape.h());
+        prose.rrect(poster, theme::radius::BASE, theme::radius::BASE, theme::CARD_BG);
+        let sid = d.map(|d| d.sid).unwrap_or(self.sid);
+        let (tex, tw, th) = if path.is_empty() {
+            (0, 0.0, 0.0)
+        } else {
+            crate::ui::widgets::resolve_tex_wh_on(sid.raw(), &path, lay::POSTER_W as i32, shape.h() as i32, 0)
+        };
+        if tex != 0 {
+            prose.tex_uv(tex, poster.cover_uv(tw, th, crate::ui::Crop::Centre), poster, theme::radius::BASE, theme::TINT_WHITE);
+        }
+
+        // The clear logo, top-right of the column, `contain`ed in its 280x100 box — and, while a
+        // trailer plays in the background, carried to the top-left corner by `preview_logo`.
+        let logo_rk = d
+            .filter(|d| d.kind == "episode" && !d.show_rk.is_empty())
+            .map(|d| d.show_rk.clone())
+            .unwrap_or_else(|| self.art_identity(d).1);
+        let t = self.preview_logo.pos;
+        let compact_band = crate::ui::hero_logo::band_h(LogoRung::Compact);
+        let band = lay::logo_band(t, compact_band);
+        let hero_extent = (chain.content_top - lay::TOP_MARGIN).max(1.0);
+        let logo_alpha = p.alpha(self.preview_chrome * preview_logo_scroll_alpha(self.scroll.pos, hero_extent, t));
+        // Drawn left-aligned in a band narrowed to the contained logo, which `logo_slide` places.
+        let logo_w = crate::ui::tex::logo_src(sid.raw(), &logo_rk)
+            .map_or(band.w, |(_, sw, sh)| crate::ui::hero_logo::contain(sw, sh, band.w, band.h).0);
+        HeroLogo::new(sid.raw(), &logo_rk, title, LogoRung::Hero)
+            .align(HAlign::Left)
+            .contained()
+            .draw(logo_alpha, lay::logo_slide(band, logo_w, t), measure);
+
+        hero_title(title, measure).draw(prose, Rect::new(lay::INFO_X, chain.title_y, lay::TITLE_W, 0.0));
         if let Some(d) = d {
-            self.draw_identity_line(prose, d, chain.meta_y, cx.measure);
-            self.draw_ratings(prose, d, chain.ratings_y, cx.measure);
+            if let Some(original) = hero::original_title(d) {
+                let sz = theme::size::lf::S28;
+                let run = measure.fit_line(original, lay::TITLE_W, sz, false);
+                let ty = nj_gfx::text::text_vcenter_y(sz, 0, chain.original_y + lay::ORIGINAL_H * 0.5);
+                prose.text(run.as_ptr(), lay::INFO_X, ty, sz, theme::TEXT_SECONDARY, 0, 0);
+            }
+            if let Some(line) = hero::episode_line(d) {
+                if let Ok(c) = std::ffi::CString::new(line) {
+                    let sz = theme::size::lf::S29;
+                    let ty = nj_gfx::text::text_vcenter_y(sz, 0, chain.episode_y + crate::ui::detail_layout::EPISODE_H * 0.5);
+                    prose.text(c.as_ptr(), lay::INFO_X, ty, sz, theme::BRAND_FILL, 0, 0);
+                }
+            }
+            let ends_at = hero::ends_at(d);
+            let runs = hero::meta_runs(d, ends_at.as_deref(), &SCORE_ART);
+            hero::draw_meta(prose, &runs, lay::INFO_X, chain.meta_cy(), lay::INFO_R, measure);
+            hero::draw_pills(prose, &hero::tech_pills(d), lay::INFO_X, chain.pills_cy(), lay::INFO_R, measure);
         }
-        if !synopsis.is_empty() {
-            synopsis_view.draw(
-                synopsis_alpha,
-                Rect::new(crate::ui::consts::MARGIN_X, chain.syn_y, HERO_TEXT_W, 0.0),
-            );
+        // Full-trailer mode takes the action row with the rest of the page: the transport drawn
+        // over the top (`trailer::Transport::draw`) is the only control that state has. The row
+        // still ANCHORS focus there (`hero::focusable` keeps Play legitimate).
+        self.draw_buttons(chrome, cx, chain.btn_y);
+
+        let synopsis = p.alpha(self.preview_synopsis);
+        if let Some(d) = d.filter(|d| !d.tagline.is_empty()) {
+            if let Ok(c) = std::ffi::CString::new(d.tagline.as_str()) {
+                let sz = theme::size::lf::S22;
+                let ty = nj_gfx::text::text_vcenter_y(sz, 0, chain.tagline_y + crate::ui::detail_layout::TAGLINE_H * 0.5);
+                synopsis.text(c.as_ptr(), lay::INFO_X, ty, sz, theme::TEXT_SECONDARY, 0, 0);
+            }
         }
-        if let Some(d) = d {
-            hero::draw_facts(chrome, d, chain.facts_y, cx.measure);
-            hero::draw_people(chrome, d, chain.btn_y, measure);
+        let overview = hero_blurb(d, self.selected());
+        if !overview.is_empty() {
+            hero_overview(overview, measure)
+                .draw(synopsis, Rect::new(lay::INFO_X, chain.overview_y, lay::INFO_W, 0.0));
         }
-        // Full-trailer mode takes the action row with the rest of the page: the viewer asked for
-        // the trailer and nothing else, and the transport drawn over the top
-        // (`trailer::Transport::draw`) is the only control that state has. The row still ANCHORS
-        // focus there — `hero::focusable` keeps Play legitimate, so the engine has somewhere to
-        // stand and the page does not scroll itself into the sections below — it simply fades out
-        // with `chrome`, like everything else the page owns.
-        self.draw_buttons(chrome, cx, chain.btn_y, nav_page_alpha);
-        // The hint that UP is there — since 2026-09-18 a third element on the HEADER line rather
-        // than page furniture under the action row: centred on the screen, vertically centred on
-        // the same row the preview-shrunk logo/title occupies (`PREVIEW_LOGO_Y`/`compact_band`),
-        // so it neither reserves space in the hero's own stack nor grows down over the video. Its
-        // own fade (`trailer::hint_shown`) already leaves on promotion; drawing it through `chrome`
-        // as well keeps it honest if the two ever disagree for a frame.
+        if d.is_some() {
+            let focused = cx.focus.current.is_some_and(|k| self.locate(k.elem, meta) == Some(Located::About(0)));
+            self.draw_show_more(chrome, chain, focused, measure);
+        }
+        // The hint that UP is there, on the row the preview-shrunk logo occupies.
         self.trailer_ctl.draw_hint(
             chrome,
             trailer::hint_cy(crate::ui::detail_layout::PREVIEW_LOGO_Y, compact_band),
@@ -2555,230 +2497,58 @@ impl DetailScreen {
         );
     }
 
-    fn draw_identity_line(&self, p: Painter, d: &Detail, y: f32, measure: &dyn nj_machine::machine::Measure) {
-        let ordinal = (d.kind == "episode" && d.season > 0 && d.index > 0)
-            .then(|| crate::ui::fmt::episode_ordinal(d.season, d.index))
-            .unwrap_or_default();
-        let mut parts: Vec<&str> = Vec::new();
-        if d.kind == "episode" {
-            if !d.show_title.is_empty() {
-                parts.push(&d.show_title);
-            }
-            if !ordinal.is_empty() {
-                parts.push(&ordinal);
-            }
-        } else {
-            parts.push(if d.is_show { nj_platform::i18n::msg::browse_kind_tv_show() } else { nj_platform::i18n::msg::browse_kind_movie() });
-            parts.extend(d.genres.iter().take(2).map(String::as_str));
-        }
-        if !d.rating.is_empty() {
-            parts.push(&d.rating);
-        }
-        let mut x = crate::ui::consts::MARGIN_X
-            + crate::ui::widgets::dotted_run(
-                p,
-                &parts,
-                crate::ui::consts::MARGIN_X,
-                y,
-                theme::size::BODY,
-                theme::TEXT_SECONDARY,
-                theme::space::SM,
-            );
-        if x > crate::ui::consts::MARGIN_X {
-            x += theme::space::SM;
-        }
-        let (top, base) = nj_gfx::text::text_cap_band(theme::size::BODY, 0);
-        let cy = y + (top + base) * 0.5;
-        if let Some(res) = crate::ui::fmt::resolution(&d.video_resolution, d.width, d.height) {
-            x += crate::ui::widgets::badge(
-                p,
-                x,
-                cy,
-                &res,
-                None,
-                crate::ui::widgets::BadgeStyle::Filled,
-                measure,
-            ) + theme::space::XS;
-        }
-        for (present, label) in [
-            (!d.subs.is_empty(), nj_platform::i18n::msg::widgets_badge_cc()),
-            (d.subs.iter().any(|s| s.sdh), nj_platform::i18n::msg::widgets_badge_sdh()),
-            (d.audio.iter().any(|s| s.ad), nj_platform::i18n::msg::widgets_badge_ad()),
-        ] {
-            if present {
-                x += crate::ui::widgets::keyline_chip(p, x, cy, label, theme::TEXT_SECONDARY, measure)
-                    + theme::space::XS;
-            }
-        }
+    /// The Show more pill under the overview (5: 17.6/600, padding 6x12, radius 16, the action
+    /// fill), the About stop that opens the whole record; focused, the accent and a 1.1 pop.
+    fn draw_show_more(&self, p: Painter, chain: crate::ui::detail_layout::HeroChain, focused: bool, measure: &dyn nj_machine::machine::Measure) {
+        let r = show_more_rect(chain, measure).scaled(1.0 + 0.1 * self.about_card_lift.factor());
+        let label = nj_platform::i18n::msg::details_show_more_c();
+        Button::new(label.as_ptr(), SHOW_MORE_SZ, r)
+            .style(crate::ui::widgets::ControlStyle::Action { active: false })
+            .focused(focused)
+            .draw(&Env::inert(), p);
     }
 
-    fn draw_ratings(
-        &self,
-        p: Painter,
-        d: &Detail,
-        y: f32,
-        measure: &dyn nj_machine::machine::Measure,
-    ) {
-        let (top, base) = nj_gfx::text::text_cap_band(theme::size::LABEL, 1);
-        let cy = y + (top + base) * 0.5;
-        let mut x = crate::ui::consts::MARGIN_X;
-        let mut i = 0;
-        while i < d.ratings.len() {
-            let provider = d.ratings[i].art.provider();
-            let end = i + d.ratings[i..].partition_point(|r| r.art.provider() == provider);
-            let scores: Vec<String> = d.ratings[i..end]
-                .iter()
-                .map(|r| crate::ui::fmt::rating_score(rating_scale(r.art), r.value))
-                .collect();
-            let cells: Vec<crate::ui::widgets::RatingCell<'_>> = d.ratings[i..end]
-                .iter()
-                .zip(scores.iter())
-                .map(|(r, score)| crate::ui::widgets::RatingCell {
-                    mark: rating_mark(r.art),
-                    value: score,
-                    suffix: crate::ui::fmt::rating_suffix(rating_scale(r.art)),
-                })
-                .collect();
-            let width = crate::ui::widgets::rating_group_w(provider, &cells, measure);
-            if x + width > crate::ui::consts::SCR_W - crate::ui::consts::MARGIN_X {
-                break;
-            }
-            x += crate::ui::widgets::rating_group(p, x, cy, provider, &cells, measure) + 32.0;
-            i = end;
-        }
-    }
-
-    fn draw_buttons<H: ContentLike + crate::screens::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, y: f32, nav_page_alpha: f32) {
+    fn draw_buttons<H: ContentLike + crate::screens::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, y: f32) {
         let meta = H::metadata(cx);
         let set = self.hero_set(meta);
-        let widths = hero::hero_widths(
-            cx.measure,
-            set,
-            set.restart,
-            self.disc_unfurl.map(|s| s.pos),
-            self.named_show(meta),
-        );
+        let pill = hero::hero_pill_w(cx.measure, set.restart);
         let current = cx.focus.current.map(|k| k.elem);
         // Deliberately `hero_ctls`, not `hero::visible_ctls`: the row's FOCUSABLE extent narrows
-        // to Play the instant `full_trailer()` flips (that gate lives in `valid`/`focusable` and
-        // is unchanged), but what's DRAWN must not narrow in the same frame — the caller already
-        // fades every button through `chrome`'s `preview_chrome` alpha (`draw_hero`), and cutting
-        // four of the five pills here a frame early defeats that fade before it can be seen.
+        // to Play the instant `full_trailer()` flips, but what's DRAWN must not narrow in the same
+        // frame — the caller fades every button through `chrome`, and cutting the others a frame
+        // early defeats that fade before it can be seen.
         let (controls, n) = hero::hero_ctls(set);
-        let last = hero::hero_btn_rect_at(set, n.saturating_sub(1), y, widths);
-        let row = [
-            crate::ui::consts::MARGIN_X,
-            y - self.scroll.pos,
-            last.x + last.w - crate::ui::consts::MARGIN_X,
-            hero::CD,
-        ];
-        let picture = crate::player::preview::view().picture;
-        // A text-recording pass (the transition's prewarm, or a headless sweep) drew no pixels
-        // under this row, so a read-back there would sample some other page's ground.
-        let may_read = !picture
-            && !p.is_recording()
-            && may_sample_control_ground(nav_page_alpha, hero_alpha(self.scroll.pos, HERO_FADE));
-        let palette = if picture {
-            ControlPalette::default()
-        } else {
-            nj_gfx::gfx::sample_control_ground(row, may_read)
-                .map(ControlPalette::ambient)
-                .unwrap_or_default()
-        };
-        let ground = if picture {
-            ControlGround::Unkeyed
-        } else {
-            ControlGround::Keyed
-        };
+        let mut named = None;
         for (i, ctl) in controls[..n].iter().copied().enumerate() {
-            let rect = hero::hero_btn_rect_at(set, i, y, widths);
+            let rect = hero::hero_btn_rect_at(set, i, y, pill);
             let focused = current == Some(ctl.elem());
-            let scale = self.ctl_pop.scale(i);
-            match ctl {
-                hero::HeroCtl::Play => Button::new(
-                    hero::hero_pill_label(set.restart).as_ptr(),
-                    theme::size::BODY,
-                    rect,
-                )
-                .icon(crate::ui::icons::Icon::Play)
+            let scale = crate::ui::widgets::action_scale(self.ctl_pop.scale(i), hero::ctl_peak(ctl));
+            let label = if ctl == hero::HeroCtl::Play && set.restart {
+                hero::hero_pill_label(true)
+            } else {
+                c""
+            };
+            Button::new(label.as_ptr(), hero::PILL_SZ, rect)
+                .icon(hero::ctl_icon(ctl))
+                .style(crate::ui::widgets::ControlStyle::Action { active: hero::ctl_active(ctl) })
                 .focused(focused)
-                .palette(palette)
-                .ground(ground)
                 .scale(scale)
-                .draw(&Env::inert(), p),
-                hero::HeroCtl::Alt | hero::HeroCtl::Version | hero::HeroCtl::Tracks => {
-                    let label = match ctl {
-                        hero::HeroCtl::Alt => hero::alt_label(),
-                        hero::HeroCtl::Version => hero::version_label(),
-                        _ => hero::tracks_label(),
-                    };
-                    Button::new(label.as_ptr(), theme::size::BODY, rect)
-                        .trailing_icon(crate::ui::icons::Icon::ChevronDown)
-                        .focused(focused)
-                        .palette(palette)
-                        .ground(ground)
-                        .scale(scale)
-                        .draw(&Env::inert(), p)
-                }
-                ctl => {
-                    let icon = match ctl {
-                        hero::HeroCtl::Restart => crate::ui::icons::Icon::Restart,
-                        hero::HeroCtl::Trailer => crate::ui::icons::Icon::Trailer,
-                        hero::HeroCtl::MarkWatched => crate::ui::icons::Icon::Check,
-                        hero::HeroCtl::MarkUnwatched => crate::ui::icons::Icon::Minus,
-                        _ => unreachable!(),
-                    };
-                    let mut button = CircleButton::new(c"".as_ptr())
-                        .icon(icon)
-                        .frame(rect)
-                        .focused(focused)
-                        .palette(palette)
-                        .ground(ground)
-                        .scale(scale);
-                    if let Some((slot, label)) = hero::disc_verb(ctl, self.named_show(meta)) {
-                        button = button.label(label.as_ptr(), self.disc_unfurl[slot].pos);
-                    }
-                    button.draw(&Env::inert(), p);
-                }
+                .draw(&Env::inert(), p);
+            if focused {
+                named = Some((ctl, rect.scaled(scale)));
             }
         }
-    }
-
-    fn draw_compact_title(&self, p: Painter, d: &Detail, hero_visible: f32, measure: &dyn nj_machine::machine::Measure) {
-        if hero_visible >= 0.99 {
-            return;
+        // The focused control's name floats 18 below it, centred, no plate (5,
+        // `.action-btn-tooltip-bar.style-floating`). The Resume pill already says its word.
+        if let Some((ctl, r)) = named.filter(|(ctl, _)| !(*ctl == hero::HeroCtl::Play && set.restart)) {
+            let name = hero::ctl_name(ctl, set.restart, self.named_show(meta));
+            let top = r.y + r.h + crate::ui::detail_layout::ACTION_LABEL_DY;
+            crate::ui::label::Label::new(name.as_ptr(), hero::NAME_SZ, theme::TEXT_PRIMARY)
+                .bold()
+                .h(HAlign::Center)
+                .v(crate::ui::label::VAlign::CapTop)
+                .draw(p, Rect::new(r.cx() - 200.0, top, 400.0, 0.0));
         }
-        // The title holds the band the hero left, and it goes as soon as the FIRST block below the
-        // hero starts to TRAVEL — the scroll at which that block has reached its resting top margin
-        // and everything beyond is it moving up past the title (owner directive, 2026-09-18).
-        //
-        // The direction is the whole rule and both wrong answers have been on the panel. Fading on
-        // the APPROACH to that scroll (`(hide_at - scroll) / ramp`) never shows the title at all:
-        // the hero has barely finished fading when the ramp is already through. Hiding at a named
-        // ANCHOR two sections further down showed it for the whole cast row — with the wordmark
-        // drawn straight through the headshots' names, since the flow is not clipped and must not
-        // be: content stopping dead at a line is not what the page does anywhere else.
-        let (sections, n) = self.sections(Some(d));
-        let first_top = (n > 1)
-            .then(|| self.section_top_settled(sections[1], d, measure))
-            .unwrap_or(f32::MAX);
-        let alpha = compact_title_alpha(self.scroll.pos, first_top, hero_visible);
-        if alpha <= 0.01 {
-            return;
-        }
-        let band = crate::ui::hero_logo::band_h(LogoRung::Compact);
-        HeroLogo::new(d.sid.raw(), &d.rk, &d.title, LogoRung::Compact)
-            .align(HAlign::Center)
-            .draw(
-                p.alpha(alpha),
-                Rect::new(
-                    crate::ui::consts::MARGIN_X,
-                    crate::ui::detail_layout::COMPACT_TITLE_BOT - band,
-                    crate::ui::consts::SCR_W - 2.0 * crate::ui::consts::MARGIN_X,
-                    band,
-                ),
-                measure,
-            );
     }
 
     fn record_stops<H: ContentLike + crate::screens::registry::MetadataLike>(&self, f: &mut DrawFrame<'_, '_, H>) {
@@ -2898,17 +2668,6 @@ fn play_resume_ns(from_start: bool, resume_ms: i64, duration_ms: i64) -> i64 {
     }
 }
 
-/// Is it safe to sample the panel behind the hero buttons for the ambient control palette this
-/// frame (spec §14 phase 8)? Only once BOTH the route-level nav dip (`nav_page_alpha`,
-/// `DrawFrame::nav_page_alpha` — replaces the old live `ui::nav::page_alpha()` read) and the
-/// hero's own scroll fade have fully settled — a frame either is still fading through is not a
-/// stable backdrop to sample: `sample_control_ground` caches its result across frames
-/// (`CONTROL_GROUND_SAMPLE_EVERY`), so a sample taken mid-transition would be read back for
-/// several frames after the transition ends, on a real device screen this cannot be tested on.
-fn may_sample_control_ground(nav_page_alpha: f32, hero_alpha: f32) -> bool {
-    nav_page_alpha >= 0.999 && hero_alpha > 0.99
-}
-
 fn ease(value: &mut f32, target: f32, dt: f32) -> bool {
     let next = *value + (target - *value) * (dt / 0.35).clamp(0.0, 1.0);
     let moved = (next - *value).abs() > 0.001;
@@ -2916,44 +2675,49 @@ fn ease(value: &mut f32, target: f32, dt: f32) -> bool {
     moved
 }
 
-#[cfg(test)]
-mod may_sample_control_ground_tests {
-    use super::may_sample_control_ground;
 
-    #[test]
-    fn requires_both_the_route_dip_and_the_hero_fade_to_have_settled() {
-        assert!(may_sample_control_ground(1.0, 1.0), "fully settled: safe to sample");
-        assert!(!may_sample_control_ground(0.5, 1.0), "a route change in flight must not sample");
-        assert!(!may_sample_control_ground(1.0, 0.5), "a scrolling hero must not sample either");
-        assert!(!may_sample_control_ground(0.5, 0.5), "neither settled: must not sample");
-        // the exact thresholds this frame's caller passes in, at their boundary
-        assert!(!may_sample_control_ground(0.998, 1.0));
-        assert!(may_sample_control_ground(0.999, 1.0));
-        assert!(!may_sample_control_ground(1.0, 0.99));
-    }
-}
-
+/// The overview the hero shows: a show page whose Play starts its on-deck episode shows that
+/// episode's summary (the accent episode line above already names it), any other page the item's
+/// own; the catalog row's before the detail lands.
 fn hero_blurb<'a>(
     d: Option<&'a Detail>,
     row: Option<&'a crate::catalog_fetch::PmsMovie>,
-) -> (String, String) {
-    if let Some(d) = d {
-        if d.is_show {
-            if let Some(ep) = hero::hero_episode(d) {
-                let ordinal = crate::ui::fmt::episode_ordinal(ep.season, ep.index);
-                let lead = if ep.title.is_empty() {
-                    format!("{ordinal}: ")
-                } else {
-                    format!("{ordinal} \u{b7} {}: ", ep.title)
-                };
-                return (lead, ep.summary.clone());
-            }
-        }
-        return (String::new(), d.summary.clone());
+) -> &'a str {
+    match d {
+        Some(d) if d.is_show => hero::hero_episode(d).map_or(d.summary.as_str(), |ep| ep.summary.as_str()),
+        Some(d) => d.summary.as_str(),
+        None => row.map_or("", |m| m.summary.as_str()),
     }
-    (
-        String::new(),
-        row.map(|m| m.summary.clone()).unwrap_or_default(),
+}
+
+/// The Show more pill's label size (5: 17.6/600).
+const SHOW_MORE_SZ: std::os::raw::c_int = theme::size::lf::S18;
+
+/// The posterLeft title: 56/700, line-height 1.1, at most two lines in 60% of the column (5).
+fn hero_title<'a>(title: &'a str, measure: &'a dyn nj_machine::machine::Measure) -> crate::ui::text_view::TextView<'a> {
+    crate::ui::text_view::TextView::new(title, theme::size::lf::S56, theme::TEXT_PRIMARY)
+        .with_measure(measure)
+        .bold()
+        .leading(crate::ui::detail_layout::TITLE_LEAD)
+        .max_lines(crate::ui::detail_layout::TITLE_LINES)
+}
+
+/// The overview: 24px secondary, line-height 1.5, clamped to six lines (5).
+fn hero_overview<'a>(overview: &'a str, measure: &'a dyn nj_machine::machine::Measure) -> crate::ui::text_view::TextView<'a> {
+    crate::ui::text_view::TextView::new(overview, theme::size::lf::S24, theme::TEXT_SECONDARY)
+        .with_measure(measure)
+        .leading(crate::ui::detail_layout::OVERVIEW_LEAD)
+        .max_lines(crate::ui::detail_layout::OVERVIEW_LINES)
+}
+
+/// The Show more pill's frame: padding 6x12 around its label, 12 under the overview.
+fn show_more_rect(chain: crate::ui::detail_layout::HeroChain, measure: &dyn nj_machine::machine::Measure) -> Rect {
+    let w = measure.width(nj_platform::i18n::msg::details_show_more_c(), SHOW_MORE_SZ, true) + 24.0;
+    Rect::new(
+        crate::ui::detail_layout::INFO_X,
+        chain.more_y,
+        w,
+        crate::ui::widgets::LfPlate::Chip { focused: false }.h(),
     )
 }
 
@@ -2992,6 +2756,9 @@ mod rating_scale_tests {
         assert_eq!(score(RatingArt::TomatoFresh, 10.0), "100%");
     }
 }
+
+/// The detail page's score vocabulary, for the meta row.
+const SCORE_ART: hero::ScoreArt = hero::ScoreArt { scale: rating_scale, mark: rating_mark };
 
 fn rating_mark(art: crate::metadata::RatingArt) -> &'static [crate::ui::widgets::MarkLayer] {
     use crate::metadata::RatingArt as A;
@@ -3172,7 +2939,6 @@ impl DetailScreen {
     /// A key's move or a click takes the page and its rows back from the pointer.
     fn release_glides(&mut self) {
         self.free = false;
-        self.episode_free = false;
         for row in [&mut self.related, &mut self.collection, &mut self.extras, &mut self.cast] {
             row.unfree();
         }
@@ -3190,18 +2956,13 @@ impl DetailScreen {
             y >= top && y < top + self.block_h(sec, d, measure)
         }) else { return };
         if sec == SectionId::Related.raw() {
-            self.related.glide(dx, d.related.len(), &RowStyle::HOME);
+            self.related.glide(dx, d.related.len(), &section::POSTERS);
         } else if sec == SectionId::Collections.raw() {
-            self.collection.glide(dx, collection::len(d), &RowStyle::HOME);
+            self.collection.glide(dx, collection::len(d), &section::POSTERS);
         } else if sec == SectionId::Extras.raw() {
-            self.extras.glide(dx, extras::len(d), &RowStyle::EPISODE);
+            self.extras.glide(dx, extras::len(d), &section::STILLS);
         } else if sec == SectionId::Cast.raw() {
-            self.cast.glide(dx, d.credits_len(), &RowStyle::CAST);
-        } else if sec == SectionId::Episode.raw() {
-            let viewport = crate::ui::consts::SCR_W - 2.0 * crate::ui::consts::MARGIN_X;
-            let span = d.episodes.len() as f32 * (episodes::W + episodes::GAP) - episodes::GAP;
-            self.episode_scroll.jump((self.episode_scroll.pos + dx).clamp(0.0, (span - viewport).max(0.0)));
-            self.episode_free = true;
+            self.cast.glide(dx, d.credits_len(), &section::POSTERS);
         }
     }
 
@@ -3219,7 +2980,12 @@ impl DetailScreen {
         if self.return_waiting(meta) { return; }
         let Some(located) = focus.filter(|key| key.entry == self.entry).and_then(|key| self.locate(key.elem, meta)) else { return };
         let Some(detail) = self.detail(meta) else { return };
-        self.scroll_target = if located.section() == 0 { 0.0 } else {
+        if let Located::Episode(i, _) = located {
+            let top = self.section_top_settled(located.section(), detail, measure);
+            self.scroll_target = (episodes::row_top(i, top) - crate::ui::detail_layout::TOP_MARGIN).max(0.0);
+            return;
+        }
+        self.scroll_target = if located.section() == 0 || located == Located::About(0) { 0.0 } else {
             (self.section_top_settled(located.section(), detail, measure)
                 - crate::ui::detail_layout::TOP_MARGIN)
                 .max(0.0)
@@ -3319,17 +3085,6 @@ impl DetailScreen {
         self.ctl_pop.step(hero_index, dt);
         self.season_pop
             .step(matches!(focused, Some(Located::Season(_))).then_some(0), dt);
-        let disc = match focused {
-            Some(Located::Hero(c)) => hero::disc_verb(c, self.named_show(meta)).map(|(i, _)| i),
-            _ => None,
-        };
-        for (i, spring) in self.disc_unfurl.iter_mut().enumerate() {
-            spring.step(
-                f32::from(disc == Some(i)),
-                crate::ui::widgets::K_DISC_UNFURL,
-                dt,
-            );
-        }
 
         let episode_focus = match focused {
             Some(Located::Episode(i, episodes::Row::Still)) => Some(i),
@@ -3338,7 +3093,7 @@ impl DetailScreen {
         for (i, spring) in self.episode_scale.iter_mut().enumerate() {
             spring.step(
                 if episode_focus == Some(i) {
-                    crate::ui::theme::EP_CARD_FOCUS_SCALE
+                    episodes::FOCUS_SCALE
                 } else {
                     1.0
                 },
@@ -3368,40 +3123,26 @@ impl DetailScreen {
                 _ => None,
             };
             self.related
-                .update(d.related.len(), related_focus, &RowStyle::HOME, dt);
+                .update(d.related.len(), related_focus, &section::POSTERS, dt);
             let collection_focus = match focused {
                 Some(Located::Collection(i)) => Some(i),
                 _ => None,
             };
             self.collection
-                .update(collection::len(d), collection_focus, &RowStyle::HOME, dt);
+                .update(collection::len(d), collection_focus, &section::POSTERS, dt);
             let extras_focus = match focused {
                 Some(Located::Extras(i)) => Some(i),
                 _ => None,
             };
             self.extras
-                .update(extras::len(d), extras_focus, &RowStyle::EPISODE, dt);
+                .update(extras::len(d), extras_focus, &section::STILLS, dt);
             let cast_focus = match focused {
                 Some(Located::Cast(i)) => Some(i),
                 _ => None,
             };
             self.cast
-                .update(d.credits_len(), cast_focus, &RowStyle::CAST, dt);
+                .update(d.credits_len(), cast_focus, &section::POSTERS, dt);
 
-            if let Some(i) = match focused {
-                Some(Located::Episode(i, _)) => Some(i),
-                _ => None,
-            }.filter(|_| !self.episode_free) {
-                let target = card_row::scroll_into_view(
-                    self.episode_scroll.pos,
-                    i,
-                    d.episodes.len(),
-                    episodes::W,
-                    episodes::GAP,
-                    crate::ui::consts::SCR_W - 2.0 * crate::ui::consts::MARGIN_X,
-                );
-                self.episode_scroll.step(target, K_STRIP_SCROLL, dt);
-            }
             let tab_focus = match focused {
                 Some(Located::Season(i)) => Some(i),
                 _ => None,
@@ -3417,12 +3158,6 @@ impl DetailScreen {
                 tab_focus,
                 dt,
             );
-            let target = if d.has_blur {
-                AmbientWash::keyed(d.blur, [AmbientWash::GROUND_W; 4])
-            } else {
-                [theme::SURFACE_APP; 4]
-            };
-            self.ground.step(target, AmbientWash::K, dt);
         }
 
         self.scroll.step(self.scroll_target, K_SCROLL, dt);
@@ -3456,9 +3191,7 @@ impl DetailScreen {
         }
 
         let moving = self.scroll.vel.abs() > 0.01
-            || self.episode_scroll.vel.abs() > 0.01
-            || self.tab_scroll.vel.abs() > 0.01
-            || self.disc_unfurl.iter().any(|s| s.vel.abs() > 0.01);
+            || self.tab_scroll.vel.abs() > 0.01;
         if !meta.detail_loading()
             && !meta.season_loading()
             && focused.is_some_and(|located| self.return_pending && !self.return_waiting(meta) || self.restore_target_matches(located, meta))
@@ -3536,13 +3269,9 @@ impl DetailScreen {
         // Synopsis stays through background autoplay and only fades once full-trailer mode takes
         // the whole page off the screen.
         let synopsis_target = if full_trailer { 0.0 } else { 1.0 };
-        // The scrim/wedge strength: `view.field` normally (1.0 idle, `PREVIEW_FIELD` once a
-        // picture is up, protecting the logo+synopsis), and NOTHING in full-trailer mode — the
-        // page keeps no ink up there to protect, and the trailer's own transport brings the only
-        // scrim the state needs (`player_hud::draw_scrim`, at the bottom, under the playbar).
-        let field_target = if full_trailer { 0.0 } else { view.field };
-        // The bottom base scrim goes with it, for the same reason
-        // (`docs/trailer-ux-plan.md` §8.3).
+        // The backdrop ramp leaves in full-trailer mode: the page keeps no ink to protect, and the
+        // trailer's own transport brings the only scrim the state needs (`docs/trailer-ux-plan.md`
+        // §8.3).
         let base_scrim_target = if full_trailer { 0.0 } else { 1.0 };
         // The scrub gesture's own per-frame stepping: the accelerating hold-ramp advance plus its
         // lost-keyup safety net (`step_scrub_hold`), and the tap-commit debounce
@@ -3572,7 +3301,6 @@ impl DetailScreen {
             | ease(&mut self.preview_prose, view.prose, dt)
             | ease(&mut self.preview_synopsis, synopsis_target, dt)
             | ease(&mut self.preview_chrome, chrome_target, dt)
-            | ease(&mut self.preview_field, field_target, dt)
             | ease(&mut self.preview_base_scrim, base_scrim_target, dt)
         {
             fx.note(PresentEvent::Motion);
@@ -3755,7 +3483,7 @@ impl DetailScreen {
     }
 
     fn hero_set(&self, meta: crate::metadata::MetadataView<'_>) -> hero::HeroSet {
-        let (restart, mark, version, tracks) = self
+        let (restart, mark, version, tracks, favorite) = self
             .detail(meta)
             .map(|d| {
                 (
@@ -3763,9 +3491,10 @@ impl DetailScreen {
                     hero::hero_mark(d),
                     d.versions.len() > 1,
                     d.has_track_choice(),
+                    crate::catalog::client_for(d.sid).is_some_and(|c| c.keeps_favorites()).then_some(d.favorite),
                 )
             })
-            .unwrap_or((false, PosterMark::None, false, false));
+            .unwrap_or((false, PosterMark::None, false, false, None));
         // The preview path replaced the disc. Play Trailer stays in the item menu. (Confirmed as
         // the shipped decision by `screens::detail::tests` — see
         // `a_movie_trailer_disc_plays_the_extra_from_the_start` et al., which explicitly assert
@@ -3778,6 +3507,7 @@ impl DetailScreen {
             tracks,
             alt: self.alt_available(meta),
             mark,
+            favorite,
         }
     }
 
@@ -3941,14 +3671,8 @@ impl DetailScreen {
             hero::HeroCtl::Alt | hero::HeroCtl::Version | hero::HeroCtl::Tracks => {
                 let set = self.hero_set(meta);
                 if let Some(i) = hero::index_of(set, ctl) {
-                    let widths = hero::hero_widths(
-                        cx.measure,
-                        set,
-                        set.restart,
-                        self.disc_unfurl.map(|s| s.pos),
-                        self.named_show(meta),
-                    );
-                    let mut rect = hero::hero_btn_rect_at(set, i, self.hero_chain(measure, meta).btn_y, widths);
+                    let pill = hero::hero_pill_w(cx.measure, set.restart);
+                    let mut rect = hero::hero_btn_rect_at(set, i, self.hero_chain(measure, meta).btn_y, pill);
                     rect.y -= self.scroll.pos;
                     // The ANCHOR travels on the argument, bit for bit, so the surface places
                     // itself off the pill without the page or a static holding a `Rect` for it.
@@ -3959,6 +3683,25 @@ impl DetailScreen {
                         _ => ContentPanel::TrackChoice { anchor },
                     };
                     self.content(fx, ContentReq::Panel(panel));
+                }
+            }
+            hero::HeroCtl::Favorite | hero::HeroCtl::Unfavorite => {
+                if let Some(d) = self.detail(meta) {
+                    fx.push(Fx::App(AppFx::Store(
+                        StoreId::ViewState,
+                        StoreCmd::ViewState(ViewStateCmd::Request {
+                            sid: d.sid,
+                            rk: d.rk.clone(),
+                            write: crate::viewstate::Write::Favorite(ctl == hero::HeroCtl::Favorite),
+                            // Re-read on landing: a refused write puts the server's answer back.
+                            detail: Some(crate::stores::viewstate::DetailRefresh {
+                                sid: d.sid,
+                                rk: d.rk.clone(),
+                                keep: None,
+                            }),
+                            guid: d.guid.clone(),
+                        }),
+                    )));
                 }
             }
             hero::HeroCtl::MarkWatched | hero::HeroCtl::MarkUnwatched => {
@@ -4119,15 +3862,9 @@ fn preview_punch_through(picture: bool) -> bool {
     picture
 }
 
-/// The keyed ambient wash is an opaque stand-in for the clear. Over a live plane it is the same
-/// sheet as an opaque clear: skip it and let the still fade over punch-through alpha instead.
-fn keyed_ground_over_plane(picture: bool, texture: u32, art_alpha: f32, ground_flat: bool) -> bool {
-    !picture && (texture == 0 || art_alpha < 0.99) && !ground_flat
-}
-
 #[cfg(test)]
 mod preview_plane_tests {
-    use super::{keyed_ground_over_plane, preview_punch_through};
+    use super::preview_punch_through;
 
     /// `view.field` (the player's `PREVIEW_FIELD`) is what the hero scrim is multiplied by, and the
     /// scrim curve's own bound is `ui::landing_hero::PREVIEW_FIELD`. Neither layer may name the
@@ -4153,31 +3890,4 @@ mod preview_plane_tests {
         );
     }
 
-    #[test]
-    fn a_preview_picture_does_not_paint_an_opaque_ground_over_the_plane() {
-        assert!(
-            !keyed_ground_over_plane(true, 0, 0.0, false),
-            "missing art over a live plane must not lay an opaque wash"
-        );
-        assert!(
-            !keyed_ground_over_plane(true, 1, 0.5, false),
-            "fading art over a live plane must not lay an opaque wash under the fade"
-        );
-        assert!(
-            keyed_ground_over_plane(false, 0, 1.0, false),
-            "a still page with no art still needs the keyed wash"
-        );
-        assert!(
-            !keyed_ground_over_plane(false, 0, 1.0, true),
-            "a wash that has resolved to the clear is skipped"
-        );
-        assert!(
-            keyed_ground_over_plane(false, 1, 0.5, false),
-            "fading art on a still page still shows the wash"
-        );
-        assert!(
-            !keyed_ground_over_plane(false, 1, 1.0, false),
-            "opaque art covers the wash"
-        );
-    }
 }

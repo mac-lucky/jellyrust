@@ -22,20 +22,20 @@ fn an_all_grid_tile_and_its_rows_animate_back_when_focus_leaves() {
     let mut page = fixture.screen();
     page.initial = false;
     let mut engine = FocusEngine::new();
-    let start = page.key(page.pair.detail.elem_at(12).unwrap());
+    let start = page.key(page.pair.detail.elem_at(2 * COLS).unwrap());
     engine.set(OWNER, start, Some(page.pair.groups_config().detail), By::Restore);
     deliver(&mut page, &mut engine, &fixture, ScreenEvent::FocusMoved { from: None, to: start, by: By::Restore });
     settle(&mut page, &mut engine, &fixture, 0);
-    let rest = page.pair.detail.rect_at(13, false, 1.0).w;
-    let full = page.pair.detail.rect_at(12, true, 1.0).w;
+    let rest = page.pair.detail.rect_at(2 * COLS + 1, false, 1.0).w;
+    let full = page.pair.detail.rect_at(2 * COLS, true, 1.0).w;
     assert!(full > rest + 1.0, "the settled focused tile is lifted");
 
     direction(&mut page, &mut engine, &fixture, Dir::Right);
     frame(&mut page, &mut engine, &fixture, 2000);
-    let leaving = page.pair.detail.rect_at(12, false, 1.0).w;
+    let leaving = page.pair.detail.rect_at(2 * COLS, false, 1.0).w;
     assert!(strictly_between(leaving, rest, full), "one frame after RIGHT the old tile is mid-return: {leaving}");
     settle(&mut page, &mut engine, &fixture, 2016);
-    assert_eq!(page.pair.detail.rect_at(12, false, 1.0).w, rest);
+    assert_eq!(page.pair.detail.rect_at(2 * COLS, false, 1.0).w, rest);
 
     let below = page.layout.row_y(4, page.scroll.pos);
     direction(&mut page, &mut engine, &fixture, Dir::Down);

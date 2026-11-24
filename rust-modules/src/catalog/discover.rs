@@ -1,6 +1,10 @@
 //! `discover.provider.plex.tv` — the plex.tv **metadata provider**, i.e. the biography half of a
 //! person that the local PMS simply does not have.
 //!
+//! litefin: never dialled (`account.rs`'s `litefin_never_dials_plex_tv`). The two calls below are
+//! settled stubs, their request and envelope code is gone, and the types they answer in stay as the
+//! shapes the person and filmography pages read. The rest of this doc is upstream's record.
+//!
 //! This is a THIRD service, beside the PMS `Client` (raw socket, local, `library.rs`) and the
 //! plex.tv account API (`account.rs`). It shares the account API's transport and identity headers
 //! exactly — same [`nj_net::net`] libcurl HTTPS (DNS + TLS, which the raw PMS socket has neither of),
@@ -65,8 +69,6 @@ use super::account::AccountClient;
 use super::models::de_i64;
 use serde::Deserialize;
 
-const DISCOVER: &str = "https://discover.provider.plex.tv";
-
 impl AccountClient {
     /// GET {DISCOVER}/library/people/{guid} — one person's biography record.
     ///
@@ -78,14 +80,10 @@ impl AccountClient {
     /// 200 with an empty container, and that comes back here as a **default (all-empty) profile**,
     /// so the caller settles on it, stops retrying, and the page degrades to portrait + name.
     pub fn person_profile(&self, guid: &str) -> Option<PersonProfile> {
-        let env: PersonEnvelope = self.get(&format!("{DISCOVER}/library/people/{guid}"))?;
-        Some(
-            env.media_container
-                .metadata
-                .into_iter()
-                .next()
-                .unwrap_or_default(),
-        )
+        // litefin: plex.tv's metadata provider is a third party this Jellyfin fork never asks. The
+        // settled "never heard of them" answer: the page degrades to portrait + name.
+        let _ = (self, guid);
+        Some(PersonProfile::default())
     }
 
     /// GET {DISCOVER}/library/people/{guid}/credits — the person's FILMOGRAPHY, as the provider's
@@ -100,51 +98,13 @@ impl AccountClient {
     /// department: the provider sends every group in one body, and the screen's tabs are those
     /// groups.
     pub fn person_credits(&self, guid: &str) -> Option<Vec<CreditGroup>> {
-        let env: CreditsEnvelope =
-            self.get(&format!("{DISCOVER}/library/people/{guid}/credits"))?;
-        // **A body that carried NO recognized container key is a FAILURE, not an empty career** —
-        // and keeping those apart is the whole reason [`CreditsContainer`]'s fields are `Option`
-        // rather than `#[serde(default)]` vectors.
-        //
-        // Every field here defaults, so an unexpected or drifted shape deserializes perfectly into
-        // an empty vector. Returned as `Some(vec![])` that is indistinguishable from "plex.tv has
-        // no credits for them": the store marks the person `credited`, stops retrying, and the
-        // Filmography entry never appears — a silent, permanent, unreportable wrong answer on a
-        // schema this repo has never measured. Answering `None` instead puts it on the ONE path the
-        // crate already has for a body it cannot read: the caller backs off and retries, exactly as
-        // it does for a transport error, and the retries are visible in the log. That is the same
-        // bargain [`AccountClient::person_profile`] strikes for an unparseable body, and it is the
-        // conservative direction — a page that keeps asking is recoverable, a page that has decided
-        // the person has no career is not.
-        let Some(groups) = env.media_container.credit_group else {
-            nj_base::eventlog::log(&format!(
-                "person: credits guid={guid} — 200 with no CreditGroup container; treating as a \
-                 failure, not an empty career"
-            ));
-            return None;
-        };
-        nj_base::eventlog::log(&format!(
-            "person: credits groups={} rows={}",
-            groups.len(),
-            groups.iter().map(|g| g.credits.len()).sum::<usize>()
-        ));
-        Some(groups)
+        // litefin: never asked either (see `person_profile`); "no credits" settles the page.
+        let _ = (self, guid);
+        Some(Vec::new())
     }
 }
 
 // ---- serde DTOs (only the fields the page consumes; all optional to tolerate shape drift) ----
-
-#[derive(Deserialize, Default)]
-struct PersonEnvelope {
-    #[serde(rename = "MediaContainer", default)]
-    media_container: PersonContainer,
-}
-
-#[derive(Deserialize, Default)]
-struct PersonContainer {
-    #[serde(rename = "Metadata", default)]
-    metadata: Vec<PersonProfile>,
-}
 
 /// One person as plex.tv knows them. Every field is optional: a living person has no
 /// [`died_at`](PersonProfile::died_at), a person plex.tv has no record for has nothing at all, and
@@ -184,6 +144,10 @@ pub struct PersonProfile {
     /// (via a `count` we deliberately do not model yet) the counts its Filmography tabs show.
     #[serde(rename = "CreditType", default)]
     pub credit_types: Vec<CreditType>,
+    /// The viewer's favourite flag for this person: Jellyfin's `UserData.IsFavorite`. `None` from
+    /// a source that keeps no favourites (plex.tv), which draws no heart.
+    #[serde(default)]
+    pub favorite: Option<bool>,
 }
 
 /// One department a person is credited in. `title` is the display form — except when the provider
@@ -200,26 +164,6 @@ pub struct CreditType {
 }
 
 // ---- the filmography ---------------------------------------------------------------------------
-
-#[derive(Deserialize, Default)]
-struct CreditsEnvelope {
-    #[serde(rename = "MediaContainer", default)]
-    media_container: CreditsContainer,
-}
-
-/// **One key, measured** — `MediaContainer.CreditGroup` (device log 2026-09-06,
-/// `person: credits key=CreditGroup groups=3 rows=154`). It was modelled as two `Option` fields,
-/// `CreditGroup` and `Metadata`, precisely so the first real response could say which; it did, and
-/// the loser is gone, as that note promised.
-///
-/// It stays an `Option` rather than a `#[serde(default)]` vector for the half of the reasoning
-/// that was never about the spelling: `None` vs `Some(vec![])` is what lets
-/// [`AccountClient::person_credits`] tell a body it could not read from a person with no credits.
-#[derive(Deserialize, Default)]
-struct CreditsContainer {
-    #[serde(rename = "CreditGroup")]
-    credit_group: Option<Vec<CreditGroup>>,
-}
 
 /// One DEPARTMENT of a person's filmography — `actor`, `appeared`, `other`, `writer`, … in the
 /// provider's own order, which is most-credits-first.

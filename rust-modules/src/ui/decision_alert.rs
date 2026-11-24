@@ -485,7 +485,8 @@ mod tests {
         let locale = nj_platform::i18n::LocaleContext::resolve(nj_platform::i18n::Preference::Be, None, None, None, None);
         let question = nj_platform::i18n::msg::settings_consent_delete_question_in(&locale);
         let body = nj_platform::i18n::msg::settings_consent_delete_scope_in(&locale);
-        assert!(body.contains("сервер Jellyfin") && body.contains("Sentry") && body.contains("PostHog"));
+        // telemetry is off in this fork: the scope names the server and no reporting service
+        assert!(body.contains("сервер Jellyfin") && !body.contains("Sentry") && !body.contains("PostHog"));
         let question_view = DecisionAlert::question_view(question).with_measure(&measure);
         let body_view = DecisionAlert::body_view(body).with_measure(&measure);
         assert!(!question_view.truncates(BODY_W));

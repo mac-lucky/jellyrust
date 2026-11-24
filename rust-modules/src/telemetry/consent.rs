@@ -394,6 +394,9 @@ pub(crate) fn report_permission(c: &Consent, scope: u32) -> Permission {
 /// [`report_permission`] over the published snapshot. Nothing published yet is `NotDetermined`:
 /// the only thing that answer can lead to is an offer, and an offer sends nothing by itself.
 pub(crate) fn report_permission_now(scope: u32) -> Permission {
+    if !endpoint_built() {
+        return Permission::Declined; // nothing automatic and no offer: nowhere to send one
+    }
     current().map_or(Permission::NotDetermined, |c| report_permission(&c, scope))
 }
 
@@ -425,16 +428,53 @@ pub(crate) fn current() -> Option<Consent> {
     CURRENT.read().ok().and_then(|g| g.clone())
 }
 
+/// litefin: this fork compiles in no endpoint (`sender::configured`, `docs/litefin-fork.md`), so
+/// no stored decision opens a producer: a consent file inherited from stock Native Jelly (same app
+/// id, same path) saying yes to both still collects, spools and reads nothing. The two gates
+/// below, the crash-report id and the standing-report permission all ask this first.
+fn endpoint_built() -> bool {
+    #[cfg(test)]
+    if AS_IF_CONFIGURED.with(std::cell::Cell::get) {
+        return true;
+    }
+    super::sender::configured()
+}
+
+#[cfg(test)]
+thread_local! {
+    static AS_IF_CONFIGURED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test-only: a configured build's gates for this thread, until the guard drops, so upstream's
+/// tests of the consent machinery still run. Without it the suite sees this fork's real gate.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn as_if_configured() -> AsIfConfigured {
+    AS_IF_CONFIGURED.with(|c| c.set(true));
+    AsIfConfigured
+}
+
+#[cfg(test)]
+pub(crate) struct AsIfConfigured;
+
+#[cfg(test)]
+impl Drop for AsIfConfigured {
+    fn drop(&mut self) {
+        AS_IF_CONFIGURED.with(|c| c.set(false));
+    }
+}
+
 /// May a USAGE event be reported? Read from the snapshot, so this is safe to call per event.
 ///
 /// **Fails closed.** No snapshot installed, or a poisoned lock, both answer `false` — a build that
 /// has not loaded a decision has not been given one, and the only safe reading of "I do not know"
 /// here is no.
 pub(crate) fn allows_usage() -> bool {
-    CURRENT
-        .read()
-        .map(|g| g.as_ref().is_some_and(|c| c.answered() && c.usage))
-        .unwrap_or(false)
+    endpoint_built()
+        && CURRENT
+            .read()
+            .map(|g| g.as_ref().is_some_and(|c| c.answered() && c.usage))
+            .unwrap_or(false)
 }
 
 /// May an ERROR report be sent? The crash channel's twin of [`allows_usage`], failing closed for
@@ -442,10 +482,11 @@ pub(crate) fn allows_usage() -> bool {
 /// crash log at all) and the sparse in-memory playback-error trace. Consent gates collection, not
 /// just the send: a television whose owner said no is neither scanned for faults nor traced.
 pub(crate) fn allows_errors() -> bool {
-    CURRENT
-        .read()
-        .map(|g| g.as_ref().is_some_and(|c| c.answered() && c.errors))
-        .unwrap_or(false)
+    endpoint_built()
+        && CURRENT
+            .read()
+            .map(|g| g.as_ref().is_some_and(|c| c.answered() && c.errors))
+            .unwrap_or(false)
 }
 
 /// The crash-report identifier every Sentry-bound report carries, or `None` when the channel is
@@ -454,6 +495,9 @@ pub(crate) fn allows_errors() -> bool {
 /// but a producer must READ it rather than assume it: the failure would be a report carrying a
 /// fabricated or empty id, which is the one outcome this field exists to make impossible.
 pub(crate) fn errors_id() -> Option<String> {
+    if !endpoint_built() {
+        return None;
+    }
     CURRENT.read().ok().and_then(|g| {
         g.as_ref()
             .filter(|c| c.answered() && c.errors)
@@ -573,6 +617,7 @@ mod tests {
 
     #[test]
     fn report_permission_now_reads_the_snapshot() {
+        let _endpoint = as_if_configured(); // upstream's configured-build gates
         let _g = nj_base::testlock::serial();
         let saved = CURRENT.read().ok().and_then(|g| g.clone());
         if let Ok(mut g) = CURRENT.write() {
@@ -792,6 +837,7 @@ mod tests {
     /// stale-policy yes, or an unanswered decision, yields no id however the field is set.
     #[test]
     fn the_errors_id_accessor_fails_closed_with_the_gate() {
+        let _endpoint = as_if_configured(); // upstream's configured-build gates
         let _g = nj_base::testlock::serial();
         let saved = CURRENT.read().ok().and_then(|g| g.clone());
         install(Consent {
@@ -857,6 +903,7 @@ mod tests {
     /// The event path fails CLOSED: with nothing installed, nothing is allowed.
     #[test]
     fn the_event_path_fails_closed() {
+        let _endpoint = as_if_configured(); // upstream's configured-build gates
         let _g = nj_base::testlock::serial();
         let saved = CURRENT.read().ok().and_then(|g| g.clone());
 

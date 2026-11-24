@@ -470,7 +470,7 @@ pub(crate) struct DeepBench {
     pub(crate) depth: u32,
     pub(crate) rk: String,
     /// The push half's rotation — **Detail and Person only.** `Library`, `PushBench`'s third leg,
-    /// is deliberately excluded: it opens through `app::bridge::nav_tab` → `nav_peer` →
+    /// is deliberately excluded: it opens through `app::bridge::open_library` → `nav_peer` →
     /// `NavOp::SelectTab`, whose `NavStack::apply` arm retires EVERY entry above the root and
     /// mints at most one new one over it — a peer swap, not a stack push (`ui/containers/stack.rs`).
     /// Rotating it into a walk that is supposed to grow by one entry every step would not deepen

@@ -1,17 +1,18 @@
 //! The **Skip Intro / Skip Credits** control. While the playhead sits inside one of the playing
 //! leaf's server markers (`metadata::playing_markers`, fetched with `?includeMarkers=1`) this
-//! button TAKES THE PLACE of the transport's Subtitles/Audio discs — same row, same right edge,
-//! same height — and the discs return the moment the segment ends.
+//! button TAKES THE CONTROL ROW: it floats where Litefin's skip-intro widget does, 6 % in from the
+//! left with its foot 28 % up the panel (`plugins/installed/skip-intro/skip-intro.css`), styled as
+//! the Up Next card's buttons (`docs/litefin-look.md` 10), and the OSD buttons return the moment the
+//! segment ends.
 //!
-//! Replacing them rather than joining them is the design call: one wide unmissable target in the
-//! spot the eye already goes for transport controls. The cost is that CC/Audio are unreachable for
-//! the length of the segment, and that the button only exists while the HUD is up — which is why
-//! `app.rs` RAISES the HUD once when a segment begins and parks focus here, so a bare OK still
-//! skips in one press instead of three.
+//! It owning the row is the design call: one target the ring is already on. The cost is that the
+//! OSD buttons are unreachable for the length of the segment, and that the button only exists while
+//! the HUD is up — which is why `app.rs` RAISES the HUD once when a segment begins and parks focus
+//! here, so a bare OK still skips in one press instead of three.
 #![allow(dead_code)]
 use crate::metadata::{self, MarkerKind};
-use crate::ui::theme;
-use crate::ui::widgets::{Button, ControlGround};
+use crate::ui::consts::{SCR_H, SCR_W};
+use crate::ui::widgets::OsdPill;
 use crate::ui::{Env, Painter, Rect, View};
 use std::ffi::CString;
 
@@ -70,31 +71,21 @@ pub(crate) fn prompt_for(m: metadata::Marker) -> Prompt {
     }
 }
 
-/// The button's rect — the SHARED control-row slot, so it and Up Next cannot drift apart.
-///
-/// `row` is the player instance's own [`crate::appkit::player_hud::TransportRow`] (restructure phase
-/// 9): it carries both the label-width memo this measurement is cached in and the control row's
-/// focus springs. It was a module `static mut` on the other side of `ctrl_slot` until then.
-pub(crate) fn rect(row: &mut crate::appkit::player_hud::TransportRow, pr: Prompt, measure: &dyn nj_machine::machine::Measure) -> Rect {
-    crate::appkit::player_hud::ctrl_slot(row, pr.label(), measure)
+/// The button's rect: left-anchored at 6 %, its foot at 72 % of the panel height.
+pub(crate) fn rect(pr: Prompt, measure: &dyn nj_machine::machine::Measure) -> Rect {
+    let (w, h) = OsdPill::size(pr.label(), measure);
+    Rect::new(SCR_W * 0.06, SCR_H * 0.72 - h, w, h)
 }
 
-/// Draw the button in the control row. Called by `player_hud` INSTEAD of the two discs.
-pub(crate) fn draw(row: &mut crate::appkit::player_hud::TransportRow, p: Painter, pr: Prompt, focused: bool, measure: &dyn nj_machine::machine::Measure) {
+/// Draw the button. Called by `player_hud` INSTEAD of the OSD buttons. Its slot's only item, so
+/// index 0 — the pop is the control ROW's ([`crate::appkit::player_hud::TransportRow::pop`]).
+pub(crate) fn draw(row: &crate::appkit::player_hud::TransportRow, p: Painter, pr: Prompt, focused: bool, measure: &dyn nj_machine::machine::Measure) {
     let Ok(label) = CString::new(pr.label()) else {
         return;
     };
-    // No leading icon: the label alone carries it, and a chevron on a control that does not
-    // navigate anywhere was reading as "more" rather than "skip".
-    // Its slot's only item, so index 0 — the pop is the control ROW's (`TransportRow::scale`),
-    // shared with the transport discs this pill stands in for.
-    let slot = rect(row, pr, measure);
-    let pop = row.scale(0);
-    Button::new(label.as_ptr(), theme::size::BODY, slot)
-        .scale(pop)
+    OsdPill::new(label.as_ptr(), rect(pr, measure))
+        .primary(true)
         .focused(focused)
-        // It stands in the transport discs' own slot, over the video plane and on the HUD's ramp,
-        // so it wears their ground as well as their pop — see `ControlGround`.
-        .ground(ControlGround::Unkeyed)
+        .scale(row.pop(0, OsdPill::FOCUS_SCALE))
         .draw(&Env::inert(), p);
 }

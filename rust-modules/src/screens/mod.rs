@@ -21,6 +21,7 @@ pub(crate) mod track_choice;
 pub(crate) mod consent;
 pub(crate) mod collection;
 pub(crate) mod detail;
+pub(crate) mod favorites;
 pub(crate) mod person;
 pub(crate) mod person_bio;
 pub(crate) mod filmography;

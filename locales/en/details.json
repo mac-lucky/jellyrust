@@ -1,0 +1,82 @@
+{
+  "details.runtime_hm": {
+    "value": "{hours}h {minutes}m",
+    "args": {
+      "hours": "i64",
+      "minutes": "i64"
+    },
+    "description": "details runtime_hm: a runtime of an hour or more, Litefin's '2h 37m'"
+  },
+  "details.runtime_m": {
+    "value": "{minutes}m",
+    "args": {
+      "minutes": "i64"
+    },
+    "description": "details runtime_m: a runtime under an hour, Litefin's '52m'"
+  },
+  "details.ends_at": {
+    "value": "Ends at {time}",
+    "args": {
+      "time": "str"
+    },
+    "description": "details ends_at: when the item will end if played now, a 24-hour HH:MM clock"
+  },
+  "details.aired": {
+    "value": "Aired {date}",
+    "args": {
+      "date": "str"
+    },
+    "description": "details aired: the date the item premiered or was first broadcast"
+  },
+  "details.show_more": {
+    "value": "Show more",
+    "description": "details show_more: the pill under a clamped overview that opens the full record"
+  },
+  "details.genres": {
+    "value": "Genres",
+    "description": "details genres: label of the rich-metadata row listing the item's genres"
+  },
+  "details.directors": {
+    "value": "Directors",
+    "description": "details directors: label of the rich-metadata row listing the directors"
+  },
+  "details.writers": {
+    "value": "Writers",
+    "description": "details writers: label of the rich-metadata row listing the writers"
+  },
+  "details.audio": {
+    "value": "Audio",
+    "description": "details audio: label of the rich-metadata row listing the audio languages"
+  },
+  "details.subtitles": {
+    "value": "Subtitles",
+    "description": "details subtitles: label of the rich-metadata row listing the subtitle languages"
+  },
+  "details.seasons": {
+    "value": "Seasons",
+    "description": "details seasons: heading of the show page's season selector"
+  },
+  "details.special_features": {
+    "value": "Special Features",
+    "description": "details special_features: heading of the extras row (trailers, featurettes)"
+  },
+  "details.more_like_this": {
+    "value": "More Like This",
+    "description": "details more_like_this: heading of the row of similar titles"
+  },
+  "details.added": {
+    "value": "Added {date}",
+    "args": {
+      "date": "str"
+    },
+    "description": "details added: the date the item joined the library, beside the aired date in the meta row"
+  },
+  "details.studios": {
+    "value": "Studios",
+    "description": "details studios: label of the rich-metadata row listing the item's studios"
+  },
+  "details.favorite": {
+    "value": "Favorite",
+    "description": "details favorite: the name by the heart action on the detail page (marks or unmarks the item as a favourite) and on the person page (the person)"
+  }
+}

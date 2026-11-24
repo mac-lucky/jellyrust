@@ -614,23 +614,6 @@ impl Dial {
 /// fetch plus dither per fragment — which is exactly what a full-screen backdrop blur is.
 const NAV_BLEED: f32 = 80.0;
 
-/// The tab track's rest geometry, as a stand-in for the real strip.
-///
-/// The real one is `widgets::draw_tab_row`'s fixed four-destination strip, drawn INSIDE the page —
-/// i.e. underneath anything this module composites. A representative capsule at its true y and
-/// height is what makes "the bar's glass
-/// on top of the blur" a thing that can be both measured and looked at.
-fn nav_capsule() -> Rect {
-    let w = 1140.0;
-    let h = crate::ui::widgets::TAB_PILL_H + 2.0 * crate::ui::widgets::TAB_TRACK_PAD;
-    Rect::new(
-        (SCR_W - w) * 0.5,
-        crate::ui::widgets::TOP_BAR_Y - crate::ui::widgets::TAB_TRACK_PAD,
-        w,
-        h,
-    )
-}
-
 impl Dial {
     /// Draw the blurred route transition, if one is in flight. Returns whether it drew.
     pub(crate) fn draw_nav_blur(&mut self) -> bool {
@@ -673,23 +656,6 @@ impl Dial {
         // the whole chain again — which is precisely the cost a second cache would have.
         if self.navblur >= 2 {
             crate::ui::popover::host::blur_invalidate();
-        }
-        let cap = nav_capsule();
-        if p.backdrop_blur(
-            cap,
-            0.0,
-            cap.h * 0.5,
-            [1.0, 1.0, 1.0, amount],
-            nj_gfx::gfx::GlassRim::Standing,
-            nj_gfx::gfx::GlassFace::NONE,
-            theme::Material::Regular.deep(),
-        ) {
-            p.alpha(amount).rect_sheened(
-                cap,
-                cap.h * 0.5,
-                theme::TAB_GLASS_TOP,
-                theme::TAB_GLASS_BOT,
-            );
         }
         drew
     }
@@ -883,22 +849,5 @@ mod tests {
                 "{bad:?} must not arm a mode nobody asked for"
             );
         }
-    }
-
-    #[test]
-    fn the_transition_capsule_sits_on_the_real_tab_track_line() {
-        let c = nav_capsule();
-        assert_eq!(
-            c.y,
-            crate::ui::widgets::TOP_BAR_Y - crate::ui::widgets::TAB_TRACK_PAD
-        );
-        assert_eq!(
-            c.h,
-            crate::ui::widgets::TAB_PILL_H + 2.0 * crate::ui::widgets::TAB_TRACK_PAD
-        );
-        assert!(
-            c.x > 0.0 && c.x + c.w < SCR_W,
-            "the strip is inset from both edges"
-        );
     }
 }

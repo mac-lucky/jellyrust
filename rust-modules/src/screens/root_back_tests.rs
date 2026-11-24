@@ -196,7 +196,7 @@ fn every_row_fits_in_every_language() {
         let tag = language.tag();
         for choice in [RootBack::PlatformHome, RootBack::Exit, RootBack::LaunchApp("tld.my.launcher".into())] {
             let _saved = Saved::set(choice);
-            let out = page().form.table.app_fit_failures(RouteLayout::screen().sectioned_table().w, tag);
+            let out = page().form.table.app_fit_failures(RouteLayout::panel().sectioned_table().w, tag);
             crate::ui::table::assert_no_fit_failures(&out);
         }
     }

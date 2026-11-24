@@ -51,7 +51,41 @@ use super::legal::CONTACT_LINK;
 /// chose — a consent prompt in front of any of them would quietly re-point the entire harness at
 /// a screen nobody wrote an assertion for.
 pub(crate) fn should_show(c: &Consent, automated: bool) -> bool {
-    consent::should_ask(c, automated)
+    offers_reporting() && consent::should_ask(c, automated)
+}
+
+/// litefin: telemetry is off in this fork, so nobody is asked about it. The first-run question,
+/// Privacy & data's two switches and its report previews exist only in a build that could send a
+/// report, and no build here can (`telemetry::sender::configured`).
+fn offers_reporting() -> bool {
+    #[cfg(test)]
+    if REPORTING_FOR_TEST.with(std::cell::Cell::get) {
+        return true;
+    }
+    crate::telemetry::sender::configured()
+}
+
+#[cfg(test)]
+thread_local! {
+    static REPORTING_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test seam: this thread sees the upstream reporting rows until the guard drops, so the tests of
+/// those rows keep grading them.
+#[cfg(test)]
+pub(crate) struct ReportingForTest;
+
+#[cfg(test)]
+pub(crate) fn offer_reporting_for_test() -> ReportingForTest {
+    REPORTING_FOR_TEST.with(|on| on.set(true));
+    ReportingForTest
+}
+
+#[cfg(test)]
+impl Drop for ReportingForTest {
+    fn drop(&mut self) {
+        REPORTING_FOR_TEST.with(|on| on.set(false));
+    }
 }
 
 /// Which document a preview page shows (the low nibble of `SettingsPage::Preview`).
@@ -192,9 +226,11 @@ fn consent_form(mode: Mode, draft: (bool, bool)) -> Form<RowId, Act, SettingsPag
         }
         Mode::Settings => {
             let (errors, usage) = draft;
+            let reporting = offers_reporting();
             Form::new()
                 .section(
                     FormSection::new(nj_platform::i18n::msg::settings_consent_reporting())
+                        .visible(reporting)
                         .item(RowId::Errors, RowKind::Toggle, Act::FlipErrors,
                             Row::new(nj_platform::i18n::msg::settings_consent_crash_row()).detail(nj_platform::i18n::msg::settings_consent_crash_detail()).toggle(errors))
                         .item(RowId::Usage, RowKind::Toggle, Act::FlipUsage,
@@ -202,6 +238,7 @@ fn consent_form(mode: Mode, draft: (bool, bool)) -> Form<RowId, Act, SettingsPag
                 )
                 .section(
                     FormSection::new(nj_platform::i18n::msg::settings_consent_information())
+                        .visible(reporting)
                         .item(RowId::PreviewCrash, preview(PreviewKind::Crash), Act::Open,
                             Row::new(nj_platform::i18n::msg::settings_consent_crash_document()).detail(nj_platform::i18n::msg::settings_consent_preview_crash()).chevron(true))
                         .item(RowId::PreviewUsage, preview(PreviewKind::Usage), Act::Open,
@@ -228,6 +265,9 @@ impl ConsentPage {
     pub(crate) fn settings(entry: EntryId, _cx: &Cx<'_, InnerHost>, _fx: &mut Effects<'_, InnerHost>) -> Self {
         let prev = consent::current().unwrap_or_default();
         let mut s = Self::bare(entry, Mode::Settings, (prev.errors, prev.usage));
+        // Privacy & data is a Settings page: Litefin's content panel (first run keeps its columns)
+        s.layout = RouteLayout::panel();
+        super::family::style_page_table(&mut s.form.table);
         s.rebuild(None);
         s.form.table.list_focused = true;
         s
@@ -986,6 +1026,8 @@ pub(crate) struct PreviewPage {
     subtitle: &'static str,
     text: String,
     word: &'static str,
+    /// Privacy & data's previews stand in its content panel; first run's in its columns.
+    layout: RouteLayout,
     state: PreviewState,
 }
 
@@ -1069,6 +1111,7 @@ impl PreviewPage {
             subtitle,
             text,
             word,
+            layout: if word == word::PRIVACY { RouteLayout::panel() } else { RouteLayout::screen() },
             state: PreviewState { which, pos: 0 },
         }
     }
@@ -1076,7 +1119,7 @@ impl PreviewPage {
     fn view(&self) -> DocumentFocus<'_> {
         DocumentFocus {
             reader: &self.reader,
-            frame: RouteLayout::screen().document(true),
+            frame: self.layout.document(true),
             group: TABLE_GROUP,
             entry: self.entry,
         }
@@ -1138,9 +1181,9 @@ impl Screen<InnerHost> for PreviewPage {
     }
     fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, InnerHost>) {}
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, InnerHost>) {
-        let Self { reader, crumb, title, subtitle, text, entry, .. } = self;
+        let Self { reader, crumb, title, subtitle, text, entry, layout, .. } = self;
         let mut v = DocumentScreen::new(
-            Header::new(RouteLayout::screen(), Some(crumb), title, subtitle),
+            Header::new(*layout, Some(crumb), title, subtitle),
             reader,
             text,
             TABLE_GROUP,

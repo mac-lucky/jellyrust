@@ -19,14 +19,12 @@ impl LibraryScreen {
         let mut overlay = StatusOverlay::new(self.status_frame(), caption, kind)
             .page(glyph).phase(cx.tick.ms)
             .focused(cx.focus.current == Some(self.key(RETRY)));
-        // The tab strip (`draw_library_controls`) stays live above a failed section's read-out —
-        // a section failing is not the app failing — so the glyph is told where that chrome's
-        // bottom edge is, and would shrink to clear it if the strip ever reached the natural box
-        // (`glyph_ceiling`'s own doc). At the current anchor it never does; the ceiling is a guard. `self.libraries` empty is exactly the condition `draw_library_controls` itself
-        // uses to skip drawing the strip at all.
-        if !self.libraries.is_empty() {
-            overlay = overlay.glyph_ceiling(CONTENT_TOP + StatusOverlay::CTRL_H);
-        }
+        // The page head (the title and the tab pills) stays live above a failed section's
+        // read-out — a section failing is not the app failing — so the glyph is told where that
+        // chrome's bottom edge is, and would shrink to clear it if the head ever reached the
+        // natural box (`glyph_ceiling`'s own doc). At the current anchor it never does; the
+        // ceiling is a guard.
+        overlay = overlay.glyph_ceiling(self.layout.tabs_y(self.scroll.pos) + super::layout::TAB_H);
         if let Some(reason) = reason { overlay = overlay.reason(reason); }
         if self.readout == Readout::Failed {
             overlay = overlay.action(super::super::plaintext_question::primary(self.plaintext.verdict()));
@@ -99,7 +97,7 @@ impl LibraryScreen {
                 (caption, reason)
             }
             Readout::Empty => {
-                let caption = if self.wanted_kind.is_some() { nj_platform::i18n::msg::browse_library_no_matches().into() }
+                let caption = if self.wanted.is_some() { nj_platform::i18n::msg::browse_library_no_matches().into() }
                     else if directory.sections().is_empty() { nj_platform::i18n::msg::browse_library_empty().into() }
                     else if listing.unwatched() || listing.genre().is_some() { nj_platform::i18n::msg::browse_library_no_matches().into() }
                     else if let Some(section) = directory.current().and_then(|i| directory.sections().get(i)) {
@@ -119,10 +117,10 @@ impl LibraryScreen {
         if let Some((top, h)) = self.layout.empty_band().filter(|_| self.layout.shelves > 0) {
             return Rect::new(MARGIN_X, CONTENT_TOP + top - self.scroll.pos, SCR_W - 2.0 * MARGIN_X, h);
         }
-        // The legacy readout occupies the fixed content region, inside the overscan frame.
-        const STATUS_TOP: f32 = 232.0;
-        Rect::new(MARGIN_X, STATUS_TOP, SCR_W - 2.0 * MARGIN_X,
-            SCR_H - STATUS_TOP - crate::ui::consts::MARGIN_Y)
+        // Otherwise the read-out fills the region under the head (the title and tabs, and the
+        // controls and the alphabet when they are up), inside the overscan frame.
+        let top = (CONTENT_TOP + self.layout.grid_top() - self.scroll.pos).max(CONTENT_TOP);
+        Rect::new(MARGIN_X, top, SCR_W - 2.0 * MARGIN_X, SCR_H - top - crate::ui::consts::MARGIN_Y)
     }
 }
 

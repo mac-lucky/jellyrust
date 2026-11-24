@@ -103,7 +103,7 @@ impl PickerPage {
             .iter().position(|(_, v)| *v == current).map_or(u32::MAX, |i| i as u32)
     }
     fn view(&self) -> TableScreen<'_> {
-        TableScreen::new(Header::new(RouteLayout::screen(), Some(self.state.field.kind().title()),
+        TableScreen::new(Header::new(RouteLayout::panel(), Some(self.state.field.kind().title()),
             self.state.field.title(), &self.copy), &self.form.table, GroupId(0), self.entry).keyed(&self.form)
     }
     fn focus(&self, fx: &mut Effects<'_, InnerHost>, group: GroupId) {
@@ -112,7 +112,7 @@ impl PickerPage {
                 FocusTarget::Elem(FocusKey { entry: self.entry, elem: self.state.selected })
             } else { FocusTarget::ContainerGroup(group) } }))));
     }
-    fn account(&self) -> bool { self.state.field.kind() == Kind::AudioSubtitles }
+    fn account(&self) -> bool { self.state.field.account() }
     fn start_initial_load(&mut self, fx: &mut Effects<'_, InnerHost>) -> bool {
         if self.account() && self.txn.request.is_none() && self.txn.snapshot.is_none()
             && self.txn.pending.is_none() && self.state.io.status.is_empty() {
@@ -134,7 +134,7 @@ impl PickerPage {
         let keep = if seat_current { OptionId::Choice(current.clone()) } else {
             self.form.selected_id().cloned().unwrap_or_else(|| OptionId::Choice(current.clone())) };
         let show_retry = self.account() && !self.state.io.busy && !self.state.io.status.is_empty();
-        self.form.table.compact = false; self.form.table.header_ink = theme::TEXT_READING; self.form.table.list_focused = true;
+        super::super::family::style_page_table(&mut self.form.table); self.form.table.list_focused = true;
         self.form.set(option_form(options, &current, self.state.io.busy, show_retry), Some(&keep));
         self.state.selected = self.form.key_at(self.form.table.sel.max(0) as usize).map_or(0, |k| k.0);
     }
@@ -171,7 +171,7 @@ impl PickerPage {
     }
     fn commit(&mut self, value: Value, fx: &mut Effects<'_, InnerHost>) {
         match value {
-            Value::Quality(_) | Value::DirectPlay(_) | Value::NextEpisode(_) | Value::SkipInterval(_) | Value::InstantDpadSeeking(_) | Value::EpisodeNavigation(_) | Value::SubtitleSize(_) | Value::SubtitlePosition(_) => self.txn.save_local(&mut self.state.io, value, fx),
+            Value::Quality(_) | Value::DirectPlay(_) | Value::NextEpisode(_) | Value::SkipInterval(_) | Value::InstantDpadSeeking(_) | Value::EpisodeNavigation(_) | Value::SubtitleSize(_) | Value::SubtitlePosition(_) | Value::Voice(_) => self.txn.save_local(&mut self.state.io, value, fx),
             value => {
                 let mut update = PreferenceUpdate::default();
                 match (self.state.field, value) {
@@ -179,6 +179,8 @@ impl PickerPage {
                     (PickerKind::SubtitleLanguage, Value::Language(v)) => update.subtitle_language = Some(v),
                     (_, Value::Mode(v)) => update.subtitle_mode = Some(v),
                     (_, Value::DefaultTrack(v)) => update.play_default_audio_track = Some(v),
+                    (PickerKind::RememberAudio, Value::Remember(v)) => update.remember_audio_selections = Some(v),
+                    (PickerKind::RememberSubtitles, Value::Remember(v)) => update.remember_subtitle_selections = Some(v),
                     _ => return,
                 }
                 self.txn.start_account(&mut self.state.io, Some(update), fx);
@@ -249,7 +251,7 @@ impl Machine<InnerHost> for PickerPage {
                     Landed::Nothing if started => { self.rebuild(true); fx.invalidate(nj_machine::present::Provenance::Landing(MachineId::Session)); }
                     Landed::Nothing => {}
                 }
-                self.form.table.update(t.dt(), RouteLayout::screen().sectioned_table().h);
+                self.form.table.update(t.dt(), RouteLayout::panel().sectioned_table().h);
                 Handled::Yes
             }
             ScreenEvent::FocusMoved { to, .. } => {

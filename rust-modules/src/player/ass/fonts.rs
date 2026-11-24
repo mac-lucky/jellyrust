@@ -5,8 +5,9 @@
 //! with no coverage check). So Thai, Devanagari, Arabic and the other scripts of the account
 //! language picker are reachable only because a face named for them is in the library:
 //!
-//!   * `appfont.ttf`, `appfont-bold.ttf` - Inter, the family the synthesized subtitle style names
-//!     (`text_ass::STYLE_FONT`). Bold also answers to the family **"PlxSubs"** (a name record under
+//!   * `appfont-inter.ttf`, `appfont-inter-bold.ttf` - Inter, the family the synthesized subtitle
+//!     style names (`text_ass::STYLE_FONT`). Not the UI face (`appfont*.ttf`, Poppins): subtitles
+//!     keep the family their metrics and the Noto faces were cut against. Bold also answers to the family **"PlxSubs"** (a name record under
 //!     Windows langID 0x0407), as cut upstream in PlxNative.
 //!   * `fonts/subs/NotoSans<Script>-Bold.ttf` - one per script, cut by `tools/cut-noto-subs.py`,
 //!     listed in `fonts/subs/manifest.json`. Each answers to "PlxSubs" and "Inter" as well as to its
@@ -26,7 +27,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 /// Inter Regular, then Inter Bold.
-const INTER: [&str; 2] = ["appfont.ttf", "appfont-bold.ttf"];
+const INTER: [&str; 2] = ["appfont-inter.ttf", "appfont-inter-bold.ttf"];
 /// Where the Noto faces and their manifest sit, under the app directory.
 const SUBS_DIR: &str = "fonts/subs";
 const MANIFEST: &str = "manifest.json";

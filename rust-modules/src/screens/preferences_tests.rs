@@ -125,7 +125,7 @@ fn every_field_row_pushes_its_picker_and_nothing_else() {
     let mut audio = loaded_audio_page(&account);
     for (page, fields) in [
         (&mut playback, vec![PickerKind::Quality, PickerKind::DirectPlay, PickerKind::SubtitleSize, PickerKind::SubtitlePosition, PickerKind::NextEpisode, PickerKind::SkipInterval]),
-        (&mut audio, vec![PickerKind::AudioLanguage, PickerKind::SubtitleMode, PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack]),
+        (&mut audio, vec![PickerKind::AudioLanguage, PickerKind::SubtitleMode, PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack, PickerKind::RememberAudio, PickerKind::RememberSubtitles, PickerKind::Voice]),
     ] {
         for field in fields {
             let key = RowId::Field(field).key().0;
@@ -214,5 +214,16 @@ fn every_field_reports_the_page_whose_list_shows_it() {
     }
     let audio = FieldListInputs { kind: Kind::AudioSubtitles, quality: Quality::Original, direct_play: DirectPlayMode::Auto,
         prefs: Some(&prefs), busy: false, show_retry: false };
-    assert_eq!(fields_of(&audio), &[PickerKind::AudioLanguage, PickerKind::SubtitleMode, PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack]);
+    assert_eq!(fields_of(&audio), &[PickerKind::Voice, PickerKind::AudioLanguage, PickerKind::SubtitleMode, PickerKind::SubtitleLanguage, PickerKind::DefaultAudioTrack, PickerKind::RememberAudio, PickerKind::RememberSubtitles]);
+}
+
+/// The Dubbing and voice-over row is saved on this TV, so the page lists it before the account
+/// preferences land and when they fail to; it leads the list, so the cursor the page opened on
+/// stays on the first row when the account rows land under it.
+#[test]
+fn the_local_voice_row_is_listed_without_the_account_preferences() {
+    let inputs = |show_retry| FieldListInputs { kind: Kind::AudioSubtitles, quality: Quality::Original,
+        direct_play: DirectPlayMode::Auto, prefs: None, busy: false, show_retry };
+    assert_eq!(fields_of(&inputs(false)), &[PickerKind::Voice]);
+    assert_eq!(fields_of(&inputs(true)), &[PickerKind::Voice]);
 }

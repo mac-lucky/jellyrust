@@ -394,7 +394,8 @@ pub(crate) fn layout(r: Rect, name_w: f32, name_h: f32) -> (Rect, Rect) {
 /// the row is a collection with no artwork (`thumb` empty) — an unresolved texture with a path
 /// behind it is merely still loading and keeps the ordinary skeleton.
 pub(crate) fn draw(p: Painter, rest: Rect, r: Rect, rad: f32, name: &str) {
-    p.rrect_sheened(r, rad, theme::CARD_PLACEHOLDER);
+    // flat, like every Litefin card: the loading fill with no edge sheen (`docs/litefin-look.md` 2.6)
+    p.rrect(r, rad, rad, theme::CARD_PLACEHOLDER);
     let fit = fitted(name, &NEUTRAL_NAME, rest, neutral_band(rest));
     let (glyph, column) = layout(r, fit.column, fit.height());
     icons::draw(p, Icon::Collection, glyph, theme::TEXT_TERTIARY);
@@ -601,12 +602,13 @@ mod tests {
         }
     }
 
-    /// C1: the header's name breaks as the mock does — three whole lines on the 200 tile — at the
-    /// step-down size the band under the bigger deck holds.
+    /// C1: the header's name breaks into whole words on the 200 tile at the step-down size the
+    /// band under the bigger deck holds. The mock's three lines were Inter Bold's widths; Poppins
+    /// SemiBold's caps set "STARFALL SAGA" on one line of that column, so it takes two.
     #[test]
-    fn the_headers_name_takes_three_lines_like_the_mock() {
+    fn the_headers_name_breaks_into_whole_lines_at_the_step_down_size() {
         let f = fit("Starfall Saga Collection", 200.0);
-        assert_eq!(texts(&f), ["STARFALL", "SAGA", "COLLECTION"]);
+        assert_eq!(texts(&f), ["STARFALL SAGA", "COLLECTION"]);
         assert_eq!(f.sz, 20);
     }
 

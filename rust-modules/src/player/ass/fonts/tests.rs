@@ -101,7 +101,7 @@ fn read_sub(face: &serde_json::Value) -> Vec<u8> {
 fn the_bundled_faces_go_in_inter_first_then_the_manifest_order() {
     let files = bundled(dir()).unwrap();
     let names: Vec<String> = files.iter().map(|p| p.file_name().unwrap().to_string_lossy().into()).collect();
-    assert_eq!(&names[..2], ["appfont.ttf", "appfont-bold.ttf"]);
+    assert_eq!(&names[..2], ["appfont-inter.ttf", "appfont-inter-bold.ttf"]);
     let listed: Vec<String> = faces().iter().map(|f| f["file"].as_str().unwrap().to_string()).collect();
     assert_eq!(&names[2..], &listed[..]);
     assert!(listed.len() >= 20, "{} faces", listed.len());
@@ -119,7 +119,7 @@ fn a_missing_or_hostile_manifest_is_fonts_unavailable() {
     for body in [
         "not json",
         r#"{"faces":[]}"#,
-        r#"{"faces":[{"file":"../appfont.ttf"}]}"#,
+        r#"{"faces":[{"file":"../appfont-inter.ttf"}]}"#,
         r#"{"faces":[{"file":"a/b.ttf"}]}"#,
         r#"{"faces":[{"file":".hidden.ttf"}]}"#,
         r#"{"faces":[{"file":"x.otf"}]}"#,
@@ -163,10 +163,10 @@ fn every_face_opens_under_old_freetype_bounds() {
 
 #[test]
 fn freetype_keeps_reporting_the_real_family_under_either_rule() {
-    let bold = read("appfont-bold.ttf");
+    let bold = read("appfont-inter-bold.ttf");
     for strict in [false, true] {
         assert_eq!(freetype_family(&bold, strict), "Inter");
-        assert_eq!(freetype_family(&read("appfont.ttf"), strict), "Inter");
+        assert_eq!(freetype_family(&read("appfont-inter.ttf"), strict), "Inter");
         for f in faces() {
             assert_eq!(freetype_family(&read_sub(&f), strict), f["family"].as_str().unwrap(), "{}", f["file"]);
         }
@@ -175,14 +175,14 @@ fn freetype_keeps_reporting_the_real_family_under_either_rule() {
 
 #[test]
 fn the_aliases_are_the_records_libass_looks_for() {
-    let bold = read("appfont-bold.ttf");
+    let bold = read("appfont-inter-bold.ttf");
     for id in [1, 4] {
         let rec = family_records(&bold, id);
         assert!(rec.contains(&(0x407, "PlxSubs".into())), "Inter Bold id {id}: {rec:?}");
     }
     for id in [1, 4] {
         assert!(
-            !family_records(&read("appfont.ttf"), id).iter().any(|r| r.1 == "PlxSubs"),
+            !family_records(&read("appfont-inter.ttf"), id).iter().any(|r| r.1 == "PlxSubs"),
             "only Bold answers to PlxSubs"
         );
     }
@@ -206,7 +206,7 @@ fn the_aliases_are_the_records_libass_looks_for() {
 /// Bold has, and nothing under U+0250 (nor combining marks, general punctuation, currency).
 #[test]
 fn latin_resolves_to_inter_bold_and_no_noto_face_competes_for_it() {
-    let inter = cov("appfont-bold.ttf");
+    let inter = cov("appfont-inter-bold.ttf");
     for f in faces() {
         let c = subs_cov(&f);
         for cp in (0..=0x24F).chain(0x300..=0x36F).chain(0x2000..=0x206F).chain(0x20A0..=0x20CF) {
@@ -226,7 +226,7 @@ fn latin_resolves_to_inter_bold_and_no_noto_face_competes_for_it() {
 
 #[test]
 fn symbols_subtitles_use_are_drawn_by_inter_bold_or_the_cjk_default() {
-    let (inter, cjk) = (cov("appfont-bold.ttf"), cov("appfont-cjk.ttf"));
+    let (inter, cjk) = (cov("appfont-inter-bold.ttf"), cov("appfont-cjk.ttf"));
     for ch in "♪♫…–—“”‘’«»¿¡•©®™".chars() {
         assert!(inter.contains(ch as u32) || cjk.contains(ch as u32), "U+{:04X} {ch}", ch as u32);
     }
@@ -234,7 +234,7 @@ fn symbols_subtitles_use_are_drawn_by_inter_bold_or_the_cjk_default() {
 
 #[test]
 fn each_script_resolves_to_its_noto_face_and_not_to_inter() {
-    let inter = cov("appfont-bold.ttf");
+    let inter = cov("appfont-inter-bold.ttf");
     for f in faces() {
         let c = subs_cov(&f);
         let sample = f["sample"].as_str().unwrap();
@@ -269,7 +269,7 @@ fn every_face_has_inter_bolds_win_metrics() {
         let (asc, desc) = (be16(os2, 74) as f64, be16(os2, 76) as f64);
         ((asc + desc) / upem, asc / (asc + desc))
     };
-    let (inter_em, inter_split) = metrics(&read("appfont-bold.ttf"));
+    let (inter_em, inter_split) = metrics(&read("appfont-inter-bold.ttf"));
     assert!((inter_em - 1.430).abs() < 0.001, "Inter Bold's own total is {inter_em} em");
     for f in faces() {
         let (em, split) = metrics(&read_sub(&f));
@@ -301,7 +301,7 @@ fn every_language_has_exactly_one_bucket_and_the_claim_holds() {
     let codes = |v: &serde_json::Value| -> Vec<String> {
         v.as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect()
     };
-    let (inter, cjk) = (cov("appfont-bold.ttf"), cov("appfont-cjk.ttf"));
+    let (inter, cjk) = (cov("appfont-inter-bold.ttf"), cov("appfont-cjk.ttf"));
     let mut seen: Vec<String> = Vec::new();
     let mut claim = |bucket: &str, listed: Vec<String>, covered: &dyn Fn(u32) -> bool| {
         for code in listed {

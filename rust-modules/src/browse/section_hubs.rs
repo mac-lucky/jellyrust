@@ -3,7 +3,8 @@
 //!
 //! `GET /hubs/sections/{id}` ([`crate::catalog::Client::library_hubs`], verified live 2026-09-05;
 //! `docs/pms-api.md` §3a is the record and five of its findings contradict the OpenAPI spec). The
-//! Library screen draws these above its A–Z grid, in one continuous scroll.
+//! Library screen draws these above its grid, in one continuous scroll; a Jellyfin library's
+//! shelves are its genre rows, which the Library's Genres tab draws instead of the grid.
 //!
 //! ## Why this is a FIELD on `SecState` and not a store of its own
 //!
@@ -67,8 +68,8 @@ const HUB_FETCH_COUNT: i64 = 12;
 
 /// How many shelves a library may draw. Nine is what the dev server's owner arranged and the
 /// endpoint has no documented ceiling, so this bounds a pathological table rather than expressing
-/// a design: twelve shelves is already 6,588px of document above the grid.
-const MAX_SHELVES: usize = 12;
+/// a design; a Jellyfin library's genre rows are about twenty (`Jf::library_shelves`).
+const MAX_SHELVES: usize = 24;
 
 /// Frames the page waits for the FIRST answer before committing zero shelves and becoming usable
 /// — ~4 s at 60 fps. Deliberately not derived from the retry ladder (module doc), and counted in
@@ -96,6 +97,10 @@ pub(crate) struct Shelf {
     /// Where a promoted `custom.collection.*` shelf's linked heading leads, classified once at
     /// parse ([`crate::catalog::collections::promoted_collection_link`]); `None` for every other hub.
     pub(crate) link: Option<crate::catalog::collections::CollectionRef>,
+    /// A Jellyfin library's genre row (Litefin's Genres tab): the genre's interned id, the one
+    /// the section's genre filter names ([`crate::browse::GenreEntry::id`]). `None` for every
+    /// other shelf.
+    pub(crate) genre: Option<String>,
     /// Every item the hub's listing holds (`plex::Hub::total`), which `items` caps — a linked
     /// collection heading's "· N". 0 when the server named no total.
     pub(crate) total: usize,
@@ -668,6 +673,8 @@ pub(crate) fn seed_named_shelves_for_owner_test(
                 id: (*id).into(),
                 key: (*key).into(),
                 link: crate::catalog::collections::promoted_collection_link(sid, id, key, title, section),
+                // A Jellyfin genre row's naming makes it one here too, as it does in a landing.
+                genre: jf_genre(id, key),
                 total: per_row,
                 title: (*title).into(),
                 is_continue: shelf_is_continue(id, key),
@@ -774,8 +781,8 @@ pub(crate) fn parse_hubs(mc: &crate::catalog::MediaContainer, sid: ServerId, sec
     out
 }
 
-/// [`parse_hubs`] for a Jellyfin library: its Continue Watching, Next Up and Recently Added
-/// shelves, rows built straight from the `BaseItemDto`s under the same filter.
+/// [`parse_hubs`] for a Jellyfin library: its genre rows (`Jf::library_shelves`), rows built
+/// straight from the `BaseItemDto`s under the same filter, each carrying its genre's id.
 pub(crate) fn parse_jf_shelves(shelves: &[crate::jf::JfShelf], sid: ServerId, section: i64) -> Vec<Shelf> {
     let mut out = Vec::new();
     for shelf in shelves {
@@ -793,9 +800,17 @@ pub(crate) fn parse_jf_shelves(shelves: &[crate::jf::JfShelf], sid: ServerId, se
         if items.is_empty() || shelf.title.is_empty() {
             continue;
         }
-        out.push(section_shelf(sid, section, &shelf.identifier, &shelf.key, &shelf.title, shelf.items.len(), items));
+        let mut row = section_shelf(sid, section, &shelf.identifier, &shelf.key, &shelf.title, shelf.items.len(), items);
+        row.genre = jf_genre(&shelf.identifier, &shelf.key);
+        out.push(row);
     }
     out
+}
+
+/// A Jellyfin genre row's genre id: `Jf::library_shelves` names such a row
+/// `{family}.genre.{section}.{id}` and keys it by that id.
+fn jf_genre(identifier: &str, key: &str) -> Option<String> {
+    identifier.split('.').nth(1).filter(|part| *part == "genre").map(|_| key.to_string())
 }
 
 fn section_shelf(sid: ServerId, section: i64, id: &str, key: &str, title: &str, total: usize,
@@ -807,6 +822,7 @@ fn section_shelf(sid: ServerId, section: i64, id: &str, key: &str, title: &str, 
         id: id.to_string(),
         key: key.to_string(),
         link: crate::catalog::collections::promoted_collection_link(sid, id, key, title, section),
+        genre: None,
         total,
         title: crate::catalog::hub_title::localized_hub_title(
             crate::catalog::hub_title::Scope::Section,
@@ -871,6 +887,20 @@ pub(crate) fn shelf_is_continue(id: &str, key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Jf::library_shelves` names a genre row `{family}.genre.{section}.{id}` and keys it by the
+    /// id; that row carries the id (and draws as a genre row), every other shelf none.
+    #[test]
+    fn a_jellyfin_genre_row_carries_its_genre_id_and_no_other_shelf_does() {
+        let item = crate::jf::models::BaseItemDto { id: "aaaaaaaaaaaaa0000000000000000001".into(), name: "Sintel".into(),
+            kind: "Movie".into(), image_tags: [("Primary".to_string(), "t".to_string())].into_iter().collect(), ..Default::default() };
+        let shelf = |identifier: &str, key: &str| crate::jf::JfShelf { identifier: identifier.into(), title: "Action".into(),
+            key: key.into(), section: 1, library: String::new(), items: vec![item.clone()] };
+        let rows = parse_jf_shelves(&[shelf("movie.genre.1.7", "7"), shelf("tv.genre.2.9", "9"),
+            shelf("movie.recentlyadded.1", "")], ServerId::from_raw(0), 1);
+        assert_eq!(rows.iter().map(|row| row.genre.as_deref()).collect::<Vec<_>>(), [Some("7"), Some("9"), None]);
+        assert!(rows.iter().all(|row| row.link.is_none()), "a genre row is no promoted collection");
+    }
 
     #[test]
     fn two_browse_state_values_share_no_core_state() {

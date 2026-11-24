@@ -1,20 +1,20 @@
 [
   {
     "name": "stable",
-    "app_id": "com.sostk.nativejelly",
-    "object_id": "njstate.stable",
+    "app_id": "com.macluckylab.jellyrust",
+    "object_id": "jrstate.stable",
     "legacy_object_id": "plxstate.stable"
   },
   {
     "name": "debug",
-    "app_id": "com.sostk.nativejelly.debug",
-    "object_id": "njstate.debug",
+    "app_id": "com.macluckylab.jellyrust.debug",
+    "object_id": "jrstate.debug",
     "legacy_object_id": "plxstate.debug"
   },
   {
     "name": "nightly",
-    "app_id": "com.sostk.nativejelly.nightly",
-    "object_id": "njstate.night",
+    "app_id": "com.macluckylab.jellyrust.nightly",
+    "object_id": "jrstate.night",
     "legacy_object_id": "plxstate.night"
   }
 ]

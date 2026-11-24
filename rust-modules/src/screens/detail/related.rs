@@ -3,10 +3,12 @@
 use crate::metadata::Detail;
 use crate::catalog_fetch::PmsMovie;
 use crate::screens::registry::tile_facts;
-use crate::ui::card_row::{self, CardRow, RowStyle};
+use crate::ui::card_row::{self, CardRow};
 use nj_machine::machine::GroupId;
 use crate::ui::widgets::Art;
-use crate::ui::{theme, Painter, Rect};
+use crate::ui::{Painter, Rect};
+
+use super::section::POSTERS;
 
 pub(crate) const RELATED_ELEM_RANGE_START: u32 = 640;
 pub(crate) const RELATED_ELEM_RANGE_END: u32 = 1152;
@@ -50,16 +52,16 @@ pub(crate) fn item<'a>(d: &'a Detail, key: u32) -> Option<&'a PmsMovie> {
 pub(crate) fn rect(row: &CardRow, index: usize, top: f32, at_drawn: bool) -> Rect {
     let base = card_row::tile_rect(
         index,
-        crate::ui::consts::MARGIN_X,
-        RowStyle::HOME.w + RowStyle::HOME.gap,
+        POSTERS.margin_x,
+        POSTERS.w + POSTERS.gap,
         row.scroll_x(),
         top + LABEL_H,
-        (RowStyle::HOME.w, RowStyle::HOME.h),
+        (POSTERS.w, POSTERS.h),
     );
     if at_drawn {
         base.scaled(row.scale(index))
     } else {
-        base.scaled(RowStyle::HOME.focus_scale)
+        base.scaled(POSTERS.focus_scale)
     }
 }
 
@@ -68,7 +70,7 @@ pub(crate) fn rect(row: &CardRow, index: usize, top: f32, at_drawn: bool) -> Rec
 /// shelf that holds no focus draws no label, so it gives the room back and the next section's
 /// heading rises to the design system's own region gap behind it.
 pub(crate) fn block_h(band: f32) -> f32 {
-    LABEL_H + RowStyle::HOME.h + card_row::under_band(band)
+    LABEL_H + POSTERS.h + card_row::under_band(band)
 }
 
 pub(crate) fn draw(
@@ -79,16 +81,7 @@ pub(crate) fn draw(
     focused: Option<usize>,
     measure: &dyn nj_machine::machine::Measure,
 ) {
-    let lift = row.lift();
-    p.text(
-        nj_platform::i18n::msg::browse_detail_related_c().as_ptr(),
-        crate::ui::consts::MARGIN_X,
-        top - lift,
-        theme::size::HEADLINE,
-        theme::TEXT_HEADING,
-        0,
-        1,
-    );
+    super::section::heading(p, nj_platform::i18n::msg::details_more_like_this_c(), top - row.lift());
     draw_strip(p, &d.related, row, top, focused, measure);
 }
 
@@ -108,13 +101,13 @@ pub(crate) fn draw_strip(
         items.len(),
         focused.map(|i| i as i32).unwrap_or(-1),
         top + LABEL_H,
-        (RowStyle::HOME.w, RowStyle::HOME.h),
-        RowStyle::HOME.w + RowStyle::HOME.gap,
-        &RowStyle::HOME,
+        (POSTERS.w, POSTERS.h),
+        POSTERS.w + POSTERS.gap,
+        &POSTERS,
         crate::ui::consts::SCR_W,
         |i| Art::Poster(items.get(i).map(tile_facts::of)),
         |i| items.get(i).and_then(|m| m.resume_frac()),
-        |i| card_row::TileLabel::title(&items[i].title),
+        |_| card_row::TileLabel::default(),
         |_, _, _, _| {},
         measure,
     );
@@ -147,11 +140,11 @@ pub(crate) fn draw_focused_in(
     };
     let base = card_row::tile_rect(
         index,
-        crate::ui::consts::MARGIN_X,
-        RowStyle::HOME.w + RowStyle::HOME.gap,
+        POSTERS.margin_x,
+        POSTERS.w + POSTERS.gap,
         row.scroll_x(),
         top + LABEL_H,
-        (RowStyle::HOME.w, RowStyle::HOME.h),
+        (POSTERS.w, POSTERS.h),
     );
     let scale = row.scale(index) * press;
     card_row::draw_focused(
@@ -159,10 +152,9 @@ pub(crate) fn draw_focused_in(
         Art::Poster(Some(tile_facts::of(item))),
         base.scaled(scale),
         scale,
-        &RowStyle::HOME,
+        &POSTERS,
         item.resume_frac(),
-        &card_row::TileLabel::title(&item.title)
-            .settling(row.settle_lag(items.len(), index, &RowStyle::HOME)),
+        &card_row::TileLabel::default().settling(row.settle_lag(items.len(), index, &POSTERS)),
         measure,
     );
 }
@@ -182,16 +174,16 @@ mod tests {
     fn the_related_menus_anchor_is_the_tile_the_shelf_drew() {
         let mut row = CardRow::new();
         for _ in 0..120 {
-            row.update(12, Some(11), &RowStyle::HOME, 1.0 / 60.0);
+            row.update(12, Some(11), &POSTERS, 1.0 / 60.0);
         }
         for i in 0..12 {
             let expected = card_row::tile_rect(
                 i,
-                crate::ui::consts::MARGIN_X,
-                RowStyle::HOME.w + RowStyle::HOME.gap,
+                POSTERS.margin_x,
+                POSTERS.w + POSTERS.gap,
                 row.scroll_x(),
                 200.0 + LABEL_H,
-                (RowStyle::HOME.w, RowStyle::HOME.h),
+                (POSTERS.w, POSTERS.h),
             )
             .scaled(row.scale(i));
             let actual = rect(&row, i, 200.0, true);

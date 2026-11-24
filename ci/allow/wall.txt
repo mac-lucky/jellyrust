@@ -1,7 +1,9 @@
-# count: 3
+# count: 5
 # Wall-clock reads in ui/ and app/ are INSTRUMENTS only (spec §15.2); logical state ticks.
 # (The draw-phase profiler, once listed here as ui/profile.rs, is gfx/profile.rs since module-layers
 # step L5 — outside this rule's scan, like every other `gfx` instrument.)
 rust-modules/src/app/recorder.rs	the recorder times its own spend (rec=)
 rust-modules/src/app/adapters/poster.rs	throttles the residency-loss log line; app/clock.rs is main-thread only and unresident/lookup also run on worker threads
 rust-modules/src/app/window_activity.rs	WslgFrameBudget: the hostsim/WSLg pacing sleep times its own frame; it came with WindowActivity out of system.rs (module-layers step L15), outside the app logical clock
+rust-modules/src/screens/detail/hero.rs	the detail meta row's `Ends at HH:MM` is the wall clock the viewer reads (Litefin, docs/litefin-look.md 5), a presentation read never hashed into logical state; replays and controlled boots skip it (`clock_after`)
+rust-modules/src/appkit/player_hud.rs	the player OSD's 24-hour clock and "Ends at" read the television's time of day (`local_seconds`); a drawn read-out folded into the clock fingerprint, never logical state

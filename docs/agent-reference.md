@@ -28,8 +28,8 @@ Makefile's `TV` and `tools/`' `TV_HOST` both fall back to; `make TV=1.2.3.4 …`
 invocation, and a target that needs a TV with neither set fails saying so. The ssh password
 `alpine` lives in `tools/tv-ssh`, not the Makefile, and is tried only after this machine's ssh key is
 refused. It is webosbrew's *published* dev-mode root password, identical on every rooted TV, so it
-identifies nobody and removing it would break the loop for key-less machines. App id `com.sostk.nativejelly` — and since 2026-08-21 a second
-install, `com.sostk.nativejelly.debug`, can sit beside it on the same set (`FLAVOR`, below;
+identifies nobody and removing it would break the loop for key-less machines. App id `com.macluckylab.jellyrust` — and since 2026-08-21 a second
+install, `com.macluckylab.jellyrust.debug`, can sit beside it on the same set (`FLAVOR`, below;
 `docs/two-installs.md`).
 
 ## Build / deploy / run
@@ -309,10 +309,10 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   `docs/macos-app.md` is the design note, and `docs/macos-app-readme.md` is what ships beside the
   zip for the recipient.
 - **`FLAVOR`** selects **WHICH INSTALL** every TV-facing target talks to. Three builds live on one
-  television: `stable` (`com.sostk.nativejelly` — the app users install, the id in every release,
-  manifest and channel listing), `debug` (`com.sostk.nativejelly.debug` — the day-to-day developer
+  television: `stable` (`com.macluckylab.jellyrust` — the app users install, the id in every release,
+  manifest and channel listing), `debug` (`com.macluckylab.jellyrust.debug` — the day-to-day developer
   build beside it, with its own launcher tile, its own sign-in and its own runtime root), and
-  `nightly` (`com.sostk.nativejelly.nightly` — a third install beside both, tile "PlxNative Nightly",
+  `nightly` (`com.macluckylab.jellyrust.nightly` — a third install beside both, tile "PlxNative Nightly",
   own sign-in, own runtime root, but ALWAYS a `RELEASE=1` build — `release-guard` refuses one
   without it, with no `ALLOW_DEV_ON_STABLE`-shaped hatch, because nightly ships no dev-trigger
   surface ever).
@@ -577,7 +577,7 @@ video shows through.
 context. All UI is drawn with two tiny shaders — an SDF rounded-rect/triangle shader (cards, focus
 glow, HUD widgets, seven-segment FPS) and a text shader that samples SDL2_ttf-rendered glyph
 textures (cached by string+size). Critically-damped springs animate focus scale and shelf scroll.
-Fonts are `appfont.ttf` / `appfont-bold.ttf` deployed next to the binary; the subtitle renderer additionally loads the per-script Noto faces from `fonts/subs/` (`docs/ass-subtitles.md`, cut by `tools/cut-noto-subs.py`, staged by `SUBS_FONT_FILES` in the Makefile). (Wayland surface setup +
+Fonts are `appfont.ttf` / `appfont-bold.ttf` (Poppins, the UI face) and `appfont-inter.ttf` / `appfont-inter-bold.ttf` (Inter: the UI chain's Cyrillic/Greek link and the subtitle family) deployed next to the binary; the subtitle renderer additionally loads the per-script Noto faces from `fonts/subs/` (`docs/ass-subtitles.md`, cut by `tools/cut-noto-subs.py`, staged by `SUBS_FONT_FILES` in the Makefile). (Wayland surface setup +
 input decoding live in `system.rs` / `app/events.rs` + `app/input.rs`, not the C shim — see the gotchas below.)
 
 **Video playback (summary — `rust-modules/src/player/CLAUDE.md` is the deep-dive: pipeline,
@@ -1025,7 +1025,20 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   puts it back rather than resuming a session with nothing on screen. It then
   tracks one exact Load attempt at a time,
   follows reducer-approved superseding or rollback attempts, retries an exact failure without
-  repeating route preparation, and applies the saved clock only after `Started`. In-app
+  repeating route preparation, and applies the saved clock only after `Started`. The park saves
+  Playing, because after an ordinary app switch a film plays on return (the owner's rule); the
+  foreground turns it into Paused when the television was switched off (standby, suspend, power
+  off) during the park (`ForegroundLifecycle::settle_park_clock`), and that restore is the
+  paused-frame one (`repause_at`, `begin_paused_seek`, `finish_paused_seek`). The switch-off comes
+  from the port's power watch, a subscription to
+  `luna://com.webos.service.tvpower/power/getPowerState` (`nj_platform::webos::power`) that stamps
+  each transition into a switched-off state on `devcaps::power`'s clock; a report up to 5 s
+  before the park still counts, since the two arrive on separate channels in an unmeasured order.
+  "Screen Saver" and "Screen Off" do not count (the C1's screen-off key does not even background
+  the app), and a watcher the hub refused or that never answered keeps Playing, said once in the
+  log. **Unmeasured on the household sets:** whether the hub lets the jailed app subscribe, and
+  whether webOS keeps the process alive across standby (Quick Start+). If it does not, the next
+  power-on is a cold launch that lands on Home and this rule never fires. In-app
   Home/Settings are *overlays* and do **not** fire these — only a real OS app-switch does. Preserve
   the suspend/reload pairing if you touch playback or routing.
 - **Crash forensics has two layers.** With error-report consent and a compiled Sentry endpoint,
@@ -1135,7 +1148,7 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   access.
 
   ```text
-  identity schema=1 seq=2 app_id=com.sostk.nativejelly flavour=stable version=0.6.0 uid=6303 euid=6303 gid=5000 egid=5000
+  identity schema=1 seq=2 app_id=com.macluckylab.jellyrust flavour=stable version=0.6.0 uid=6303 euid=6303 gid=5000 egid=5000
   groups values=29,44,505,509,777,5000 errno=0 truncated=false
   dir label=tmp uid=0 gid=0 mode=1777 readonly=false open_errno=0 stat_errno=0 mount_errno=0 create_errno=0 write_errno=0 close_errno=0 unlink_errno=0
   dir label=runtime uid=6303 gid=5000 mode=0700 readonly=false open_errno=0 stat_errno=0 mount_errno=0 create_errno=0 write_errno=0 close_errno=0 unlink_errno=0
@@ -1755,7 +1768,7 @@ path. Never run only this one before a release. `tests/README.md` has the tier t
   lists the ones worth knowing by name. **The ROOT moved for flavoured installs and ONLY for
   them:** the stable install keeps `/tmp` byte for byte, so every `/tmp/nativejelly-*` path written
   out below stays literally true for the app users get, while a flavoured install puts the SAME
-  names under `/tmp/<app id>` (`/tmp/com.sostk.nativejelly.debug/nativejelly-library`). Nothing was
+  names under `/tmp/<app id>` (`/tmp/com.macluckylab.jellyrust.debug/nativejelly-library`). Nothing was
   renamed — not the ~40 triggers, not the `nativejelly-remote` FIFO, not the runtime logs, not
   `dev::DIAG`; only the directory they sit in. `make -s print-rundir FLAVOR=<f>` is how a tool asks
   rather than restating the rule, and the root is created **1777, mkdir THEN an explicit chmod**

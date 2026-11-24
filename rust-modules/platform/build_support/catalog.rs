@@ -203,7 +203,16 @@ fn read_locale(root: &Path, locale: &str) -> Result<BTreeMap<String, Value>, Str
     }
     Ok(all)
 }
-pub fn compile(catalogs: &[BTreeMap<String, Value>; 4]) -> Result<String, String> {
+/// Catalog order (English, the source, first): directory tag, generated `Language` arm, and the
+/// CLDR cardinal categories a plural message must spell out in that language.
+const LOCALES: [(&str, &str, &[&str]); 5] = [
+    ("en", "En", &["one", "other"]),
+    ("es", "Es", &["one", "many", "other"]),
+    ("be", "Be", &["one", "few", "many", "other"]),
+    ("ru", "Ru", &["one", "few", "many", "other"]),
+    ("pl", "Pl", &["one", "few", "many", "other"]),
+];
+pub fn compile(catalogs: &[BTreeMap<String, Value>; LOCALES.len()]) -> Result<String, String> {
     let keys: BTreeSet<_> = catalogs[0].keys().collect();
     for (i, c) in catalogs.iter().enumerate() {
         if c.keys().collect::<BTreeSet<_>>() != keys {
@@ -257,16 +266,14 @@ pub fn compile(catalogs: &[BTreeMap<String, Value>; 4]) -> Result<String, String
         {
             return Err(format!("{key}: missing translator context"));
         }
-        let values = [
-            forms(
-                source
-                    .get("value")
-                    .ok_or_else(|| format!("{key}: missing value"))?,
-            )?,
-            forms(&catalogs[1][key])?,
-            forms(&catalogs[2][key])?,
-            forms(&catalogs[3][key])?,
-        ];
+        let mut values = vec![forms(
+            source
+                .get("value")
+                .ok_or_else(|| format!("{key}: missing value"))?,
+        )?];
+        for c in &catalogs[1..] {
+            values.push(forms(&c[key])?);
+        }
         let plural = !values[0].contains_key("");
         if plural && args.get("count").map(String::as_str) != Some("i64") {
             return Err(format!("{key}: plurals require count:i64"));
@@ -277,14 +284,7 @@ pub fn compile(catalogs: &[BTreeMap<String, Value>; 4]) -> Result<String, String
                 return Err(format!("{key}: message kind differs"));
             }
             if plural {
-                for required in [
-                    vec!["one", "other"],
-                    vec!["one", "many", "other"],
-                    vec!["one", "few", "many", "other"],
-                    vec!["one", "few", "many", "other"],
-                ][i]
-                    .iter()
-                {
+                for required in LOCALES[i].2 {
                     if !fs.contains_key(*required) {
                         return Err(format!("{key}: locale {i} missing {required}"));
                     }
@@ -325,8 +325,9 @@ pub fn compile(catalogs: &[BTreeMap<String, Value>; 4]) -> Result<String, String
             params.trim_start_matches(", ")
         ));
         out.push_str(&format!("pub fn {name}_in(cx: &LocaleContext{params}) -> {result} {{ match cx.language() {{\n"));
-        for (i, lang) in ["En", "Es", "Be", "Ru", "Pseudo"].iter().enumerate() {
-            let vals = if i == 4 {
+        let langs = LOCALES.iter().map(|l| l.1).chain(["Pseudo"]);
+        for (i, lang) in langs.clone().enumerate() {
+            let vals = if i == LOCALES.len() {
                 values[0]
                     .iter()
                     .map(|(k, v)| (k.clone(), pseudo(v)))
@@ -375,8 +376,8 @@ pub fn compile(catalogs: &[BTreeMap<String, Value>; 4]) -> Result<String, String
         out.push_str("} }\n");
         if args.is_empty() {
             out.push_str(&format!("pub fn {name}_c() -> &'static std::ffi::CStr {{ {name}_c_in(super::current()) }}\npub fn {name}_c_in(cx: &LocaleContext) -> &'static std::ffi::CStr {{ match cx.language() {{\n"));
-            for (i, lang) in ["En", "Es", "Be", "Ru", "Pseudo"].iter().enumerate() {
-                let v = if i == 4 {
+            for (i, lang) in langs.enumerate() {
+                let v = if i == LOCALES.len() {
                     pseudo(&values[0][""])
                 } else {
                     values[i][""].clone()
@@ -401,18 +402,17 @@ pub fn compile(catalogs: &[BTreeMap<String, Value>; 4]) -> Result<String, String
     Ok(out)
 }
 pub fn build(root: &Path, out: &Path) -> Result<(), String> {
-    let catalogs = [
-        read_locale(root, "en")?,
-        read_locale(root, "es")?,
-        read_locale(root, "be")?,
-        read_locale(root, "ru")?,
-    ];
-    std::fs::write(out.join("messages.rs"), compile(&catalogs)?).map_err(|e| e.to_string())
+    let mut catalogs = Vec::new();
+    for (tag, ..) in LOCALES {
+        catalogs.push(read_locale(root, tag)?);
+    }
+    let catalogs: &[_; LOCALES.len()] = catalogs.as_slice().try_into().expect("one per locale");
+    std::fs::write(out.join("messages.rs"), compile(catalogs)?).map_err(|e| e.to_string())
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn catalogs() -> [BTreeMap<String, Value>; 4] {
+    fn catalogs() -> [BTreeMap<String, Value>; LOCALES.len()] {
         [
             BTreeMap::from([(
                 "test.label".into(),
@@ -421,6 +421,7 @@ mod tests {
             BTreeMap::from([("test.label".into(), serde_json::json!("Hola {name}"))]),
             BTreeMap::from([("test.label".into(), serde_json::json!("Вітаем, {name}"))]),
             BTreeMap::from([("test.label".into(), serde_json::json!("Здравствуй, {name}"))]),
+            BTreeMap::from([("test.label".into(), serde_json::json!("Cześć, {name}"))]),
         ]
     }
     #[test]
@@ -475,11 +476,16 @@ mod tests {
             "test.label".into(),
             serde_json::json!({"one":"{count}","few":"{count}","many":"{count}","other":"{count}"}),
         );
-        cs[3].insert(
-            "test.label".into(),
-            serde_json::json!({"one":"{count}","few":"{count}","many":"{count}","other":"{count}"}),
-        );
+        for pl_or_ru in [3, 4] {
+            cs[pl_or_ru].insert(
+                "test.label".into(),
+                serde_json::json!({"one":"{count}","few":"{count}","many":"{count}","other":"{count}"}),
+            );
+        }
         assert!(compile(&cs).is_ok());
+        let mut no_polish_many = cs.clone();
+        no_polish_many[4].get_mut("test.label").unwrap().as_object_mut().unwrap().remove("many");
+        assert!(compile(&no_polish_many).unwrap_err().contains("locale 4 missing many"));
         cs[2]
             .get_mut("test.label")
             .unwrap()

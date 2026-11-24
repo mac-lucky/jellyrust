@@ -1,24 +1,31 @@
 //! Search's document geometry. Both engine placement and rendering use these expressions.
 use crate::search::Kind;
 use crate::ui::card_row::{self, RowStyle};
-use crate::ui::consts::{CARD_H, CARD_W, MARGIN_X, MARGIN_Y, SCR_H, SCR_W};
+use crate::ui::consts::{CARD_H, CARD_W, CONTENT_LEFT, MARGIN_X, MARGIN_Y, SCR_H, SCR_W};
 use nj_machine::machine::GroupId;
 use crate::ui::Rect;
 
 /// `pub(crate)`, alongside this module itself (`screens/search/mod.rs`'s `pub(crate) mod layout`)
 /// so `ui::consts`'s overscan-rects audit can reach it as `crate::screens::search::layout::FIELD`
 /// — the deleted legacy Search renderer's own `FIELD`/`CONTENT_TOP` this replaces.
+///
+/// Litefin's input (`docs/litefin-look.md` 7): the top bar's padding 48 60 0 puts it 60 in from
+/// the rail's edge and full width, 72 tall. Its top and right edges stop at the overscan frame
+/// (`consts::SAFE`) instead of Litefin's 48 and 60.
 pub(crate) const FIELD: Rect = Rect {
-    x: MARGIN_X,
-    y: 138.0,
-    w: SCR_W - 2.0 * MARGIN_X,
-    h: 80.0,
+    x: CONTENT_LEFT + 60.0,
+    y: MARGIN_Y,
+    w: SCR_W - MARGIN_X - (CONTENT_LEFT + 60.0),
+    h: 72.0,
 };
-pub(super) const SCOPE_Y: f32 = FIELD.y + FIELD.h + 12.0;
-/// See [`FIELD`]'s doc: also reachable as `crate::screens::search::CONTENT_TOP`. Value pinned at
-/// 300.0 — the overscan audit and `top()`'s own layering both depend on it.
-pub(crate) const CONTENT_TOP: f32 = 300.0;
-pub(super) const HEAD_TO_ROW: f32 = 60.0;
+pub(super) const SCOPE_Y: f32 = FIELD.y + FIELD.h + 4.0;
+/// See [`FIELD`]'s doc: also reachable as `crate::screens::search::CONTENT_TOP`. Litefin's 40
+/// under the top bar (7 Top bar); the overscan audit and `top()`'s own layering both read it.
+pub(crate) const CONTENT_TOP: f32 = FIELD.y + FIELD.h + 40.0;
+/// The results' left edge: Litefin's Home rows, 60 in from the rail (7 Results, 2.4).
+pub(super) const ROW_X: f32 = CONTENT_LEFT + 60.0;
+/// A row's heading cap top to its cards' tops: Home's (`docs/litefin-look.md` 4.2, 7 Results).
+pub(super) const HEAD_TO_ROW: f32 = crate::ui::consts::TITLE_DY + crate::ui::consts::CARD_DY;
 pub(super) const KEYBOARD_H: f32 = 324.0;
 pub(super) const SCOPE_H: f32 = crate::ui::theme::size::CAPTION as f32 * 1.35;
 pub(super) const CLEAR_H: f32 = 60.0;
@@ -38,7 +45,7 @@ pub(super) fn group(kind: Kind) -> GroupId {
 }
 pub(super) fn style(kind: Kind) -> RowStyle {
     let (w, h, circular) = match kind {
-        Kind::Episode => (420.0, 236.0, false),
+        Kind::Episode => (RowStyle::EPISODE.w, RowStyle::EPISODE.h, false),
         Kind::Person => (250.0, 250.0, true),
         _ => (CARD_W, CARD_H, false),
     };
@@ -46,6 +53,7 @@ pub(super) fn style(kind: Kind) -> RowStyle {
         w,
         h,
         circular,
+        margin_x: ROW_X,
         ..RowStyle::HOME
     }
 }
@@ -79,9 +87,11 @@ pub(super) fn reveal(scroll: f32, kinds: &[Kind], focused: usize) -> f32 {
         (content - SCR_H).max(0.0),
     )
 }
+/// The recent searches' left edge: their text lines up with the results' headings.
+pub(super) const RECENT_X: f32 = ROW_X - crate::ui::table::CONTENT_X;
 pub(super) fn recent(slot: usize, scroll: f32) -> Rect {
     Rect::new(
-        MARGIN_X,
+        RECENT_X,
         CONTENT_TOP + crate::ui::table::HDR_H + slot as f32 * crate::ui::table::ROW_H - scroll,
         820.0,
         crate::ui::table::ROW_H,
@@ -96,7 +106,7 @@ pub(super) fn clear(terms: usize, scroll: f32, measure: &dyn nj_machine::machine
         measure,
     );
     Rect::new(
-        MARGIN_X + crate::ui::table::CONTENT_X,
+        ROW_X,
         recent_block_bottom(terms, scroll) - CLEAR_H,
         width,
         CLEAR_H,
@@ -166,7 +176,7 @@ mod tests {
         assert_eq!(block_h(Kind::Collection, 1.0), crate::ui::consts::ROW_PITCH);
         assert_eq!(
             block_h(Kind::Episode, 1.0),
-            HEAD_TO_ROW + 236.0 + caption_band(1.0)
+            HEAD_TO_ROW + RowStyle::EPISODE.h + caption_band(1.0)
         );
         assert_eq!(
             block_h(Kind::Person, 1.0),
@@ -174,7 +184,7 @@ mod tests {
         );
         assert_eq!(
             block_h(Kind::Movie, 1.0) - block_h(Kind::Episode, 1.0),
-            CARD_H - 236.0
+            CARD_H - RowStyle::EPISODE.h
         );
         assert_eq!(
             top(&[Kind::Episode, Kind::Movie], 1, OPEN),
@@ -194,7 +204,7 @@ mod tests {
                 "{kind:?}: the first row ends at {bottom}, under the keyboard at {floor}"
             );
         }
-        assert_eq!(top(&[Kind::Movie], 0, OPEN) + HEAD_TO_ROW + CARD_H, 735.0);
+        assert_eq!(top(&[Kind::Movie], 0, OPEN) + HEAD_TO_ROW + CARD_H, CONTENT_TOP + HEAD_TO_ROW + CARD_H);
         assert_eq!(floor, 756.0);
     }
 

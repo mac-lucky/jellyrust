@@ -13,7 +13,7 @@ fn tv_fixture(kind: LibraryType, total: usize) -> Fixture {
 }
 
 fn tv_page(fixture: &Fixture) -> LibraryScreen {
-    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Show);
+    let mut page = LibraryScreen::new(ENTRY, InstanceId(19), None);
     page.sync(&fixture.cx(None));
     page
 }
@@ -36,19 +36,21 @@ fn every_library_kind_offers_the_type_selector_and_it_opens_its_own_menu() {
     let _guard = nj_base::testlock::serial();
     let movies = Fixture::new();
     let movie_page = movies.screen();
-    assert_eq!(movie_page.toolbar_elems(), [TYPE, SORT, FILTER], "Movies / Collections is a real choice");
+    assert_eq!(movie_page.toolbar_elems(), [SHUFFLE, SORT, FILTER, TYPE], "Movies / Collections is a real choice");
     assert!(<LibraryScreen as Focusable<HostFixture>>::place(&movie_page, &TYPE, &movies.cx(None), At::Drawn).is_some());
-    assert_eq!(movie_page.toolbar_chip(TYPE, &movies.cx(None)).value.to_str().unwrap(), " · Movies");
+    let tab = movie_page.tab_pill(super::toolbar::Tab::Type(LibraryType::Primary), &movies.cx(None));
+    assert_eq!(tab.label.to_str().unwrap(), "Movies");
+    assert!(tab.selected, "the listed type is the active tab");
     let fixture = tv_fixture(LibraryType::Primary, 36);
     let mut page = tv_page(&fixture);
-    assert_eq!(page.toolbar_elems(), [TYPE, SORT, FILTER]);
-    let mut right = MARGIN_X;
+    assert_eq!(page.toolbar_elems(), [SHUFFLE, SORT, FILTER, TYPE]);
+    let mut right = layout::LEFT;
     for &elem in page.toolbar_elems() {
         let rect = page.toolbar_chip_rect(elem, &fixture.cx(None), At::Drawn);
         assert!(rect.x >= right);
         right = rect.x + rect.w;
     }
-    assert!(right < layout::GRID_RIGHT);
+    assert!(right < layout::RIGHT);
     let mut output = Vec::new();
     let mut present = nj_machine::present::Present::new();
     page.activate(TYPE, false, &fixture.cx(Some(page.key(TYPE))),
@@ -72,7 +74,7 @@ fn episode_navigation_and_page_jumps_follow_four_columns() {
     assert_eq!(engine.current(OWNER).unwrap().elem, page.pair.detail.elems[4]);
     let focused = engine.current(OWNER).unwrap();
     let rect = <LibraryScreen as Focusable<HostFixture>>::place(&page, &focused.elem, &fixture.cx(Some(focused)), At::SpringTarget).unwrap().rect;
-    assert!((rect.w / rect.h - 16.0 / 9.0).abs() < 0.01);
+    assert!((rect.w / rect.h - RowStyle::EPISODE.w / RowStyle::EPISODE.h).abs() < 0.001, "Litefin's 388 x 221.6 landscape picture");
     let mut output = Vec::new();
     let mut present = nj_machine::present::Present::new();
     page.command(LibraryCmd::Page(1), &fixture.cx(Some(focused)),
@@ -93,7 +95,7 @@ fn empty_episode_results_keep_type_selector_available() {
     assert_eq!(page.readout, Readout::Empty);
     assert!(page.layout.grid_head);
     assert!(<LibraryScreen as Focusable<HostFixture>>::place(&page, &TYPE, &fixture.cx(None), At::Drawn).is_some());
-    assert_eq!(page.toolbar_chip(TYPE, &fixture.cx(None)).value.to_str().unwrap(), " · Episodes");
+    assert_eq!(page.active_tab(&fixture.cx(None)), super::toolbar::Tab::Type(LibraryType::Episodes));
 }
 
 #[test]
@@ -122,7 +124,7 @@ fn empty_tv_library_names_the_selected_listing_type() {
     ] {
         let fixture = tv_fixture(kind, 0);
         let mut page = tv_page(&fixture);
-        page.wanted_kind = None;
+        page.wanted = None;
         page.readout = Readout::Empty;
         let (caption, reason) = page.status_text(&fixture.cx(None));
         assert_eq!(caption.to_str().unwrap(), expected);
@@ -139,9 +141,9 @@ fn a_collections_listing_hides_the_filter_control() {
     let fixture = collections_fixture(36);
     let page = fixture.screen();
     assert_eq!(page.listed(), LibraryType::Collections);
-    assert_eq!(page.toolbar_elems(), [TYPE, SORT]);
+    assert_eq!(page.toolbar_elems(), [SHUFFLE, SORT, TYPE]);
     assert!(<LibraryScreen as Focusable<HostFixture>>::place(&page, &FILTER, &fixture.cx(None), At::Drawn).is_none());
-    assert_eq!(page.toolbar_chip(TYPE, &fixture.cx(None)).value.to_str().unwrap(), " · Collections");
+    assert_eq!(page.active_tab(&fixture.cx(None)), super::toolbar::Tab::Type(LibraryType::Collections));
 }
 
 /// An empty Collections answer is the ordinary empty read-out, worded for what was asked for, and

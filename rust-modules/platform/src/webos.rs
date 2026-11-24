@@ -39,6 +39,7 @@ use crate::tv::device::{Hardware, Info};
 pub mod jail_repair;
 pub mod caps;
 pub mod toast;
+pub mod power;
 pub mod volume;
 
 const OS_INFO: &str = "/var/run/nyx/os_info.json";
@@ -593,6 +594,17 @@ pub mod ls2 {
             token: *mut libc::c_ulong,
             error: *mut LSError,
         ) -> bool;
+        /// The multi-reply call, for a `"subscribe":true` payload: `callback` runs once per reply
+        /// until the call is cancelled or the handle unregistered (`luna-service2/lunaservice.h`).
+        fn LSCall(
+            handle: *mut c_void,
+            uri: *const c_char,
+            payload: *const c_char,
+            callback: extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> bool,
+            context: *mut c_void,
+            token: *mut libc::c_ulong,
+            error: *mut LSError,
+        ) -> bool;
         fn LSCallCancel(handle: *mut c_void, token: libc::c_ulong, error: *mut LSError) -> bool;
         fn LSMessageGetPayload(message: *mut c_void) -> *const c_char;
         fn LSUnregister(handle: *mut c_void, error: *mut LSError) -> bool;
@@ -610,6 +622,20 @@ pub mod ls2 {
             unsafe {
                 *(context as *mut Option<String>) =
                     Some(CStr::from_ptr(payload).to_string_lossy().into_owned());
+            }
+        }
+        true
+    }
+
+    /// [`Registration::subscribe`]'s callback: queue every reply for the subscribing thread.
+    extern "C" fn on_subscription(_h: *mut c_void, message: *mut c_void, context: *mut c_void) -> bool {
+        if context.is_null() || message.is_null() {
+            return true;
+        }
+        let payload = unsafe { LSMessageGetPayload(message) };
+        if !payload.is_null() {
+            unsafe {
+                (*(context as *mut Vec<String>)).push(CStr::from_ptr(payload).to_string_lossy().into_owned());
             }
         }
         true
@@ -780,6 +806,43 @@ pub mod ls2 {
             budget: Duration,
         ) -> Result<String, Fail> {
             self.call_with(uri, payload, Some(app_id), budget)
+        }
+
+        /// Subscribe (`payload` carries `"subscribe":true`) and hand every reply to `on_reply`, on
+        /// this thread, for as long as it answers `true`. Blocks for the life of the subscription:
+        /// a worker's whole job. The reply queue is leaked on purpose: the hub may dispatch into it
+        /// until the handle unregisters, which is after this returns.
+        pub fn subscribe(&self, uri: &str, payload: &str, mut on_reply: impl FnMut(&str) -> bool) -> Result<(), Fail> {
+            let _block = nj_base::task::assert_may_block(const { &nj_base::task::BlockingLabel::new("LS2 subscription") });
+            let setup = |stage| Fail::Setup { stage, detail: String::new(), code: None };
+            let uri = CString::new(uri).map_err(|_| setup("uri"))?;
+            let payload = CString::new(payload).map_err(|_| setup("payload"))?;
+            let mut error: LSError = unsafe { std::mem::zeroed() };
+            unsafe { LSErrorInit(&mut error) };
+            let queue: *mut Vec<String> = Box::into_raw(Box::new(Vec::new()));
+            let mut token = 0;
+            let called = unsafe {
+                LSCall(self.handle, uri.as_ptr(), payload.as_ptr(), on_subscription, queue as *mut c_void, &mut token, &mut error)
+            };
+            if !called {
+                let code = Some(error.error_code);
+                let detail = error_text(&error);
+                unsafe {
+                    LSErrorFree(&mut error);
+                    drop(Box::from_raw(queue));
+                }
+                return Err(Fail::Setup { stage: "call", detail, code });
+            }
+            unsafe { LSErrorFree(&mut error) };
+            loop {
+                unsafe { g_main_context_iteration(self.context, 1) };
+                let replies = std::mem::take(unsafe { &mut *queue });
+                for reply in replies {
+                    if !on_reply(&reply) {
+                        return Ok(());
+                    }
+                }
+            }
         }
 
         /// The one reply-slot / timeout / cancel path both public calls share.

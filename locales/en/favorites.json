@@ -1,0 +1,30 @@
+{
+  "favorites.movies": {
+    "value": "Movies",
+    "description": "Favorites page: heading of the row of favourite films"
+  },
+  "favorites.series": {
+    "value": "TV Shows",
+    "description": "Favorites page: heading of the row of favourite series"
+  },
+  "favorites.seasons": {
+    "value": "Seasons",
+    "description": "Favorites page: heading of the row of favourite seasons"
+  },
+  "favorites.episodes": {
+    "value": "Episodes",
+    "description": "Favorites page: heading of the row of favourite episodes"
+  },
+  "favorites.people": {
+    "value": "People",
+    "description": "Favorites page: heading of the row of favourite people"
+  },
+  "favorites.empty": {
+    "value": "No favorites found. Go add some!",
+    "description": "Favorites page: shown when the user has no favourites"
+  },
+  "favorites.failed": {
+    "value": "Failed to load favorites",
+    "description": "Favorites page: shown when the server did not answer"
+  }
+}

@@ -341,7 +341,9 @@ class BundleTests(unittest.TestCase):
             deps.append(dict(original))
         spec = self.root / 'inputs.json'
         spec.write_text(json.dumps({'dependencies': deps, 'build_environment': {'compiler': 'fixture'}}))
-        for command in [['init', '-q'], ['add', '.'],
+        # The fixture repo ignores the developer's global excludes (one that ignores `.claude/`
+        # would drop the hook inputs the producer must keep).
+        for command in [['init', '-q'], ['config', 'core.excludesFile', '/dev/null'], ['add', '.'],
                         ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
                          '-c', 'commit.gpgsign=false',
                          'commit', '-qm', 'fixture']]:

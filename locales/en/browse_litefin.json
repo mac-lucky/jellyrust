@@ -1,0 +1,31 @@
+{
+  "browse.litefin.genres": {
+    "value": "Genres",
+    "description": "Library tab listing the library's genres as rows (Litefin Genres tab)"
+  },
+  "browse.litefin.shuffle": {
+    "value": "Shuffle",
+    "description": "Library control that opens a random title of the library"
+  },
+  "browse.litefin.view_mode": {
+    "value": "View Mode",
+    "description": "Library control that opens the listing-type menu"
+  },
+  "browse.litefin.paging": {
+    "value": "{first}-{last} of {total}",
+    "args": {
+      "first": "i64",
+      "last": "i64",
+      "total": "i64"
+    },
+    "description": "Library item count: the titles on screen and the library's total"
+  },
+  "browse.litefin.genres_empty": {
+    "value": "This library has no genres",
+    "description": "Genres tab read-out when the server lists no genre for the library"
+  },
+  "browse.litefin.start_typing": {
+    "value": "Start typing to search",
+    "description": "Search empty state under the search icon"
+  }
+}

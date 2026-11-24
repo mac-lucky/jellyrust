@@ -371,6 +371,7 @@ mod tests {
     /// with, not the moment of the answer.
     #[test]
     fn a_signin_event_before_the_consent_answer_is_held_and_replayed_with_its_original_stamp() {
+        let _endpoint = crate::telemetry::consent::as_if_configured(); // upstream's configured-build gates
         with_consent_snapshot(|| {
             consent::install(Consent::default()); // unanswered
             event(schema::DiagEvent::SignInStarted);

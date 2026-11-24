@@ -494,7 +494,7 @@ fn native_pixels_preserve_position_layers_alpha_motion_karaoke_and_readorder() {
 /// an attachment was selected instead of accidentally exercising fallback. The
 /// SFNT name table size stays unchanged; repair its and the file's checksums.
 fn fixture_font() -> Arc<[u8]> {
-    let mut font = std::fs::read(asset_dir().join("appfont-bold.ttf")).unwrap();
+    let mut font = std::fs::read(asset_dir().join("appfont-inter-bold.ttf")).unwrap();
     let u32_at = |bytes: &[u8], at: usize| {
         u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize
     };
@@ -733,7 +733,7 @@ fn drawn(family: &str, body: &str) -> Vec<(i32, i32, i32, i32, Vec<u8>)> {
 fn every_renderer_starts_with_inter_then_the_manifest_faces() {
     let faces = fonts::bundled(asset_dir()).expect("the bundled faces");
     let names: Vec<_> = faces.iter().map(|p| p.file_name().unwrap().to_str().unwrap().to_owned()).collect();
-    assert_eq!(&names[..2], ["appfont.ttf", "appfont-bold.ttf"]);
+    assert_eq!(&names[..2], ["appfont-inter.ttf", "appfont-inter-bold.ttf"]);
     assert!(names.contains(&"NotoSansHebrew-Bold.ttf".to_owned()), "{names:?}");
 }
 

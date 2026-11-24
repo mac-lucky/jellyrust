@@ -1,4 +1,4 @@
-//! The concrete master/detail pair: A–Z rail (master) and portrait or episode listing (detail).
+//! The concrete master/detail pair: the alphabet bar (master) and portrait or episode listing (detail).
 
 pub(super) use super::rail::RailPart;
 
@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use crate::screens::registry::{tile_facts, LibraryIdentity, LibraryLike, LibrarySectionIdentity};
 use crate::ui::card_row;
-use crate::ui::consts::{MARGIN_X, SCR_H};
+use crate::ui::consts::SCR_H;
 use crate::ui::frame::Budget;
 use nj_machine::machine::{Cx, EntryId, FocusKey, GroupId};
 use crate::ui::screen::{
@@ -19,7 +19,7 @@ use crate::ui::{Rect, Spring};
 
 use super::identity::KeyRegistry;
 use super::layout::{
-    GridBand, Layout, CONTENT_TOP, GRID_RIGHT, MAX_GRID_BANDS,
+    GridBand, Layout, LEFT, MAX_GRID_BANDS,
 };
 use crate::ui::poster_grid::GridBands;
 
@@ -29,21 +29,6 @@ const NO_HOLES: &[(usize, usize)] = &[];
 
 pub(super) fn grid_art(item: &crate::catalog_fetch::PmsMovie) -> Art<'_> {
     if item.kind == 3 { Art::Still(Some(tile_facts::of(item))) } else { Art::Poster(Some(tile_facts::of(item))) }
-}
-
-/// One label construction for the normal and modal-lifted focused grid card.
-pub(super) fn grid_label(item: &crate::catalog_fetch::PmsMovie) -> card_row::TileLabel {
-    if item.kind == 3 {
-        let name = if item.title.is_empty() || item.title == item.show_title {
-            crate::ui::fmt::episode_address(item.season_index as i64, item.ep_index as i64)
-        } else { item.title.clone() };
-        // The shared still overlay already names the show and episode address on the artwork.
-        // Focus reveals the episode title and release date, as it does on an episode shelf.
-        return if item.aired.is_empty() && item.year <= 0 { card_row::TileLabel::title(&name) }
-        else { card_row::TileLabel::titled(&name,
-            &crate::ui::fmt::pretty_date(&item.aired, item.year as i64)) };
-    }
-    card_row::poster_label(&tile_facts::of(item))
 }
 
 #[derive(Default)]
@@ -190,9 +175,9 @@ impl GridPart {
             elems: Vec::new(),
             known: Vec::new(),
             identity: None,
-            layout: Layout::new(false, &[], 0, false),
+            layout: Layout::new(&[], 0, false),
             scroll: 0.0,
-            target_layout: Layout::new(false, &[], 0, false),
+            target_layout: Layout::new(&[], 0, false),
             scroll_target: 0.0,
             pop: (None, Spring::at(1.0)),
             let_gos: Vec::new(),
@@ -441,10 +426,10 @@ impl GridPart {
     }
 
     /// The scale the focused cell's TREATMENT is drawn at — what
-    /// [`card_row::draw_focused`](crate::ui::card_row::draw_focused) is handed as its `s`, and
+    /// [`card_row::draw_cell`](crate::ui::card_row::draw_cell) is handed as its `s`, and
     /// therefore THE scale [`rect_at`](Self::rect_at) built that cell's rect from: the live pop
-    /// times the live press. `draw_focused` divides by it twice (the shadow/sheen ramp and the
-    /// label's anchor at the unscaled card bottom), so handing it anything else is not a
+    /// times the live press. `draw_cell` divides by it twice (the corner radius and the label's
+    /// anchor at the unscaled card bottom), so handing it anything else is not a
     /// refinement of the treatment but a rect and a treatment that disagree —
     /// `a_pressed_grid_tile_hands_the_card_renderer_the_scale_its_rect_was_built_from` is the
     /// account. [`tile_scale`](Self::tile_scale) is this same rule generalised past the focused
@@ -509,15 +494,10 @@ impl GridPart {
         if !card_row::paint_visible(p, rect, scale, true) {
             return;
         }
-        let label = grid_label(item).revealed(card_row::band_reveal(
-            self.layout.row_expansion(index / self.layout.cols())));
-        let resume = if item.kind == 3 { None } else { item.resume_frac() };
-        // ONE scale for the rect and the treatment: the shadow and sheen ramp in with the pop and
-        // let go under the press, as a shelf's do (`RowMotion::scale` × `f.press.scale`)
-        card_row::draw_focused(p, grid_art(item), rect, scale, &style, resume, &label, f.measure);
-        if item.kind == 3 {
-            crate::ui::widgets::still_overlay(p, &tile_facts::of(item), rect, style.tile_radius(rect, scale), false, f.measure);
-        }
+        // ONE scale for the rect and the treatment: the ring and the label let go under the
+        // press, as a shelf's do (`RowMotion::scale` × `f.press.scale`). The card names itself.
+        card_row::draw_cell(p, grid_art(item), rect, scale, &style, item.resume_frac(),
+            &card_row::TileLabel::default(), true, f.measure);
     }
 }
 
@@ -550,7 +530,7 @@ impl<H: LibraryLike> Focusable<H> for GridPart {
             seat: Seat::Remembered,
             reachable: AxisMask::BOTH,
             edge: [EdgeRule::Geometric; 4],
-            extent: Rect::new(MARGIN_X, self.target_layout.row_y(0, self.scroll_target), GRID_RIGHT - MARGIN_X, self.target_layout.card_h()),
+            extent: Rect::new(LEFT, self.target_layout.row_y(0, self.scroll_target), self.target_layout.grid_right() - LEFT, self.target_layout.card_h()),
             len: self.elems.len(),
             elem: ElemKind::Card,
         });
@@ -582,7 +562,7 @@ impl<H: LibraryLike> Focusable<H> for GridPart {
         Some(Placed {
             rect,
             rest_rect,
-            clip: Rect::new(MARGIN_X - 32.0, CONTENT_TOP, GRID_RIGHT - MARGIN_X + 32.0, SCR_H - CONTENT_TOP),
+            clip: Rect::new(LEFT - 32.0, 0.0, self.layout.grid_right() - LEFT + 64.0, SCR_H),
             index: Some(index as u32),
         })
     }
@@ -643,14 +623,12 @@ impl<H: LibraryLike> Part<H> for GridPart {
             let scale = self.tile_scale(index, false, 1.0);
             // Metadata still pages ahead via LibraryWork::Want. Hidden artwork must wait
             // until visible. The bounded at-rest prepare pass alone may warm nearby hidden rows.
-            if !card_row::paint_visible(p, rect, scale, false) {
+            // Every card wears its title and year at rest (spec 6), so its label counts as visible.
+            if !card_row::paint_visible(p, rect, scale, true) {
                 continue;
             }
-            let resume = if item.kind == 3 { None } else { item.resume_frac() };
-            card_row::draw_tile(p, grid_art(item), rect, scale, &style, resume);
-            if item.kind == 3 {
-                crate::ui::widgets::still_overlay(p, &tile_facts::of(item), rect, style.tile_radius(rect, scale), false, f.measure);
-            }
+            card_row::draw_cell(p, grid_art(item), rect, scale, &style, item.resume_frac(),
+                &card_row::TileLabel::default(), false, f.measure);
         }
         self.draw_focused(f, focus);
         self.record_stops(f);
@@ -661,14 +639,16 @@ impl<H: LibraryLike> Part<H> for GridPart {
 mod pop_tests {
     use super::*;
     use crate::ui::card_row::RowStyle;
-    use crate::ui::consts::{CARD_H, CARD_W};
     use nj_machine::machine::{EntryId, GroupId};
+    /// The grid's resting card at the default layout every `GridPart::new` starts with.
+    #[allow(non_snake_case)]
+    fn CARD() -> (f32, f32) { let layout = Layout::new(&[], 0, false); (layout.card_w(), layout.card_h()) }
 
     #[test]
     fn episode_grid_geometry_and_page_window_share_four_column_rows() {
         let mut grid = GridPart::new(EntryId(7), GroupId(3));
         grid.elems = (1..=80).collect();
-        let layout = Layout::new(false, &[], 20, true).with_episodes(true);
+        let layout = Layout::new(&[], 20, true).with_episodes(true);
         grid.set_geometry(layout, 0.0, layout, 0.0);
         let first = grid.rect_at(0, false, 1.0);
         let next_row = grid.rect_at(4, false, 1.0);
@@ -693,14 +673,14 @@ mod pop_tests {
     fn a_newly_focused_grid_tile_grows_over_frames_and_the_old_one_lets_go() {
         let mut g = GridPart::new(EntryId(7), GroupId(3));
         g.elems = (1..=12).collect();
-        let full = CARD_W * RowStyle::HOME.focus_scale;
+        let full = CARD().0 * RowStyle::HOME.focus_scale;
         let dt = 1.0 / 60.0;
         g.pop_from_rest(3);
         g.tick(Some(3), dt);
         let first = g.rect_at(3, true, 1.0).w;
         assert!(
-            first > CARD_W + 0.1 && first < full - 0.1,
-            "one frame in, the tile is between rest and full scale: {first} (rest {CARD_W}, full {full})"
+            first > CARD().0 + 0.1 && first < full - 0.1,
+            "one frame in, the tile is between rest and full scale: {first} (rest {}, full {full})", CARD().0
         );
         for _ in 0..120 { g.tick(Some(3), dt); }
         assert!((g.rect_at(3, true, 1.0).w - full).abs() < 0.5, "…and settles at full scale");
@@ -708,10 +688,10 @@ mod pop_tests {
         g.tick(Some(4), dt);
         let old = g.rect_at(3, false, 1.0).w;
         let new = g.rect_at(4, true, 1.0).w;
-        assert!(old > CARD_W + 0.1 && old < full - 0.1, "the old tile lets go rather than snapping: {old}");
-        assert!(new > CARD_W + 0.1 && new < full - 0.1, "the new tile starts growing from rest: {new}");
+        assert!(old > CARD().0 + 0.1 && old < full - 0.1, "the old tile lets go rather than snapping: {old}");
+        assert!(new > CARD().0 + 0.1 && new < full - 0.1, "the new tile starts growing from rest: {new}");
         for _ in 0..120 { g.tick(Some(4), dt); }
-        assert_eq!(g.rect_at(3, false, 1.0).w, CARD_W, "a settled neighbour costs nothing");
+        assert_eq!(g.rect_at(3, false, 1.0).w, CARD().0, "a settled neighbour costs nothing");
     }
 
     /// **The width-only check above cannot see this defect.** Owner report, real TV: in the All
@@ -725,7 +705,7 @@ mod pop_tests {
     /// only reads `rect_at`'s own WIDTH, which never carried this bug — the rect was always built
     /// from the live spring — so it stays green with the defect fully shipped. This asserts on
     /// [`tile_scale`](GridPart::tile_scale) directly, the value now handed to BOTH call sites, and
-    /// that `rect_at`'s width is exactly `CARD_W` times that same number.
+    /// that `rect_at`'s width is exactly the card width times that same number.
     #[test]
     fn an_unfocusing_grid_tile_draws_its_shrinking_rect_and_treatment_at_the_same_scale() {
         let mut g = GridPart::new(EntryId(7), GroupId(3));
@@ -739,8 +719,8 @@ mod pop_tests {
         assert!(scale > 1.0 && scale < RowStyle::HOME.focus_scale,
             "mid-shrink, the outgoing tile's own scale sits strictly between rest and full: {scale}");
         let rect = g.rect_at(3, false, 1.0);
-        assert!((rect.w - CARD_W * scale).abs() < 0.001,
-            "rect_at's width must be CARD_W times the exact same scale tile_scale answers: rect.w={} scale={scale}", rect.w);
+        assert!((rect.w - CARD().0 * scale).abs() < 0.001,
+            "rect_at's width must be the card width times the exact same scale tile_scale answers: rect.w={} scale={scale}", rect.w);
         // The old call site's bug was indistinguishable from "already at rest": confirm this
         // frame's scale genuinely is not 1.0, so a renderer that received it instead of the old
         // hardcoded constant draws a visibly different (still-elevated) tile.
@@ -760,7 +740,7 @@ mod pop_tests {
     fn a_cell_focused_without_a_move_is_adopted_at_full_scale() {
         let mut g = GridPart::new(EntryId(7), GroupId(3));
         g.elems = (1..=12).collect();
-        let full = CARD_W * RowStyle::HOME.focus_scale;
+        let full = CARD().0 * RowStyle::HOME.focus_scale;
         let dt = 1.0 / 60.0;
         assert_eq!(g.rect_at(5, true, 1.0).w, full, "the frame BEFORE the tick already draws it whole");
         g.tick(Some(5), dt);
@@ -799,11 +779,11 @@ mod pop_tests {
         for press in [1.0_f32, 0.96, 0.918] {
             let rect = g.rect_at(3, true, press);
             let s = g.treatment_scale(3, press);
-            assert!((rect.w - CARD_W * s).abs() < 0.001,
+            assert!((rect.w - CARD().0 * s).abs() < 0.001,
                 "the treatment scale is the one the rect was built from: rect.w={} s={s}", rect.w);
             // the label block's anchor (`card_row::draw_focused`): the UNSCALED card bottom
-            assert!((rect.h / s - CARD_H).abs() < 0.01,
-                "a press never moves the label: rect.h/s={} (rest {CARD_H})", rect.h / s);
+            assert!((rect.h / s - CARD().1).abs() < 0.01,
+                "a press never moves the label: rect.h/s={} (rest {})", rect.h / s, CARD().1);
         }
         let ring = |press: f32| (g.treatment_scale(3, press) - 1.0) / (RowStyle::HOME.focus_scale - 1.0);
         assert!(ring(1.0) > 0.99, "a resting focused tile wears the whole shadow and sheen");

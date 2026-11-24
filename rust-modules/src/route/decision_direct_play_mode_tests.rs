@@ -154,3 +154,41 @@ fn the_play_automatically_retry_resolves_under_auto_not_the_failed_force() {
     assert_eq!(retry_context_with(&ps, 123, Some(DirectPlayMode::Auto)).direct_play_mode, DirectPlayMode::Auto);
     assert_eq!(retry_context_with(&ps, 123, Some(DirectPlayMode::Auto)).resume_ns, 123);
 }
+
+/// The household's AI lektor: a sidecar `.mka` beside the video, which the file direct play reads
+/// does not hold (`metadata::audio_ordinal` gives it no container ordinal).
+fn ai_sidecar() -> crate::metadata::Stream {
+    crate::metadata::Stream {
+        id: 10, index: 9, codec: "aac".into(), channels: 2, lang_code: "pol".into(),
+        title: "Lektor AI".into(), external: true, ..Default::default()
+    }
+}
+
+/// **A hand pick of an external audio track during direct play is a conversion.** A native switch
+/// would hand the demuxer an ordinal past the container's audio: it falls back to the file's own
+/// track while every report names "Lektor AI".
+#[test]
+fn an_external_audio_pick_during_direct_play_is_converted_not_switched_natively() {
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let embedded = crate::metadata::Stream { id: 2, index: 1, codec: "ac3".into(), channels: 6, ..Default::default() };
+    let audio = [embedded, ai_sidecar()];
+    let ordinal = crate::metadata::audio_ordinal(&audio, 1);
+    assert_eq!(live_family(&ps), RouteFamily::Direct);
+    commit_audio_selection(&mut ps, CarriedAudio::from_stream(&audio[1], ordinal));
+    assert!(pending_user_route_intent(UserRouteIntent::Retranscode), "the server converts the sidecar in");
+    assert!(!pending_user_route_intent(UserRouteIntent::NativeAudioReload));
+    assert_eq!(cur_audio_sid(&ps), 10);
+}
+
+/// Force Direct Play cannot carry a sidecar either: the pick is refused like any track that needs
+/// converting, and the current selection stays.
+#[test]
+fn force_direct_play_refuses_a_hand_pick_of_an_external_audio_track() {
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    ps.direct_play_mode = DirectPlayMode::Forced;
+    commit_audio_selection(&mut ps, CarriedAudio::from_stream(&ai_sidecar(), -1));
+    assert!(play_verdict(&ps).unwrap().contains("Force Direct Play is on"));
+    assert_eq!(cur_audio_sid(&ps), 0);
+}

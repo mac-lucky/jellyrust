@@ -306,6 +306,20 @@ pub struct Metadata {
     pub tagline: String,
     #[serde(default)]
     pub studio: String,
+    /// Every studio, in server order — Jellyfin's `Studios`; a Plex row names one, in
+    /// [`Self::studio`].
+    #[serde(skip)]
+    pub studios: Vec<String>,
+    /// `originalTitle` — the title in the item's own language, when the server has one (Jellyfin
+    /// `OriginalTitle`).
+    #[serde(rename = "originalTitle", default)]
+    pub original_title: String,
+    /// `addedAt` — when the item joined its library, unix seconds (Jellyfin `DateCreated`).
+    #[serde(rename = "addedAt", default, deserialize_with = "de_i64")]
+    pub added_at: i64,
+    /// The viewer marked the item a favourite (Jellyfin `UserData.IsFavorite`; Plex has none).
+    #[serde(skip)]
+    pub favorite: bool,
     #[serde(rename = "originallyAvailableAt", default)]
     pub originally_available_at: String,
     #[serde(default, deserialize_with = "de_i64")]
@@ -487,6 +501,12 @@ pub struct MediaPart {
     pub container: String,
     #[serde(rename = "Stream", default)]
     pub stream: Vec<Stream>,
+    /// Jellyfin only: the server's subtitle pick for this source is Off
+    /// (`MediaSource.DefaultSubtitleStreamIndex` = -1, a film whose subtitles the user turned off),
+    /// so no [`Stream::selected`] names one and the route must not turn one on by preference.
+    /// Set by `jf::convert::media`; never on the wire.
+    #[serde(skip)]
+    pub subtitles_off: bool,
 }
 
 impl MediaPart {
@@ -521,6 +541,12 @@ pub struct Stream {
     /// renderer uses this to exclude sidecars from the embedded-subtitle mapping.
     #[serde(default)]
     pub key: String,
+    /// Jellyfin's `IsExternal`: a stream in a file beside the video (an external subtitle, or a
+    /// sidecar audio track such as `ai-lektor`'s `<video>.pl.lektor.mka`), which the video file's
+    /// demuxer cannot reach. `metadata::Stream::external` reads it for AUDIO; a subtitle's stays
+    /// "has a delivery `key`".
+    #[serde(default)]
+    pub external: bool,
     #[serde(default)]
     pub codec: String,
     /// `/decision` only: this lane's verdict — `"directplay"` | `"transcode"` | `"copy"`.

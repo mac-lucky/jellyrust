@@ -517,19 +517,33 @@ enum OpenFailureAction {
     RollbackPendingOriginal,
     /// Cold Auto Original never produced a frame; build the HLS contingency bootstrap retained.
     StartAutoHls,
-    /// Manual Original, a post-frame interruption, or no viable route.
+    /// A server transcode played for a while, then its reconnect's Range was answered from the
+    /// wrong byte. Jellyfin stops the encoder once a paused connection drops, and the reconnect is
+    /// answered 200 by a new encode (C1, 2026-11-22, twice after a pause into the screen saver).
+    /// Restart the encode at the playhead, as a transcode seek does.
+    RestartTranscode,
+    /// Manual Original, a direct-play interruption, a transcode that died early, or no route.
     Error,
 }
+
+/// Position ticks a transcode must have played since its last Load before a refused reconnect
+/// restarts it. `frames` counts the pipeline's 5 Hz position callback, not frames, so 25 is about
+/// 5 s. It restarts at zero with the restarted encode, so an encode that keeps failing at the same
+/// spot reaches the failure read-out instead of reloading forever.
+const TRANSCODE_RESTART_MIN_FRAMES: i32 = 25;
 
 fn open_failure_action(
     pending_original: bool,
     auto_original: bool,
     no_frames: bool,
+    restartable_transcode: bool,
 ) -> OpenFailureAction {
     if pending_original {
         OpenFailureAction::RollbackPendingOriginal
     } else if auto_original && no_frames {
         OpenFailureAction::StartAutoHls
+    } else if restartable_transcode {
+        OpenFailureAction::RestartTranscode
     } else {
         OpenFailureAction::Error
     }
@@ -557,14 +571,22 @@ fn finish_preview_open_failure(
     crate::player::preview::retire(ps, pa, "open failed");
 }
 
-/// Recover either kind of failed Original open and return the reload position in nanoseconds.
+/// Recover either kind of failed Original open, or a transcode whose transfer died after playing,
+/// and return the reload position in nanoseconds.
 /// Pending HLS rollback has priority; a failed rollback is terminal rather than silently starting
 /// a third transaction on route state whose encoder restore already failed.
 fn recover_failed_source_route(ps: &mut crate::route::PlaybackSession) -> Option<crate::route::OriginalRollback> {
+    let frames = SHARED.frames.load(Relaxed);
     let action = open_failure_action(
         crate::route::original_recovery_pending(),
         crate::route::auto_original_watch(ps).is_some(),
-        SHARED.frames.load(Relaxed) == 0,
+        frames == 0,
+        // Only a reconnect the server ANSWERED (from the wrong byte): it is up, so the synchronous
+        // rebuild below returns promptly. Other transport failures, and the Original fallback that
+        // raises `demux_io_failed` to show the read-out, keep failing as before.
+        crate::route::is_transcoding(ps)
+            && SHARED.demux_range_ignored.load(Acquire)
+            && frames >= TRANSCODE_RESTART_MIN_FRAMES,
     );
     match action {
         OpenFailureAction::RollbackPendingOriginal => recover_from_failed_original(ps),
@@ -577,6 +599,18 @@ fn recover_failed_source_route(ps: &mut crate::route::PlaybackSession) -> Option
             }
             let secs = (SHARED.playpos_ns.load(Relaxed) / 1_000_000_000).max(0);
             crate::route::fallback_unopened_auto_to_hls(ps, secs)?;
+            Some(crate::route::OriginalRollback::without_deferred(
+                secs * 1_000_000_000,
+            ))
+        }
+        OpenFailureAction::RestartTranscode => {
+            let secs = (super::intended_pos_ns(ps) / 1_000_000_000).max(0);
+            crate::route::transcode_seek(ps, secs)?;
+            // `secs` may be a seek target that had not landed; the restart lands it.
+            crate::route::commit_user_seek();
+            super::log(&format!(
+                "transcode: reconnect refused after {frames} position ticks, restarting the encode at {secs}s"
+            ));
             Some(crate::route::OriginalRollback::without_deferred(
                 secs * 1_000_000_000,
             ))
@@ -1039,7 +1073,7 @@ pub(crate) fn pump(ps: &mut crate::route::PlaybackSession, pa: &mut super::adapt
         if let Some(rollback) = recover_failed_source_route(ps) {
             let started = settle_reload(
                 super::engine::reload_transcode(ps, pa, rollback.offset_ns),
-                "HLS rollback after source I/O failure",
+                "source recovery after I/O failure",
             );
             let _ = started;
             return;
@@ -1893,19 +1927,44 @@ mod tests {
         use OpenFailureAction::{Error, RollbackPendingOriginal, StartAutoHls};
 
         assert_eq!(
-            open_failure_action(true, true, true),
+            open_failure_action(true, true, true, false),
             RollbackPendingOriginal
         );
-        assert_eq!(open_failure_action(false, true, true), StartAutoHls);
+        assert_eq!(open_failure_action(false, true, true, false), StartAutoHls);
         assert_eq!(
-            open_failure_action(false, true, false),
+            open_failure_action(false, true, false, false),
             Error,
             "a post-frame failure is not a cold open"
         );
         assert_eq!(
-            open_failure_action(false, false, true),
+            open_failure_action(false, false, true, false),
             Error,
             "manual Original stays the user's fixed choice"
+        );
+    }
+
+    /// C1, 2026-11-22: a DTS film played as a server transcode, was paused into the screen saver,
+    /// and on Play the reconnect's Range came back 200 (`RangeIgnored`). That raised the failure
+    /// read-out, where Retry then played on. The pump must restart the encode itself.
+    #[test]
+    fn a_transcode_that_died_after_playing_restarts_its_encode() {
+        use OpenFailureAction::{Error, RestartTranscode, RollbackPendingOriginal};
+
+        assert_eq!(open_failure_action(false, false, false, true), RestartTranscode);
+        assert_eq!(
+            open_failure_action(false, true, false, true),
+            RestartTranscode,
+            "Auto quality that settled on a transcode restarts it too"
+        );
+        assert_eq!(
+            open_failure_action(true, false, false, true),
+            RollbackPendingOriginal,
+            "a held HLS rollback still owns the failure"
+        );
+        assert_eq!(
+            open_failure_action(false, false, false, false),
+            Error,
+            "direct play, a refusal before 5 s of playing, or a transfer the server never answered still fails"
         );
     }
 

@@ -1,7 +1,7 @@
 //! Optional seek thumbnails: one pending tile, one shown tile, no playback ownership.
 //! Adapted from PlxNative #767; Jellyfin sheet addressing and cropping live below this view.
 use crate::jf::trickplay::{self, LayoutId, Spec};
-use crate::ui::{tex, theme, Painter, Rect};
+use crate::ui::tex;
 
 const REQUEST_W: i32 = 320;
 const REQUEST_H: i32 = 180;
@@ -124,22 +124,22 @@ impl ScrubPreview {
             }
         }
     }
-    pub(crate) fn draw(
+    /// The resident still for the scrub target `pos_ns` — its texture and pixel size — to draw in
+    /// the OSD's seek tooltip, or `None` while it loads, when the item has none, or off the server's
+    /// sheets. Requests at most one tile at a time and coalesces to the latest target.
+    pub(crate) fn still(
         &mut self,
         ps: &crate::route::PlaybackSession,
         pos_ns: i64,
-        dur_ns: i64,
         now: u32,
-        bar: Rect,
-        chrome_top: f32,
-    ) {
+    ) -> Option<(std::os::raw::c_uint, f32, f32)> {
         let Some((sid, owner)) = crate::route::scrub_preview_owner(ps) else {
             self.release();
-            return;
+            return None;
         };
         let Some(client) = crate::catalog::client_for(sid) else {
             self.release();
-            return;
+            return None;
         };
         let id = LayoutId {
             srv: sid.raw(),
@@ -155,7 +155,7 @@ impl ScrubPreview {
         let known = trickplay::known(&id);
         if known == Some(None) {
             self.release();
-            return;
+            return None;
         }
         let spec = known.flatten();
         let ms = pos_ns.max(0) / 1_000_000;
@@ -187,63 +187,15 @@ impl ScrubPreview {
             },
             |ms| forget(&id, ms),
         );
-        let Some(ms) = shown else {
-            return;
-        };
         let (texture, w, h) =
-            tex::peek_wh_on(id.srv, &id.owner.key(ms), REQUEST_W, REQUEST_H, false);
-        if texture == 0 {
-            return;
-        }
-        let fraction = if dur_ns > 0 {
-            (pos_ns as f64 / dur_ns as f64).clamp(0.0, 1.0) as f32
-        } else {
-            0.0
-        };
-        let rect = card_rect(bar.x + bar.w * fraction, bar, chrome_top, w, h);
-        let p = Painter::root();
-        p.shadow(rect, 12.0, 24.0, 8.0, theme::scrim_black(0.5));
-        let fitted = fit(rect, w, h);
-        if fitted != rect {
-            p.rrect(rect, 12.0, 0.0, theme::scrim_black(1.0));
-        }
-        p.tex(
-            texture,
-            fitted,
-            if fitted == rect { 12.0 } else { 0.0 },
-            theme::TINT_WHITE,
-        );
-        p.rring(rect, 12.0, 1.5, theme::CARD_SHEEN);
+            tex::peek_wh_on(id.srv, &id.owner.key(shown?), REQUEST_W, REQUEST_H, false);
+        (texture != 0).then_some((texture, w, h))
     }
 }
 fn forget(id: &LayoutId, ms: i64) {
     tex::forget_on(id.srv, &id.owner.key(ms), REQUEST_W, REQUEST_H, false);
 }
 
-/// Keep the preview above both the title and control row, within the playbar's safe margins.
-fn card_rect(knob: f32, bar: Rect, chrome_top: f32, w: f32, h: f32) -> Rect {
-    let height = 180.0f32.min((chrome_top - theme::space::MD).max(0.0));
-    let aspect = if w > 0.0 && h > 0.0 {
-        w / h
-    } else {
-        16.0 / 9.0
-    };
-    let width = (height * aspect).clamp(height, height * 2.4).min(bar.w);
-    Rect::new(
-        (knob - width * 0.5).clamp(bar.x, (bar.x + bar.w - width).max(bar.x)),
-        chrome_top - theme::space::MD - height,
-        width,
-        height,
-    )
-}
-fn fit(r: Rect, w: f32, h: f32) -> Rect {
-    if w <= 0.0 || h <= 0.0 {
-        return r;
-    }
-    let k = (r.w / w).min(r.h / h);
-    let (w, h) = (w * k, h * k);
-    Rect::new(r.x + (r.w - w) * 0.5, r.y + (r.h - h) * 0.5, w, h)
-}
 impl Drop for ScrubPreview {
     fn drop(&mut self) {
         self.release();
@@ -418,19 +370,6 @@ mod tests {
             m.pending,
             Some((30_000, start.wrapping_add(PENDING_MAX_MS)))
         );
-    }
-    #[test]
-    fn scrub_preview_card_clamps_at_both_ends_and_preserves_aspect() {
-        let bar = Rect::new(96.0, 882.0, 1728.0, 8.0);
-        for knob in [-10.0, 96.0, 960.0, 1824.0, 2000.0] {
-            for (w, h) in [(320.0, 180.0), (80.0, 180.0), (600.0, 180.0)] {
-                let r = card_rect(knob, bar, 750.0, w, h);
-                let image = fit(r, w, h);
-                assert!(r.x >= bar.x && r.x + r.w <= bar.x + bar.w);
-                assert!(r.y + r.h <= 750.0);
-                assert!((image.w / image.h - w / h).abs() < 0.001);
-            }
-        }
     }
     #[test]
     fn scrub_preview_a_missing_later_tile_does_not_retry_on_every_frame() {

@@ -1036,9 +1036,11 @@ impl Jf<'_> {
         if r.audio_stream_id > 0 {
             s.audio_index = Some(ids::stream_index(r.audio_stream_id));
         }
-        if r.subtitle_stream_id > 0 {
-            s.subtitle_index = Some(ids::stream_index(r.subtitle_stream_id));
-        }
+        // The live subtitle on every report, a chosen Off as -1: the server remembers what it is
+        // told (`RememberSubtitleSelections`), so an Off left unsaid kept the old track remembered.
+        // Nothing for a playback with no subtitle nobody turned off: the server ignores a null,
+        // while a -1 would be served as this film's Off on every client.
+        s.subtitle_index = (r.subtitle_stream_id != 0).then(|| ids::stream_index(r.subtitle_stream_id));
         // Stamped once, on the first report, and carried by every later one. Taken here rather
         // than at the negotiation because one that never reaches the engine (a refusal, a
         // superseded resolve) never starts a playback to attribute time to.

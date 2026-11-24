@@ -108,32 +108,6 @@ fn has_home(out: &[Stamped<TestHost>], pred: impl Fn(&HomeReq) -> bool) -> bool 
 }
 
 #[test]
-fn every_tab_pill_round_trips_through_the_focus_packing() {
-    let cases = [
-        (STRIP_HOME_ELEM, HomeReq::Tab(HomeTab::Home)),
-        (STRIP_MOVIES_ELEM, HomeReq::Tab(HomeTab::Movies)),
-        (STRIP_SHOWS_ELEM, HomeReq::Tab(HomeTab::Shows)),
-        (STRIP_SEARCH_ELEM, HomeReq::Tab(HomeTab::Search)),
-        (STRIP_ACCOUNT_ELEM, HomeReq::Account),
-    ];
-    for (elem, want) in cases {
-        assert_eq!(HomeScreen::request_for_strip(elem), Some(want));
-    }
-    assert_eq!(HomeScreen::request_for_strip(STRIP_ACCOUNT_ELEM + 1), None);
-    for page_key in [HERO_PLAY_ELEM, HERO_INFO_ELEM, FIRST_ITEM_ELEM] {
-        assert_eq!(HomeScreen::request_for_strip(page_key), None);
-    }
-}
-
-#[test]
-fn top_band_focus_walks_to_the_last_section_whatever_the_count() {
-    assert_eq!(STRIP_MOVIES_ELEM - STRIP_HOME_ELEM, 1);
-    assert_eq!(STRIP_SHOWS_ELEM - STRIP_HOME_ELEM, 2);
-    assert_eq!(STRIP_SEARCH_ELEM - STRIP_HOME_ELEM, 3);
-    assert_eq!(STRIP_ACCOUNT_ELEM - STRIP_HOME_ELEM, 4);
-}
-
-#[test]
 fn set_hero_focus_clamps_onto_the_last_drawable_pill() {
     let _guard = nj_base::testlock::serial();
     let mut state = crate::catalog_fetch::PmsState::default();
@@ -144,49 +118,50 @@ fn set_hero_focus_clamps_onto_the_last_drawable_pill() {
     let mut groups = Vec::new();
     Focusable::<TestHost>::groups(&s, &cx(snapshot.view(), None), &mut groups);
     assert_eq!(groups[0].id, HERO_GROUP);
-    assert_eq!(groups[0].len, 2);
+    assert_eq!(groups[0].len, 1, "the hero is one stop: its face, not a row of buttons");
     assert!(groups
         .iter()
         .all(|g| g.id != crate::ui::containers::tabs::STRIP));
 }
 
+/// RIGHT on the hero pages its slides BEFORE the engine sees it, Litefin's carousel; LEFT is the
+/// engine's on every slide, so the dispatcher's door takes it into the rail.
 #[test]
-fn the_pager_is_not_a_focus_stop_and_the_rows_end_pages_instead() {
+fn the_hero_pages_right_and_leaves_left_to_the_rail() {
     let _guard = nj_base::testlock::serial();
     let mut state = crate::catalog_fetch::PmsState::default();
     let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
     crate::catalog_fetch::seed_for_test(&mut state, &adapter, 3, crate::catalog_fetch::HubState::Ready);
     let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
-    let mut s = screen(snapshot.view());
-    let context = cx(
-        snapshot.view(),
-        Some(FocusKey {
-            entry: s.entry,
-            elem: HERO_INFO_ELEM,
-        }),
-    );
-    let owner = InputOwner::Entry(s.entry);
-    let mut engine = FocusEngine::new();
-    engine.set(
-        owner,
-        context.focus.current.unwrap(),
-        Some(HERO_GROUP),
-        By::Restore,
-    );
-    let mut links = Vec::new();
-    <HomeScreen as Screen<TestHost>>::links(&s, &mut links);
-    assert_eq!(
-        engine.move_dir(owner, &s, &links, Dir::Right, &context),
-        Outcome::Edge(EdgeRule::Screen)
-    );
-    let before = s.carousel.clone();
-    assert!(s.flip(snapshot.view(), 1));
-    assert_ne!(s.carousel, before);
-    assert_eq!(engine.current(owner).unwrap().elem, HERO_INFO_ELEM);
+    let view = snapshot.view();
+    let mut s = screen(view);
+    let hero = Some(FocusKey { entry: s.entry, elem: HERO_ELEM });
+    let key = |key| ScreenEvent::Input(InputEvent {
+        at: Tick::default(),
+        source: Source::Sdl,
+        kind: InputKind::Key { key, sym: 0, wcode: 0, edge: Edge::Down, at_edge: false },
+    });
+    assert_eq!(s.carousel_index(view), 0);
+    let (handled, _, _) = step(&mut s, view, hero, &key(Key::Left));
+    assert_eq!((handled, s.carousel_index(view)), (Handled::No, 0), "the first slide's LEFT is the engine's");
+    let (handled, _, _) = step(&mut s, view, hero, &key(Key::Right));
+    assert_eq!((handled, s.carousel_index(view)), (Handled::Yes, 1));
+    s.hero_flip_cd = 0.0;
+    let (handled, _, _) = step(&mut s, view, hero, &key(Key::Left));
+    assert_eq!((handled, s.carousel_index(view)), (Handled::No, 1), "past the first, LEFT still pages nothing");
+    // …and the engine never pages: the hero's sides are no edge the screen is asked about
+    let mut groups = Vec::new();
+    Focusable::<TestHost>::groups(&s, &cx(view, hero), &mut groups);
+    assert_eq!(groups[0].edge[2..], [EdgeRule::Stop, EdgeRule::Stop]);
+    // a card's LEFT/RIGHT stays the engine's
+    let card = Some(first_card(&s));
+    assert_eq!(step(&mut s, view, card, &key(Key::Right)).0, Handled::No);
 }
 
+/// Home declares no door to the rail: the dispatcher enters it on a LEFT the page has no answer
+/// for, the same way on every page, so no screen links to it (`ui::dispatch::enter_rail`).
 #[test]
-fn the_top_band_reports_the_chip_and_the_pills_as_one_answer() {
+fn home_links_name_no_rail_door() {
     let _guard = nj_base::testlock::serial();
     let mut state = crate::catalog_fetch::PmsState::default();
     let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
@@ -195,27 +170,8 @@ fn the_top_band_reports_the_chip_and_the_pills_as_one_answer() {
     let s = screen(snapshot.view());
     let mut links = Vec::new();
     <HomeScreen as Screen<TestHost>>::links(&s, &mut links);
-    assert!(links.contains(&Link {
-        from: crate::ui::containers::tabs::STRIP,
-        dir: Dir::Down,
-        to: HERO_GROUP
-    }));
-    assert!(links.contains(&Link {
-        from: HERO_GROUP,
-        dir: Dir::Up,
-        to: crate::ui::containers::tabs::STRIP
-    }));
-}
-
-#[test]
-fn the_top_band_walks_permanent_pills_not_the_section_table() {
-    assert_ne!(STRIP_HOME_ELEM, STRIP_MOVIES_ELEM);
-    assert_ne!(STRIP_MOVIES_ELEM, STRIP_SHOWS_ELEM);
-    assert_ne!(STRIP_SHOWS_ELEM, STRIP_SEARCH_ELEM);
-    assert!(matches!(
-        HomeScreen::request_for_strip(STRIP_SEARCH_ELEM),
-        Some(HomeReq::Tab(HomeTab::Search))
-    ));
+    assert!(links.iter().all(|l| l.from != crate::ui::containers::tabs::STRIP
+        && l.to != crate::ui::containers::tabs::STRIP));
 }
 
 #[test]
@@ -287,7 +243,7 @@ fn a_failed_home_stands_on_the_page_readout_lines() {
     assert_eq!(verdict.y, StatusOverlay::FULL_ANCHOR_TOP);
     let drawn = overlay.action_frame_measured(&measure).unwrap();
     assert_eq!(drawn.y, verdict.y + verdict.h + crate::ui::theme::space::LG);
-    let hit = screen(snapshot.view()).hero_button_rect(snapshot.view(), 0, &measure).unwrap();
+    let hit = screen(snapshot.view()).hero_rect(snapshot.view(), &measure).unwrap();
     assert_eq!([hit.x, hit.y, hit.w, hit.h], [drawn.x, drawn.y, drawn.w, drawn.h]);
 }
 
@@ -329,7 +285,7 @@ fn a_failed_home_names_a_wrong_clock_when_key_mode_cannot_help() {
     assert_eq!(overlay.caption, plain_caption.as_c_str(), "the verdict is unchanged");
     let drawn = overlay.action_frame_measured(&measure).unwrap();
     assert!(drawn.y > plain_row.y, "the reason moves the action row");
-    let hit = s.hero_button_rect(view, 0, &measure).unwrap();
+    let hit = s.hero_rect(view, &measure).unwrap();
     assert_eq!([hit.x, hit.y, hit.w, hit.h], [drawn.x, drawn.y, drawn.w, drawn.h], "the hit rect is the drawn pill");
 
     keypin::key_changed(&key);
@@ -410,29 +366,6 @@ fn observe_card(h: &mut crate::ui::card_motion::History, s: &HomeScreen, ms: u32
 }
 
 #[test]
-fn a_retained_shelf_offset_makes_the_late_dive_read_as_fast() {
-    use crate::ui::card_motion::{History, Verdict};
-    let _guard = nj_base::testlock::serial();
-    let mut state = crate::catalog_fetch::PmsState::default();
-    let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
-    crate::catalog_fetch::seed_for_test(&mut state, &adapter, 3, crate::catalog_fetch::HubState::Ready);
-    let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
-    let late_dive_frame = |offset: f32| {
-        let mut s = screen(snapshot.view());
-        s.snap.jump(0.9);
-        s.snap_target = 1.0;
-        s.grid.shelves[0].restore_scroll(offset, card_row::MAX_ROW_ITEMS, &RowStyle::HOME);
-        s.layout_grid();
-        let mut h = History::default();
-        assert_eq!(observe_card(&mut h, &s, 0), Verdict::Unknown);
-        step(&mut s, snapshot.view(), None, &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
-        observe_card(&mut h, &s, 16)
-    };
-    assert_eq!(late_dive_frame(0.0), Verdict::Settled, "vertical late-dive control is under 120px/s");
-    assert_eq!(late_dive_frame(4000.0), Verdict::Moving, "the retained-offset product moves the card fast");
-}
-
-#[test]
 fn the_hero_to_grid_dive_is_observed_from_card_placement_and_then_settles() {
     use crate::ui::card_motion::{History, Verdict};
     let _guard = nj_base::testlock::serial();
@@ -480,84 +413,68 @@ fn the_status_screen_takes_ok_but_never_the_top_band() {
         snapshot.view(),
         Some(FocusKey {
             entry,
-            elem: HERO_PLAY_ELEM,
+            elem: HERO_ELEM,
         }),
-        &ScreenEvent::Activate(HERO_PLAY_ELEM),
+        &ScreenEvent::Activate(HERO_ELEM),
     );
     assert!(retry.iter().any(|stamped| matches!(
         &stamped.fx,
         Fx::App(AppFx::Store(StoreId::Hubs, StoreCmd::Hubs(HubsCmd::Retry)))
     )));
-    for elem in [STRIP_HOME_ELEM, STRIP_MOVIES_ELEM, STRIP_SHOWS_ELEM, STRIP_SEARCH_ELEM, STRIP_ACCOUNT_ELEM] {
-        let (_, out, _) = step(&mut s, snapshot.view(), None, &ScreenEvent::Activate(elem));
-        let expected = HomeScreen::request_for_strip(elem).unwrap();
-        assert!(has_home(&out, |r| *r == expected));
-        assert!(!out.iter().any(|s| matches!(&s.fx,
-            Fx::App(AppFx::Store(StoreId::Hubs, StoreCmd::Hubs(HubsCmd::Retry))))));
-    }
     crate::catalog_fetch::seed_for_test(&mut state, &adapter, 3, crate::catalog_fetch::HubState::Failed);
     let populated = crate::catalog_fetch::hubs_snapshot(&state);
     let mut s = screen(populated.view());
-    let (_, out, _) = step(&mut s, populated.view(), None, &ScreenEvent::Activate(HERO_PLAY_ELEM));
-    assert!(has_home(&out, |r| matches!(r, HomeReq::Play { .. })));
+    let (_, out, _) = step(&mut s, populated.view(), None, &ScreenEvent::Activate(HERO_ELEM));
+    assert!(has_home(&out, |r| matches!(r, HomeReq::Detail { .. })), "OK on the hero opens its slide");
     assert!(!out.iter().any(|s| matches!(&s.fx,
         Fx::App(AppFx::Store(StoreId::Hubs, StoreCmd::Hubs(HubsCmd::Retry))))));
 }
 
 #[test]
-fn pointer_hit_column_matches_the_drawn_card_at_every_snap_phase() {
-    for scroll in [0.0, 415.0, 830.0] {
-        for snap in [0.0, 0.37, 1.0] {
-            let effective = scroll * snap;
+fn pointer_hit_column_matches_the_drawn_card_for_both_card_styles() {
+    for sty in [&RowStyle::HOME, &RowStyle::EPISODE] {
+        for scroll in [0.0, 415.0, 830.0] {
             for col in 0..24 {
-                assert_eq!(
-                    col_at(card_x(col, effective) + CARD_W * 0.5, effective, 24),
-                    Some(col)
-                );
+                assert_eq!(col_at(sty, card_x(sty, col, scroll) + sty.w * 0.5, scroll, 24), Some(col));
             }
         }
     }
 }
 
+/// The hero is the top of the page: its stop rides the page up as the rows take focus, it takes
+/// no press scale (its focus is the band), and the pointer finds it over its whole face.
 #[test]
-fn drawn_hero_geometry_follows_slide_and_the_captured_press_scale() {
+fn the_hero_rides_the_page_and_takes_the_pointer_over_its_face() {
     let _guard = nj_base::testlock::serial();
     let mut state = crate::catalog_fetch::PmsState::default();
     let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
     crate::catalog_fetch::seed_for_test(&mut state, &adapter, 3, crate::catalog_fetch::HubState::Ready);
     let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
     let mut s = screen(snapshot.view());
-    s.outgoing = s.carousel.clone();
-    assert!(s.outgoing.is_some());
-    for _ in 0..80 { s.hero_pop.step(Some(0), 0.016); }
-    let key = FocusKey { entry: s.entry, elem: HERO_PLAY_ELEM };
-    for dir in [-1.0, 1.0] {
-        s.hero_dir = dir;
-        for slide in [0.3, 0.8, 1.0] {
-            s.hero_slide.jump(slide);
-            for press in [0.93, 1.0, 1.025] {
-                let mut context = cx(snapshot.view(), Some(key));
-                context.press.scale = press;
-                let base = s.hero_button_rect(snapshot.view(), 0, context.measure).unwrap();
-                let drawn = Focusable::<TestHost>::place(&s, &key.elem, &context, At::Drawn).unwrap();
-                let target = Focusable::<TestHost>::place(&s, &key.elem, &context, At::SpringTarget).unwrap();
-                assert!((drawn.rect.cx() - base.cx() - dir * (1.0 - slide) * SCR_W).abs() < 0.01);
-                assert!((drawn.rect.w - base.w * crate::ui::widgets::CTRL_FOCUS_SCALE * press).abs() < 0.01);
-                assert!((target.rect.cx() - base.cx()).abs() < 0.01);
-                if dir == 1.0 && slide == 0.8 {
-                    let mut frame = DrawFrame::new(&context, Painter::root());
-                    s.record_stops(&mut frame, snapshot.view());
-                    let mut map = HitMap::new();
-                    map.fill(frame.into_stops());
-                    map.swap();
-                    assert_eq!(map.resolve(Some(s.entry), PointerKind::Click,
-                        drawn.rect.cx(), drawn.rect.cy(), Some(key)).hit, Some(key));
-                    assert_eq!(map.resolve(Some(s.entry), PointerKind::Click,
-                        base.cx(), base.cy(), Some(key)).hit, None);
-                }
-            }
+    let key = FocusKey { entry: s.entry, elem: HERO_ELEM };
+    for snap in [0.0, 0.3, 1.0] {
+        s.snap.jump(snap);
+        for press in [0.93, 1.0] {
+            let mut context = cx(snapshot.view(), Some(key));
+            context.press.scale = press;
+            let drawn = Focusable::<TestHost>::place(&s, &key.elem, &context, At::Drawn).unwrap();
+            let target = Focusable::<TestHost>::place(&s, &key.elem, &context, At::SpringTarget).unwrap();
+            assert_eq!(drawn.rect, Rect::new(HERO_SEAT.x, HERO_SEAT.y - snap * PAGE_LIFT, HERO_SEAT.w, HERO_SEAT.h));
+            assert_eq!(target.rect, HERO_SEAT, "the hero rests where it is with the hero up");
         }
     }
+    s.snap.jump(0.3);
+    let context = cx(snapshot.view(), Some(key));
+    let mut frame = DrawFrame::new(&context, Painter::root());
+    s.record_stops(&mut frame, snapshot.view());
+    let mut map = HitMap::new();
+    map.fill(frame.into_stops());
+    map.swap();
+    let lift = 0.3 * PAGE_LIFT;
+    assert_eq!(map.resolve(Some(s.entry), PointerKind::Click, 1500.0, 200.0 - lift, Some(key)).hit, Some(key),
+        "the art is the hero's face too");
+    assert_ne!(map.resolve(Some(s.entry), PointerKind::Click, 1500.0, ROWS_OVERLAP_TOP + 10.0 - lift, Some(key)).hit,
+        Some(key), "the rows' overlap is the rows'");
 }
 
 #[test]
@@ -568,13 +485,13 @@ fn status_action_geometry_does_not_inherit_the_previous_hero_pop_or_slide() {
     crate::catalog_fetch::seed_for_test(&mut state, &adapter, 0, crate::catalog_fetch::HubState::Failed);
     let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
     let mut s = screen(snapshot.view());
-    for _ in 0..80 { s.hero_pop.step(Some(0), 0.016); }
     s.outgoing = Some((crate::catalog::ServerId::UNSET, "old".into()));
     s.hero_slide.jump(0.5);
-    let key = FocusKey { entry: s.entry, elem: HERO_PLAY_ELEM };
+    s.snap.jump(0.4);
+    let key = FocusKey { entry: s.entry, elem: HERO_ELEM };
     let mut context = cx(snapshot.view(), Some(key));
     context.press.scale = 0.93;
-    let base = s.hero_button_rect(snapshot.view(), 0, context.measure).unwrap();
+    let base = s.hero_rect(snapshot.view(), context.measure).unwrap();
     let drawn = Focusable::<TestHost>::place(&s, &key.elem, &context, At::Drawn).unwrap();
     assert_eq!((drawn.rect.x, drawn.rect.y, drawn.rect.w, drawn.rect.h),
         (base.x, base.y, base.w, base.h));
@@ -589,219 +506,40 @@ fn drawn_card_geometry_includes_press_but_its_rest_anchor_does_not() {
     let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
     let mut s = screen(snapshot.view());
     s.snap.jump(1.0);
-    for _ in 0..80 { s.grid.shelves[0].update(3, Some(0), &RowStyle::HOME, 0.016); }
+    let sty = s.style(0);
+    for _ in 0..80 { s.grid.shelves[0].update(3, Some(0), sty, 0.016); }
     s.layout_grid();
     let key = first_card(&s);
     for press in [0.93, 1.0, 1.025] {
         let mut context = cx(snapshot.view(), Some(key));
         context.press.scale = press;
         let placed = Focusable::<TestHost>::place(&s, &key.elem, &context, At::Drawn).unwrap();
-        assert!((placed.rect.w - CARD_W * s.grid.shelves[0].scale(0) * press).abs() < 0.01);
-        assert!((placed.rest_rect.w - CARD_W * RowStyle::HOME.focus_scale).abs() < 0.01);
+        assert!((placed.rect.w - sty.w * s.grid.shelves[0].scale(0) * press).abs() < 0.01);
+        assert!((placed.rest_rect.w - sty.w * sty.focus_scale).abs() < 0.01);
         context.press = PressRead::default();
         let opener = s.focused_rect(Some(key), &context, At::Drawn).unwrap();
-        assert!((opener.w - CARD_W * s.grid.shelves[0].scale(0)).abs() < 0.01);
+        assert!((opener.w - sty.w * s.grid.shelves[0].scale(0)).abs() < 0.01);
     }
 }
 
 #[test]
-fn the_card_anchor_rect_tracks_the_drawn_card_through_scroll_and_snap() {
-    for &scroll in &[0.0f32, 415.0, 830.0] {
-        for &sp in &[0.0f32, 0.37, 1.0] {
-            let es = scroll * sp;
+fn the_card_anchor_rect_tracks_the_drawn_card_through_scroll() {
+    for sty in [&RowStyle::HOME, &RowStyle::EPISODE] {
+        for &scroll in &[0.0f32, 415.0, 830.0] {
             for c in 0..8usize {
-                for &focus in &[1.0f32, RowStyle::HOME.focus_scale] {
-                    let base = Rect::new(card_x(c, es), 176.0 + CARD_DY, CARD_W, CARD_H);
+                for &focus in &[1.0f32, sty.focus_scale] {
+                    let base = Rect::new(card_x(sty, c, scroll), 176.0 + ROW_CARDS_DY, sty.w, sty.h);
                     let r = base.scaled(focus);
                     // magnification is about the card's CENTRE — the anchor must not slide
                     assert!(
-                        (r.cx() - base.cx()).abs() < 0.001
-                            && (r.cy() - base.cy()).abs() < 0.001,
-                        "card {c} (scroll={scroll}, sp={sp}, focus={focus}) moved its centre"
+                        (r.cx() - base.cx()).abs() < 0.001 && (r.cy() - base.cy()).abs() < 0.001,
+                        "card {c} (scroll={scroll}, focus={focus}) moved its centre"
                     );
                     // …and the rect the panel is placed beside is the one the pointer would hit
-                    assert_eq!(
-                        col_at(r.cx(), es, 8),
-                        Some(c),
-                        "anchor centre for card {c} (scroll={scroll}, sp={sp}) is not over that card"
-                    );
-                    assert!(
-                        r.w >= CARD_W && r.h >= CARD_H,
-                        "focus must not shrink the card"
-                    );
+                    assert_eq!(col_at(sty, r.cx(), scroll, 8), Some(c), "anchor centre for card {c} is not over it");
+                    assert!(r.w >= sty.w && r.h >= sty.h, "focus must not shrink the card");
                 }
             }
-        }
-    }
-}
-
-fn blurred(blur: [[f32; 3]; 4]) -> PmsMovie {
-    PmsMovie {
-        has_blur: true,
-        blur,
-        ..Default::default()
-    }
-}
-
-#[test]
-fn the_wash_floors_on_the_app_surface_and_never_dims_toward_black() {
-    let flat = [theme::SURFACE_APP; 4];
-    // "no artwork" IS the app's own ground, with no special case
-    assert_eq!(
-        wash_corners(None, flat, 0.0),
-        flat,
-        "an empty pool is the app's ground"
-    );
-    assert_eq!(
-        wash_corners(Some(&PmsMovie::default()), flat, 0.0),
-        flat,
-        "…and so is an item with no envelope"
-    );
-    // the grid end of the snap lands on exactly the colour `frame_clear` already laid down —
-    // where the old `dim` ramp landed on black
-    let bright = blurred([
-        [0.95, 0.93, 0.90],
-        [1.0, 1.0, 1.0],
-        [0.8, 0.75, 0.2],
-        [0.1, 0.1, 0.12],
-    ]);
-    assert_eq!(
-        wash_corners(Some(&bright), flat, 1.0),
-        flat,
-        "the dive resolves to the app ground, not to black"
-    );
-    assert_eq!(
-        wash_corners(Some(&bright), flat, 1.5),
-        flat,
-        "…and an overshooting snap cannot push past it"
-    );
-
-    // **The grid end held at the app's own surface, which is what makes every assertion below
-    // hold VERBATIM through the change that gave this function a second subject.** With
-    // `grid = SURFACE_APP` the lerp `mix(hero_t, SURFACE, sp)` is algebraically the old
-    // `keyed(blur, W * (1 - sp))` weight ramp, corner for corner — so these are still the same
-    // measurements of the same behaviour, not loosened ones. The grid end's own bound is
-    // `the_grid_end_of_the_dive_is_the_focused_tiles_ground` below.
-    const FLAT_GRID: [[f32; 4]; 4] = [theme::SURFACE_APP; 4];
-
-    // The tail of the dive — the exact frames that used to be near-black — for a DARK envelope
-    // as much as a bright one. The bound is the one invariant that separates a WEIGHT scale
-    // from a brightness ramp: a corner can only travel as far from the app surface as the lean
-    // weight STILL IN PLAY allows it to, so the deviation is capped by that corner's own
-    // remaining weight times the furthest a mix could take it (toward white above the surface,
-    // toward black below it). Do not loosen this to a flat percentage — the whole point is that
-    // it tightens to nothing as `sp → 1`, which is what pins the grid end of the snap.
-    //
-    // For scale: at sp=0.9 this allows ±0.046 on the two top corners, and the old `dim` ramp
-    // put them at 0.010 — a deviation of 0.163, off by three and a half times the budget.
-    for m in [&bright, &blurred([[0.0; 3]; 4])] {
-        for &sp in &[0.9f32, 0.99, 0.996] {
-            for (c, w) in wash_corners(Some(m), FLAT_GRID, sp).iter().zip(HERO_WASH_W) {
-                let lean = w * (1.0 - sp);
-                for (ch, s) in c.iter().zip(theme::SURFACE_APP) {
-                    let budget = lean * s.max(1.0 - s);
-                    assert!(
-                        (ch - s).abs() <= budget + 1e-6,
-                        "at sp={sp} the ground is {ch} against a {s} surface — that is {} off a \
-                         {budget} budget, so the old dim ramp is back",
-                        (ch - s).abs()
-                    );
-                }
-                assert_eq!(c[3], 1.0, "a wash corner is opaque");
-            }
-        }
-    }
-
-    // the lean is a WEIGHT SCALE on the shared mix, not a brightness scale over it. Re-deriving
-    // it as `dim(keyed(blur, W), lean)` would darken the surface itself and fails here.
-    //
-    // Compared to a float epsilon rather than exactly, because the two spellings of the same
-    // algebra — the weight ramp on the right, the lerp between two finished targets on the left
-    // — associate their multiplies differently and land up to one ULP apart. The failure this
-    // guards against is a brightness scale, which is wrong by three and a half TIMES the budget
-    // asserted above, so an ULP of slack costs it nothing.
-    for (c, w) in wash_corners(Some(&bright), FLAT_GRID, 0.5)
-        .iter()
-        .zip(AmbientWash::keyed(bright.blur, HERO_WASH_W.map(|w| w * 0.5)))
-    {
-        for (a, b) in c.iter().zip(w) {
-            assert!(
-                (a - b).abs() <= 1e-6,
-                "half-dived is half the lean toward the artwork ({b}), not half the \
-                 brightness ({a})"
-            );
-        }
-    }
-    // …and the lean does go TOWARD the artwork: a bright envelope lifts the panel off the
-    // surface rather than sinking it.
-    let lit = wash_corners(Some(&bright), FLAT_GRID, 0.0);
-    assert!(
-        lit[1][0] > theme::SURFACE_APP[0],
-        "a white corner must brighten the ground it keys"
-    );
-    assert!(
-        lit[1][0] < 1.0,
-        "…but never all the way: it is a wash, not the photograph"
-    );
-}
-
-#[test]
-fn the_grid_end_of_the_dive_is_the_focused_tiles_ground() {
-    let hero = blurred([[0.95, 0.1, 0.1]; 4]); // red billboard
-    let tile = AmbientWash::keyed([[0.1, 0.1, 0.95]; 4], PageGround::CARD_W); // blue shelf tile
-    // A lerp evaluated at its own endpoints lands one ULP off them, so these are graded to a
-    // float epsilon. The failure they guard against is a wash carrying the WRONG SUBJECT'S
-    // colours, which is a whole ground apart.
-    let same = |got: [[f32; 4]; 4], want: [[f32; 4]; 4], what: &str| {
-        for (c, w) in got.iter().zip(want) {
-            for (a, b) in c.iter().zip(w) {
-                assert!((a - b).abs() <= 1e-6, "{what}: got {a}, wanted {b}");
-            }
-        }
-    };
-
-    // at the top the grid end contributes NOTHING…
-    same(
-        wash_corners(Some(&hero), tile, 0.0),
-        AmbientWash::keyed(hero.blur, HERO_WASH_W),
-        "the billboard is the hero's alone",
-    );
-    // …and in the grid the hero contributes nothing.
-    same(
-        wash_corners(Some(&hero), tile, 1.0),
-        tile,
-        "the shelves are the focused tile's alone",
-    );
-    // An overshooting snap cannot push past the tile's own ground either — the clamp that used
-    // to stop the lean going negative now stops the lerp extrapolating past the far end.
-    same(
-        wash_corners(Some(&hero), tile, 1.5),
-        tile,
-        "an overshooting snap",
-    );
-
-    // The grid end is still floored on the app surface, which is what keeps "no artwork" the
-    // flat clear down here exactly as it is up top — and keeps `is_flat` able to skip the pass
-    // on a library with no envelopes at all.
-    same(
-        wash_corners(Some(&hero), [theme::SURFACE_APP; 4], 1.0),
-        [theme::SURFACE_APP; 4],
-        "an artless shelf is the app's own ground, not a leftover hero tint",
-    );
-
-    // Halfway is halfway between the two grounds — a lerp, not a sum. Summing the two leans
-    // would make the middle of the dive the BRIGHTEST part of the animation, which is the one
-    // place neither subject is the page's.
-    for (c, (h, g)) in wash_corners(Some(&hero), tile, 0.5)
-        .iter()
-        .zip(AmbientWash::keyed(hero.blur, HERO_WASH_W).iter().zip(tile))
-    {
-        for (i, v) in c.iter().enumerate() {
-            let want = h[i] + (g[i] - h[i]) * 0.5;
-            assert!(
-                (v - want).abs() <= 1e-6,
-                "mid-dive corner channel is {v}, halfway between the two grounds is {want}"
-            );
         }
     }
 }
@@ -870,44 +608,17 @@ fn the_prefetch_is_armed_only_from_a_settled_hero() {
     }
 }
 
+/// The logo box contains a clearLogo of any shape: 400 wide at most, 130 tall at most, bottom
+/// aligned in the box (`hero_logo::place`), so nothing spills out of the block.
 #[test]
-fn the_ground_is_skipped_only_when_opaque_art_covers_it() {
-    assert!(
-        wash_hidden(0.0, 1.0, None),
-        "one fully revealed layer at rest covers the panel"
-    );
-    assert!(wash_hidden(0.0, 1.0, Some(1.0)), "…and so do two, mid-flip");
-    assert!(
-        !wash_hidden(0.0, 0.7, None),
-        "a layer still dissolving in shows the ground through"
-    );
-    assert!(
-        !wash_hidden(0.0, 1.0, Some(0.7)),
-        "…and so does the OTHER layer of a flip"
-    );
-    assert!(
-        !wash_hidden(0.0, 0.0, None),
-        "no art at all is exactly what the ground is for"
-    );
-    // the snap both fades the art by (1 - sp) and slides it up off the bottom of the panel, so
-    // full reveals do not mean coverage once the dive has begun
-    assert!(
-        !wash_hidden(0.2, 1.0, Some(1.0)),
-        "a diving hero uncovers the panel however revealed its art is"
-    );
-    assert!(
-        !wash_hidden(1.0, 1.0, None),
-        "the grid shows the ground (which by then is the flat surface)"
-    );
-}
-
-#[test]
-fn the_home_hero_logo_never_reaches_the_top_bar() {
-    const META_H: f32 = 28.0 * 1.32;
-    let synopsis = crate::ui::hero_syn_h(crate::ui::HERO_SYN_MAXLINES);
-    let band = hero_logo::band_h(LogoRung::Hero);
-    let top = hero_stack_top(band, META_H, theme::space::SM + synopsis);
-    assert!(top - (theme::logo::HERO_H_MAX - band) > crate::ui::widgets::TOP_BAR_BOTTOM);
+fn the_hero_logo_is_contained_in_its_box() {
+    for (w, h) in [(1000.0f32, 100.0f32), (400.0, 400.0), (100.0, 1000.0), (800.0, 260.0)] {
+        let (dw, dh) = crate::ui::hero_logo::fit(HERO_LOGO, w, h, LOGO_W);
+        assert!(dw <= LOGO_W + 1e-3 && dh <= LOGO_H + 1e-3, "{w}x{h} drew {dw}x{dh}");
+        assert!((dw / dh - w / h).abs() < 1e-3, "{w}x{h} kept its aspect");
+        assert!((dw - LOGO_W).abs() < 1e-3 || (dh - LOGO_H).abs() < 1e-3, "{w}x{h} fills one side of the box");
+    }
+    assert_eq!(crate::ui::hero_logo::band_h(HERO_LOGO), LOGO_H, "the band the block reserves is the box");
 }
 
 #[test]
@@ -946,8 +657,10 @@ fn the_hero_logo_key_is_the_shows_for_an_episode() {
     );
 }
 
+/// A Continue Watching card wears its progress bar only while the offset is inside the item: never
+/// started, stopped at the end and a stale offset past it draw none.
 #[test]
-fn the_continue_watching_caption_promises_time_left_only_when_the_bar_is_drawn() {
+fn a_continue_watching_card_wears_its_bar_only_while_in_progress() {
     let ep = |resume_ms: i64| PmsMovie {
         kind: 3,
         dur_ns: 45 * 60 * 1_000_000_000,
@@ -955,105 +668,87 @@ fn the_continue_watching_caption_promises_time_left_only_when_the_bar_is_drawn()
         show_title: "Laura".into(),
         ..Default::default()
     };
-    // never started, stopped exactly at the end, and a stale offset PAST it
     for m in [ep(0), ep(45 * 60_000), ep(60 * 60_000)] {
-        assert!(
-            m.resume_frac().is_none(),
-            "offset {} is not in progress",
-            m.resume_ms
-        );
-        let cap = card_row::focused_caption(&tile_facts::of(&m), true).expect("a Continue Watching episode always captions");
-        assert!(
-            !cap.to_str().unwrap().contains("left"),
-            "offset {}: no bar, so the caption must not promise time remaining ({cap:?})",
-            m.resume_ms
-        );
+        assert!(m.resume_frac().is_none(), "offset {} is not in progress", m.resume_ms);
     }
-    let mid = ep(20 * 60_000);
-    assert!(
-        mid.resume_frac().is_some(),
-        "20 minutes into 45 IS in progress"
-    );
-    assert_eq!(
-        card_row::focused_caption(&tile_facts::of(&mid), true).unwrap().to_str().unwrap(),
-        "Laura \u{00b7} 25 min left"
-    );
+    assert!(ep(20 * 60_000).resume_frac().is_some(), "20 minutes into 45 IS in progress");
 }
 
-fn top_band_bottom() -> f32 {
-    let chip = crate::ui::widgets::CHIP_CAP_MAX;
-    assert_eq!(chip.y + chip.h, crate::ui::widgets::TOP_BAR_BOTTOM,
-        "the chip capsule and the tab track are one band");
-    chip.y + chip.h
-}
-fn heading_top(row: usize, focus_row: usize, scroll: f32) -> f32 {
-    let lift = if row == focus_row {
-        card_row::heading_lift_max(&RowStyle::HOME)
-    } else {
-        0.0
-    };
-    heading_y(
-        GRID_TOP_Y + shelf_top_settled(row, focus_row) - scroll,
-        lift,
-    )
-}
-fn settled_scroll(rows: usize, focus_row: usize, current: f32) -> f32 {
-    let (lo, hi) = row_reveal_band(shelf_top_settled(focus_row, focus_row));
-    card_row::reveal(current, lo, hi, grid_max_scroll(rows))
-}
-fn from_below(rows: usize) -> f32 {
-    grid_max_scroll(rows) + ROW_PITCH
+/// A Home of `rows` rows of the seeded kind, its grid focused on `focus_row` and settled there. Its
+/// springs jump, which reports to the process-global idle flag: callers hold `testlock::serial()`.
+fn settled_on(rows: usize, focus_row: usize) -> HomeScreen {
+    let mut s = HomeScreen::new(EntryId(7), InstanceId(9));
+    for row in 0..rows {
+        let identity = HomeHubIdentity::Key { sid: crate::catalog::ServerId::UNSET, key: format!("/hubs/{row}").into() };
+        s.rows.push(HubProjection {
+            group: GroupId(FIRST_HUB_GROUP + row as u32),
+            landscape: row % 3 == 0, // landscape and poster rows interleaved
+            identity, elems: vec![], link: None, basis: Vec::new(),
+        });
+        s.grid.shelves.push(CardRow::new());
+    }
+    s.snap.jump(1.0);
+    s.grid.scroll_target = s.row_scroll(focus_row);
+    s.grid.scroll_y.jump(s.grid.scroll_target);
+    s.layout_grid();
+    s
 }
 
+/// Litefin's rows: the first one's title 546 down with the hero up (the rows overlap the hero by
+/// 450, padded 24), and a focused row resting 40 below the top of the screen — unless the rows
+/// end first, when the last one's foot rests the rows' padding above the screen's.
 #[test]
-fn the_first_shelfs_raised_heading_settles_clear_of_the_profile_chip() {
-    assert!(heading_top(0, 0, settled_scroll(5, 0, from_below(5))) >= top_band_bottom());
-}
-
-#[test]
-fn no_shelf_heading_settles_inside_the_shared_top_band() {
-    const HEADING_MAX_H: f32 = 2.0 * theme::size::HEADLINE as f32;
+fn a_focused_row_rests_40_below_the_top_unless_the_rows_end() {
+    let _guard = nj_base::testlock::serial();
+    let s = settled_on(4, 0);
+    let mut hero_up = settled_on(4, 0);
+    hero_up.snap.jump(0.0);
+    hero_up.layout_grid();
+    assert_eq!(hero_up.grid.shelves[0].base_y, 546.0);
     for rows in 1..=SWEEP_ROWS {
         for focus_row in 0..rows {
-            let scrolls = [
-                settled_scroll(rows, focus_row, 0.0),
-                settled_scroll(rows, focus_row, from_below(rows)),
-            ];
-            for row in 0..rows {
-                let ys = [
-                    heading_top(row, focus_row, scrolls[0]),
-                    heading_top(row, focus_row, scrolls[1]),
-                ];
-                let (lo, hi) = (ys[0].min(ys[1]), ys[0].max(ys[1]));
-                assert!(lo >= top_band_bottom() || hi + HEADING_MAX_H <= top_band_bottom());
+            let s = settled_on(rows, focus_row);
+            let top = s.grid.shelves[focus_row].base_y;
+            let foot = s.grid.shelves[rows - 1].base_y + s.pitch(rows - 1);
+            if top != ROW_FOCUS_TOP {
+                assert!(top > ROW_FOCUS_TOP, "rows {rows} focus {focus_row}: rose past 40 to {top}");
+                assert!((foot + ROWS_PAD_BOTTOM - SCR_H).abs() < 1e-3, "rows {rows} focus {focus_row}: held at {top} with the foot at {foot}");
             }
+            // the focused row's cards and labels are on screen
+            let bottom = top + ROW_CARDS_DY + s.style(focus_row).h + card_row::TileLabel::height(true);
+            assert!(bottom <= SCR_H, "rows {rows} focus {focus_row}: its labels end at {bottom}");
         }
     }
+    let _ = s;
 }
 
+/// The title at x=160 in its 48 px line box; the first card box at x=172 and 86 under the title
+/// line's top, so its picture at 178 and 92; 28 between one row's card boxes and the next row's
+/// title, which makes a poster row exactly the shared shelf pitch.
 #[test]
-fn every_settled_row_keeps_its_focused_label_block_above_the_overscan_bottom() {
-    for rows in 1..=SWEEP_ROWS {
-        for focus_row in 0..rows {
-            for scroll in [
-                settled_scroll(rows, focus_row, 0.0),
-                settled_scroll(rows, focus_row, from_below(rows)),
-            ] {
-                let row_y = GRID_TOP_Y + shelf_top_settled(focus_row, focus_row) - scroll;
-                assert!(row_y + CARD_DY + CARD_H + card_row::UNDER_LABEL_H <= SCR_H - MARGIN_Y);
-            }
-        }
+fn the_rows_keep_litefins_measures() {
+    let _guard = nj_base::testlock::serial();
+    let s = settled_on(3, 1);
+    assert_eq!(ROW_TITLE_X, 160.0);
+    for sty in [&RowStyle::HOME, &RowStyle::EPISODE] {
+        assert_eq!(card_x(sty, 0, 0.0) - CARD_INSET, 172.0);
+        assert_eq!(card_x(sty, 1, 0.0) - card_x(sty, 0, 0.0), sty.w + sty.gap);
     }
-}
-
-#[test]
-fn the_grids_resting_top_is_the_highest_a_shelf_may_settle() {
-    assert_eq!(row_reveal_band(0.0).1, 0.0);
-    assert_eq!(
-        row_reveal_band(shelf_top_settled(3, 3)).1,
-        shelf_top_settled(3, 3)
-    );
-    assert!(heading_top(0, 0, 0.0) - top_band_bottom() >= theme::space::XS);
+    assert_eq!(ROW_CARDS_DY - CARD_INSET, 86.0);
+    for row in 0..2 {
+        let box_foot = s.grid.shelves[row].base_y + ROW_CARDS_DY + s.style(row).h
+            + card_row::TileLabel::height(true) + (CARD_INSET - theme::FOCUS_RING_W);
+        let gap = s.grid.shelves[row + 1].base_y - (box_foot + 38.0);
+        assert!((gap - 28.0).abs() < 1e-3, "row {row}: {gap}");
+    }
+    assert!(!s.rows[1].landscape);
+    assert_eq!(s.pitch(1), ROW_PITCH, "a poster row is the shared shelf pitch");
+    for landscape in [false, true] {
+        assert_eq!(style(landscape).centre_x, Some(1010.0), "rows centre their focus in x 100..1920");
+    }
+    let cap = title_cap_top(100.0, &FixtureMeasure);
+    let caps = FixtureMeasure.cap_h(theme::size::lf::S32);
+    assert!((cap + caps * 0.5 - 124.0).abs() < 1e-3, "the caps sit centred in the 48 px line");
 }
 
 struct Run {
@@ -1216,14 +911,14 @@ fn a_borrowed_hero_states_its_owner_as_the_last_run_on_the_line() {
     );
     assert_eq!(
         runs[1].dx,
-        runs[0].dx + width_of("\u{b7}", theme::size::BODY, 0) + SOURCE_PAD,
+        runs[0].dx + width_of("\u{b7}", theme::size::lf::S21, 0) + SOURCE_PAD,
         "the run is one pad past the dot"
     );
     assert_eq!(
         w,
         base + 2.0 * SOURCE_PAD
-            + width_of("\u{b7}", theme::size::BODY, 0)
-            + width_of("Shared by friend", theme::size::BODY, 0),
+            + width_of("\u{b7}", theme::size::lf::S21, 0)
+            + width_of("Shared by friend", theme::size::lf::S21, 0),
         "the line grows by exactly the dot, the run and one pad either side of the dot"
     );
 }
@@ -1234,14 +929,9 @@ fn the_hero_source_run_keeps_the_lines_rung_and_takes_one_step_of_ink() {
     for r in &runs {
         assert_eq!(
             (r.sz, r.bold),
-            (theme::size::BODY, 0),
+            (theme::size::lf::S21, 0),
             "'{}' left the meta line's own rung",
             r.text
-        );
-        assert_ne!(
-            r.sz,
-            theme::size::CAPTION,
-            "the hero line is BODY — it is not E's line and must not shrink to it"
         );
     }
     assert_eq!(
@@ -1252,15 +942,15 @@ fn the_hero_source_run_keeps_the_lines_rung_and_takes_one_step_of_ink() {
     assert_eq!(
         runs[1].ink,
         theme::TEXT_TERTIARY,
-        "one step under the line's TEXT_SECONDARY, never level with it"
+        "one step under the line's own ink, never level with it"
     );
-    assert_ne!(runs[1].ink, theme::TEXT_SECONDARY);
+    assert_ne!(runs[1].ink, theme::home_lf::META_INK);
 }
 
 #[test]
 fn an_over_long_handle_truncates_rather_than_wrapping() {
     let ridiculous = "a-very-long-plex-account-handle-that-nobody-would-ever-choose";
-    for base in [0.0f32, 420.0, HERO_COL_W] {
+    for base in [0.0f32, 420.0, 660.0] {
         let (w, runs) = meta_flow(base, ridiculous);
         assert_eq!(
             runs.len(),
@@ -1275,14 +965,14 @@ fn an_over_long_handle_truncates_rather_than_wrapping() {
                 r.budget
             );
             assert!(
-                r.dx + r.budget <= META_FLOW_W + 1e-3,
+                r.dx + r.budget <= SYN_W + 1e-3,
                 "base {base}: '{}' may elide past the bound",
                 r.text
             );
         }
         assert!(
-            w <= META_FLOW_W + 1e-3,
-            "base {base}: the line ran to {w}, past its {META_FLOW_W} bound"
+            w <= SYN_W + 1e-3,
+            "base {base}: the line ran to {w}, past its {SYN_W} bound"
         );
     }
     // …and the room left at that worst case is a real annotation's worth rather than a stub —
@@ -1291,33 +981,31 @@ fn an_over_long_handle_truncates_rather_than_wrapping() {
     // stated as a share of the line and not in pixels of text because the synthetic metric here
     // is roughly twice the shipped font's advance; the share is a claim about the geometry,
     // which is the part the host can actually speak for.
-    let (_, worst) = meta_flow(HERO_COL_W, "friend");
+    let (_, worst) = meta_flow(660.0, "friend");
     assert!(
-        worst[1].budget >= 0.25 * META_FLOW_W,
-        "a meta line whose facts fill the column leaves the run only {} of {META_FLOW_W}",
+        worst[1].budget >= 0.25 * SYN_W,
+        "a meta line whose facts fill the column leaves the run only {} of {SYN_W}",
         worst[1].budget
     );
 }
 
+/// The meta line: year, runtime, the rating as a badge, the community score after its star at one
+/// decimal; each present fact an item and nothing for an absent one.
 #[test]
-fn the_meta_lines_bound_keeps_the_run_inside_the_hero_wedge() {
-    use crate::ui::widgets::hero_scrim_a;
-    assert!(
-        hero_scrim_a(HERO_META_R, 1.0) > 0.0,
-        "the line ends where the wedge has already given up"
-    );
-    let wedge_end = (0..=SCR_W as i32)
-        .map(|x| x as f32)
-        .find(|&x| hero_scrim_a(x, 1.0) <= 0.0)
-        .expect("the wedge must end inside the frame");
-    assert!(
-        HERO_META_R <= wedge_end - 0.2 * SCR_W,
-        "the bound ({HERO_META_R}) must stay a fifth of the panel short of the wedge's end ({wedge_end})"
-    );
-    assert!(
-        HERO_META_R > MARGIN_X + HERO_COL_W,
-        "…and past the text column, or the run has nowhere to go"
-    );
+fn the_meta_line_is_year_runtime_rating_badge_and_star() {
+    let _lang = nj_platform::i18n::language_on_this_thread_for_test(nj_platform::i18n::Preference::En);
+    let film = PmsMovie { year: 2010, dur_ns: 112 * 60 * 1_000_000_000, rating: "PG-13".into(), score: 7.14,
+        ..Default::default() };
+    assert_eq!(meta_runs(&film), [
+        MetaItem::Text("2010".into()),
+        MetaItem::Text(nj_platform::i18n::msg::home_runtime_hours(1, 52)),
+        MetaItem::Badge("PG-13".into()),
+        MetaItem::Star("7.1".into()),
+    ]);
+    let short = PmsMovie { dur_ns: 51 * 60 * 1_000_000_000 + 40_000_000_000, ..Default::default() };
+    assert_eq!(meta_runs(&short), [MetaItem::Text(nj_platform::i18n::msg::home_runtime_minutes(52))], "to the nearest minute");
+    assert_eq!(meta_runs(&PmsMovie { score: 8.0, ..Default::default() }), [MetaItem::Star("8.0".into())], "one decimal");
+    assert!(meta_runs(&PmsMovie::default()).is_empty());
 }
 
 // Additional phase-8 ownership proofs: real engine movement, stable identity, effects and map.
@@ -1333,7 +1021,7 @@ fn engine_links_hero_to_the_first_shelf_and_back() {
     let owner = InputOwner::Entry(s.entry);
     let hero = FocusKey {
         entry: s.entry,
-        elem: HERO_PLAY_ELEM,
+        elem: HERO_ELEM,
     };
     let context = cx(snapshot.view(), Some(hero));
     let mut engine = FocusEngine::new();
@@ -1370,8 +1058,10 @@ fn down_from_the_first_shelf_chooses_the_next_shelf_not_the_folded_hero() {
         group: GroupId(FIRST_HUB_GROUP + 1),
         elems: vec![second_elem],
         link: None,
+        landscape: false,
         basis: Vec::new(),
     });
+    s.grid.shelves.push(CardRow::new());
     s.elem_at.insert(second_elem, (1, 0));
     s.snap.jump(1.0);
     s.snap_target = 1.0;
@@ -1476,6 +1166,52 @@ fn memory_round_trip_preserves_registries_and_carousel_identity() {
     assert_eq!(b.strip_chosen, a.strip_chosen);
 }
 
+/// OK on a My Media tile opens THAT library by its section identity, never a detail page.
+#[test]
+fn a_my_media_tile_opens_its_own_library() {
+    let _guard = nj_base::testlock::serial();
+    let mut state = crate::catalog_fetch::PmsState::default();
+    let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
+    crate::catalog_fetch::seed_named_hubs_for_test(&mut state, &adapter, 2, &[(HUB_MY_MEDIA, "", "My Media")]);
+    let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
+    let mut s = screen(snapshot.view());
+    s.snap.jump(1.0);
+    assert!(s.my_media(0));
+    let tile = first_card(&s);
+    let item = s.item_at(snapshot.view(), 0, 0).expect("a tile").clone();
+    let (_, out, _) = step(&mut s, snapshot.view(), Some(tile), &ScreenEvent::Activate(tile.elem));
+    let want = crate::screens::registry::LibrarySectionIdentity { sid: item.sid, key: item.sec };
+    assert!(has_home(&out, |r| *r == HomeReq::Library(want.clone())), "{:?}", out.len());
+    assert!(!has_home(&out, |r| matches!(r, HomeReq::Detail { .. })));
+}
+
+/// With no hero pool (nothing on the server has a backdrop), the billboard falls back to the
+/// first row of titles, never to My Media's libraries: a library is no title to open a detail page
+/// on. With My Media alone there is no billboard at all.
+#[test]
+fn an_empty_hero_pool_never_puts_a_library_on_the_billboard() {
+    let _guard = nj_base::testlock::serial();
+    let mut state = crate::catalog_fetch::PmsState::default();
+    let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
+    crate::catalog_fetch::seed_named_hubs_for_test(&mut state, &adapter, 2,
+        &[(HUB_MY_MEDIA, "", "My Media"), ("test.row", "", "Picks")]);
+    let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
+    let view = snapshot.view();
+    assert_eq!(view.hero_count(), 0, "no pool");
+    let s = screen(view);
+    let hero = s.hero_item(&cx(view, None)).expect("the first row of titles fills the billboard");
+    assert!(std::ptr::eq(hero, &view.hub(1).unwrap().items[0]), "not a library: {}", hero.rk);
+
+    crate::catalog_fetch::seed_named_hubs_for_test(&mut state, &adapter, 2, &[(HUB_MY_MEDIA, "", "My Media")]);
+    let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
+    let view = snapshot.view();
+    let mut s = screen(view);
+    assert!(s.hero_item(&cx(view, None)).is_none(), "libraries alone are no billboard");
+    let hero = FocusKey { entry: s.entry, elem: HERO_ELEM };
+    let (_, out, _) = step(&mut s, view, Some(hero), &ScreenEvent::Activate(HERO_ELEM));
+    assert!(!has_home(&out, |r| matches!(r, HomeReq::Detail { .. })), "OK opens no library as a title");
+}
+
 #[test]
 fn activation_across_the_snap_midpoint_is_not_a_canonical_collision() {
     let _guard = nj_base::testlock::serial();
@@ -1488,7 +1224,7 @@ fn activation_across_the_snap_midpoint_is_not_a_canonical_collision() {
     for s in [&mut hero_picture, &mut grid_picture] {
         s.carousel = Some((crate::catalog::ServerId::UNSET, "2".into()));
         s.snap_target = 1.0;
-        s.visible_activation = Some(HERO_PLAY_ELEM);
+        s.visible_activation = Some(HERO_ELEM);
     }
     hero_picture.snap.jump(0.49);
     grid_picture.snap.jump(0.51);
@@ -1496,7 +1232,7 @@ fn activation_across_the_snap_midpoint_is_not_a_canonical_collision() {
     let event = ScreenEvent::PressCommit(nj_machine::machine::PressId(1));
     let (_, a, _) = step(&mut hero_picture, snapshot.view(), Some(card), &event);
     let (_, b, _) = step(&mut grid_picture, snapshot.view(), Some(card), &event);
-    assert!(has_home(&a, |r| matches!(r, HomeReq::Play { rk, .. } if rk == "2")));
+    assert!(has_home(&a, |r| matches!(r, HomeReq::Detail { rk, .. } if rk == "2")));
     assert!(has_home(&b, |r| matches!(r, HomeReq::Play { rk, .. } if rk == "1")));
     assert_ne!(hero_picture.hash(), grid_picture.hash(),
         "the same input activates different items, so these cannot be the same logical state");
@@ -1514,7 +1250,6 @@ fn the_home_census_covers_input_motion_and_current_projection() {
         |s| s.snap.vel = 1.0,
         |s| s.hero_slide.pos = 0.4,
         |s| s.hero_slide.vel = 1.0,
-        |s| s.hero_dir = -1.0,
         |s| s.outgoing = Some((crate::catalog::ServerId::UNSET, "old".into())),
         |s| s.grid.scroll_y.vel = 1.0,
         |s| s.grid.scroll_target = 100.0,
@@ -1522,7 +1257,9 @@ fn the_home_census_covers_input_motion_and_current_projection() {
         |s| Arc::make_mut(&mut s.items)[0].last_row += 1,
         |s| Arc::make_mut(&mut s.items)[0].last_col += 1,
         |s| s.projected_generation = None,
-        |s| s.hero_pop.step(Some(0), 0.016),
+        |s| s.hero_band.pos = 0.4,
+        |s| s.hero_band.vel = 1.0,
+        |s| s.hero_zoom = 3.0,
         |s| s.grid.shelves[0].update(3, Some(1), &RowStyle::HOME, 0.016),
     ];
     for (i, change) in changes.iter().enumerate() {
@@ -1530,8 +1267,7 @@ fn the_home_census_covers_input_motion_and_current_projection() {
         change(&mut s);
         assert_ne!(s.hash(), baseline, "census omitted input-state variation {i}");
     }
-    // These extents are part of SHAPE, not merely runtime sequence lengths.
-    assert_eq!(HERO_NBTN, 2);
+    // This extent is part of SHAPE, not merely a runtime sequence length.
     assert_eq!(crate::ui::card_row::MAX_ROW_ITEMS, 24);
 }
 
@@ -1550,6 +1286,7 @@ fn paint_only_backdrop_and_spinner_state_do_not_change_the_canonical_hash() {
     let mut b = HomeScreen::new(EntryId(7), InstanceId(9));
     b.status_ms = 900.0;
     b.backdrop.art.pos = 0.5;
+    b.outgoing_zoom = 5.0;
     assert_eq!(a.hash(), b.hash());
     a.carousel = Some((crate::catalog::ServerId::UNSET, "a".into()));
     assert_ne!(a.hash(), b.hash());
@@ -1566,7 +1303,7 @@ fn an_explicit_hero_reseat_keeps_the_fold_animation_unlike_page_restoration() {
     s.snap.jump(1.0);
     s.snap_target = 1.0;
     let from = first_card(&s);
-    let to = FocusKey { entry: s.entry, elem: HERO_PLAY_ELEM };
+    let to = FocusKey { entry: s.entry, elem: HERO_ELEM };
     step(&mut s, snapshot.view(), Some(to), &ScreenEvent::FocusMoved {
         from: Some(from), to, by: By::Restore,
     });
@@ -1750,7 +1487,7 @@ fn a_partially_visible_focused_row_allows_hover_to_its_neighbors_only() {
     s.snap.jump(1.0);
     s.grid.shelves[0].update(2, Some(0), &RowStyle::HOME, 1.0);
     s.layout_grid();
-    s.grid.shelves[0].base_y = -20.0;
+    s.grid.shelves[0].base_y = -20.0 - ROW_CARDS_DY;
     let first = first_card(&s);
     let neighbor = s.rows[0].elems[1];
     for (focus, expected) in [(Some(first), Hover::Focus), (None, Hover::OnlyIfFocused)] {
@@ -1804,7 +1541,7 @@ fn quick_down_then_ok_activates_the_hero_still_visible_before_the_snap_midpoint(
     s.carousel = Some((crate::catalog::ServerId::UNSET, "2".into()));
     let hero = FocusKey {
         entry: s.entry,
-        elem: HERO_PLAY_ELEM,
+        elem: HERO_ELEM,
     };
     let card = first_card(&s);
     let move_event = ScreenEvent::FocusMoved {
@@ -1823,7 +1560,7 @@ fn quick_down_then_ok_activates_the_hero_still_visible_before_the_snap_midpoint(
     );
     assert!(has_home(
         &out,
-        |req| matches!(req, HomeReq::Play { rk, .. } if rk == "2")
+        |req| matches!(req, HomeReq::Detail { rk, .. } if rk == "2")
     ));
     assert!(!has_home(
         &out,
@@ -1863,7 +1600,7 @@ fn back_from_grid_folds_to_hero_before_root_back() {
     s.snap.jump(0.0);
     let hero = FocusKey {
         entry: s.entry,
-        elem: HERO_PLAY_ELEM,
+        elem: HERO_ELEM,
     };
     let (_, root, _) = step(&mut s, snapshot.view(), Some(hero), &back);
     assert!(root
@@ -1909,21 +1646,6 @@ fn addressed_focus_commands_reseat_only_through_enter_fresh() {
         enter_target(&hero),
         Some(FocusTarget::ContainerGroup(HERO_GROUP))
     ));
-
-    for (tab, elem) in [
-        (HomeTab::Home, STRIP_HOME_ELEM),
-        (HomeTab::Movies, STRIP_MOVIES_ELEM),
-        (HomeTab::Shows, STRIP_SHOWS_ELEM),
-        (HomeTab::Search, STRIP_SEARCH_ELEM),
-    ] {
-        let (_, strip, _) = step(
-            &mut s,
-            snapshot.view(),
-            None,
-            &ScreenEvent::App(AppMsg::Home(HomeCmd::FocusStrip(tab))),
-        );
-        assert!(matches!(enter_target(&strip), Some(FocusTarget::Elem(key)) if key.elem == elem));
-    }
 }
 
 #[test]
@@ -1974,16 +1696,12 @@ fn loading_has_no_phantom_hero_and_terminal_status_has_one_action() {
         assert_eq!(groups[0].len, expected);
         let retry = FocusKey {
             entry: s.entry,
-            elem: HERO_PLAY_ELEM,
+            elem: HERO_ELEM,
         };
         assert!(matches!(
             Focusable::<TestHost>::neighbour(&s, retry, Dir::Right, &context),
             Step::Edge
         ));
-        assert_eq!(
-            Focusable::<TestHost>::group_of(&s, &HERO_INFO_ELEM, &context),
-            None
-        );
     }
 }
 
@@ -1997,7 +1715,7 @@ fn first_catalog_landing_reseats_the_default_cta_unless_the_strip_was_chosen() {
     let mut automatic = screen(empty.view());
     let fallback = FocusKey {
         entry: automatic.entry,
-        elem: STRIP_ACCOUNT_ELEM,
+        elem: crate::ui::dispatch::STRIP_BASE + 4,
     };
 
     crate::catalog_fetch::seed_for_test(&mut state, &adapter, 1, crate::catalog_fetch::HubState::Ready);
@@ -2093,19 +1811,34 @@ fn parent_read_only_api_projects_engine_focus_without_setters() {
     s.redraw_focused(&mut frame, None);
 }
 
-/// The billboard's 8 s auto-advance is a TIMER, not an animation: nothing it counts is drawn, and
-/// the dispatcher ticks the page every loop iteration whether or not the frame presents. So a
-/// settled hero must let the present gate close while it counts down, and the flip it ends in must
-/// still happen on time — and wake the gate itself.
-///
-/// D4 (phase 12) made the countdown note `Motion` on every tick, which kept a still Home
-/// presenting at the full frame rate indefinitely (measured on the TV, 2026-09-19): every modal
-/// dismiss and page pop returned to a Home that never went idle, and the next transition's first
-/// frame paid that GPU queue. The test that pinned the old behaviour stepped through a fresh
-/// `Present`, whose first-frame `dirty` answers `true` whatever the screen reports — it could not
-/// have failed.
+/// Ticks `s` for `frames` frames of 16 ms, focused on `focus`, and counts the frames the present
+/// gate would open for it: a present the page asked for, or a spring that moved. `take` at tick 0
+/// keeps the keepalive out, so this counts only what the screen itself wants.
+fn presents(s: &mut HomeScreen, view: HubsView<'_>, focus: Option<FocusKey<u32>>, frames: u32) -> u32 {
+    let context = cx(view, focus);
+    let mut present = nj_machine::present::Present::new();
+    present.take(0);
+    let mut asked = 0;
+    for frame in 1..=frames {
+        nj_machine::idle::frame_begin(1.0 / 60.0);
+        let mut out = Vec::new();
+        {
+            let mut fx = Effects::new(&mut out, nj_machine::machine::MachineId::Instance(InstanceId(9)), &mut present);
+            Machine::<TestHost>::step(s, &ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_000 }), &context, &mut fx);
+        }
+        asked += u32::from(present.take(0) | nj_machine::idle::present_moving());
+    }
+    asked
+}
+
+/// **A hero left alone presents every frame, and every one of them is the hero's.** Litefin's Ken
+/// Burns zooms the slide on screen over 12 s (`docs/litefin-look.md` 2.5) and the 8 s auto-advance
+/// restarts it at every flip, so with several slides the zoom never runs out: each frame is the
+/// zoom growing or the crossfade, never the countdown, which is a TIMER and reports nothing. The
+/// flip still lands on time. [`the_hero_is_the_only_thing_that_keeps_home_presenting`] is the other
+/// half: put the hero away and the same page is silent.
 #[test]
-fn a_settled_hero_counting_down_lets_the_gate_close_and_still_flips() {
+fn a_hero_left_alone_zooms_every_frame_and_flips_on_time() {
     let _guard = nj_base::testlock::serial();
     let mut state = crate::catalog_fetch::PmsState::default();
     let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
@@ -2113,43 +1846,152 @@ fn a_settled_hero_counting_down_lets_the_gate_close_and_still_flips() {
     let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
     let view = snapshot.view();
     assert!(view.hero_count() > 1, "the auto-advance only arms with more than one hero slot");
+    assert!(HERO_AUTO_S < crate::ui::landing_hero::ZOOM_S, "a flip comes before the zoom is whole");
     let mut s = screen(view);
     let context = cx(view, None);
     let mut present = nj_machine::present::Present::new();
-    // `take` at tick_ms 0 throughout keeps the keepalive term out: this counts only what the
-    // screen itself asked for. The first take drains the fresh gate's first-frame `dirty`.
     present.take(0);
-    let mut asked_while_counting = 0u32;
-    let mut flipped_at = None;
+    let (mut asleep, mut not_the_hero, mut flipped_at) = (0u32, 0u32, None);
     // 10 s of 16 ms ticks: past HERO_AUTO_S, so the countdown expires exactly once.
     for frame in 1..=625u32 {
+        let zoom = s.hero_zoom;
         let mut out = Vec::new();
         {
-            let mut fx = Effects::new(
-                &mut out,
-                nj_machine::machine::MachineId::Instance(InstanceId(9)),
-                &mut present,
-            );
+            let mut fx = Effects::new(&mut out, nj_machine::machine::MachineId::Instance(InstanceId(9)), &mut present);
             let tick = ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_000 });
             Machine::<TestHost>::step(&mut s, &tick, &context, &mut fx);
         }
         let asked = present.take(0);
         if s.outgoing.is_some() {
             flipped_at.get_or_insert(frame);
-            assert!(asked, "the flip's slide is motion and must present");
-        } else if flipped_at.is_none() && asked {
-            asked_while_counting += 1;
         }
+        asleep += u32::from(!asked);
+        not_the_hero += u32::from(asked && s.outgoing.is_none() && s.hero_zoom == zoom);
     }
     let flipped_at = flipped_at.expect("the countdown must still end in a flip");
     assert!(
         (flipped_at as f32 * 0.016 - HERO_AUTO_S).abs() < 0.05,
         "flipped after {flipped_at} ticks, not after {HERO_AUTO_S} s"
     );
-    assert_eq!(
-        asked_while_counting, 0,
-        "a settled hero asked for {asked_while_counting} presents while only counting down"
-    );
+    assert_eq!(asleep, 0, "the hero on screen presents every frame");
+    assert_eq!(not_the_hero, 0, "every present is the hero's zoom or its crossfade");
+    let since_flip = (625 - flipped_at + 1) as f32 * 0.016;
+    assert!((s.hero_zoom - since_flip).abs() < 0.05, "the flip restarted the zoom: {} s", s.hero_zoom);
+}
+
+/// **The hero is the only thing that keeps Home presenting.** The several-slide Home that presents
+/// every frame left alone on its hero is silent once the hero is put away: covered by a modal,
+/// pinned by the screenshot pipeline, or scrolled off by the rows, for longer than a countdown.
+/// On the first row the art still shows behind it, so its zoom runs out its 12 s and then that
+/// page rests too: the countdown never holds a frame open. A single slide is the same once its
+/// zoom is whole ([`the_ken_burns_zoom_presents_while_it_grows_and_rests_when_whole`]).
+#[test]
+fn the_hero_is_the_only_thing_that_keeps_home_presenting() {
+    let _guard = nj_base::testlock::serial();
+    let mut state = crate::catalog_fetch::PmsState::default();
+    let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
+    let names: Vec<(String, String)> = (0..6).map(|r| (format!("test.recent.{r}"), format!("Row {r}"))).collect();
+    let rows: Vec<(&str, &str, &str)> = names.iter().map(|(id, title)| (id.as_str(), "", title.as_str())).collect();
+    crate::catalog_fetch::seed_named_hubs_for_test(&mut state, &adapter, 3, &rows);
+    let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
+    let view = snapshot.view();
+    assert!(view.hero_count() > 1, "several slides: the hero would rotate and zoom forever");
+    let ten_s = 625;
+    assert_eq!(presents(&mut screen(view), view, None, ten_s), ten_s, "left alone, the hero presents");
+
+    let card = |s: &HomeScreen, row: usize| Some(FocusKey { entry: s.entry, elem: s.rows[row].elems[0] });
+    let pin = ScreenEvent::App(AppMsg::Home(HomeCmd::PinHero(0)));
+    for (label, settle) in [("covered", 60), ("pinned", 60), ("scrolled away", 240), ("on the first row", 800)] {
+        let mut s = screen(view);
+        let focus = match label {
+            "covered" => {
+                step(&mut s, view, None, &ScreenEvent::Cover);
+                None
+            }
+            "pinned" => {
+                step(&mut s, view, None, &pin);
+                None
+            }
+            _ => {
+                s.snap_target = 1.0;
+                card(&s, if label == "scrolled away" { 3 } else { 0 })
+            }
+        };
+        let selected = s.carousel.clone();
+        presents(&mut s, view, focus, settle);
+        assert_eq!(s.page_y() >= HERO_ART_END, label == "scrolled away", "{label}: where the art is");
+        assert_eq!(presents(&mut s, view, focus, ten_s), 0, "{label}: Home must be silent at rest");
+        assert_eq!(s.carousel, selected, "{label}: no flip");
+    }
+}
+
+/// **Ken Burns moves, and stops.** The slide on screen grows 1.00 -> 1.08 over 12 s: every one of
+/// those frames presents, and once the zoom is whole (one slide, so nothing flips) the page goes
+/// quiet. A covered, pinned or scrolled-away hero does not zoom at all.
+#[test]
+fn the_ken_burns_zoom_presents_while_it_grows_and_rests_when_whole() {
+    let _guard = nj_base::testlock::serial();
+    let mut state = crate::catalog_fetch::PmsState::default();
+    let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
+    crate::catalog_fetch::seed_for_test(&mut state, &adapter, 1, crate::catalog_fetch::HubState::Ready);
+    let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
+    let view = snapshot.view();
+    assert_eq!(view.hero_count(), 1, "one slide: nothing flips");
+    let mut s = screen(view);
+    // the first six seconds: zooming, presenting every frame, halfway grown
+    assert_eq!(presents(&mut s, view, None, 375), 375);
+    assert!((s.zooms().0 - 1.04).abs() < 1e-3, "{}", s.zooms().0);
+    // …on to twelve, where it holds at the full scale and asks for nothing more
+    presents(&mut s, view, None, 400);
+    assert_eq!(s.zooms().0, crate::ui::landing_hero::ZOOM_MAX);
+    assert_eq!(presents(&mut s, view, None, 625), 0, "a whole zoom is a still page");
+
+    for (label, hold) in [
+        ("covered", (|s: &mut HomeScreen| s.covered = true) as fn(&mut HomeScreen)),
+        ("pinned", |s: &mut HomeScreen| s.hero_pinned = true),
+        ("scrolled away", |s: &mut HomeScreen| { s.snap.jump(1.0); s.snap_target = 1.0; s.grid.scroll_target = 10_000.0; s.grid.scroll_y.jump(10_000.0) }),
+    ] {
+        let mut s = screen(view);
+        hold(&mut s);
+        assert_eq!(presents(&mut s, view, None, 60), 0, "{label}: a still page");
+        assert_eq!(s.hero_zoom, 0.0, "{label}: the zoom holds");
+    }
+}
+
+/// Ticks `s` for `frames` frames of 16 ms, focused on `focus`, and counts the frames on which a
+/// spring told the idle gate the page moved.
+fn moving_frames(s: &mut HomeScreen, view: HubsView<'_>, focus: Option<FocusKey<u32>>, frames: u32) -> u32 {
+    let mut moving = 0;
+    for frame in 1..=frames {
+        nj_machine::idle::frame_begin(1.0 / 60.0);
+        step(s, view, focus, &ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_000 }));
+        moving += u32::from(nj_machine::idle::page_moving());
+    }
+    moving
+}
+
+/// **The focused hero's band moves, and stops.** Focus on the hero fades the accent band in over
+/// ~300 ms, its spring telling the gate the page moves while it does, then the page is still;
+/// focus leaving fades it out the same.
+#[test]
+fn the_focus_band_moves_while_it_fades_and_rests_when_settled() {
+    let _guard = nj_base::testlock::serial();
+    let mut state = crate::catalog_fetch::PmsState::default();
+    let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
+    crate::catalog_fetch::seed_for_test(&mut state, &adapter, 1, crate::catalog_fetch::HubState::Ready);
+    let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
+    let view = snapshot.view();
+    let mut s = screen(view);
+    s.hero_zoom = crate::ui::landing_hero::ZOOM_S; // the zoom is done: only the band can move
+    let hero = Some(FocusKey { entry: s.entry, elem: HERO_ELEM });
+    assert_eq!(moving_frames(&mut s, view, hero, 6), 6, "the band fades in");
+    moving_frames(&mut s, view, hero, 60);
+    assert_eq!(s.hero_band.pos, 1.0, "…and lands exactly");
+    assert_eq!(moving_frames(&mut s, view, hero, 60), 0, "a settled band is a still page");
+    let card = Some(first_card(&s));
+    assert!(moving_frames(&mut s, view, card, 6) > 0, "focus leaving fades it out");
+    moving_frames(&mut s, view, card, 120);
+    assert_eq!(s.hero_band.pos, 0.0);
 }
 
 #[test]
@@ -2265,11 +2107,11 @@ fn a_failed_home_over_an_offered_server_asks_the_shared_question() {
     let reason = crate::auth::plaintext_copy(Some(&verdict), crate::auth::ReadoutSurface::SignedIn);
     assert_eq!(overlay.reason.and_then(|r| r.to_str().ok()), Some(reason.as_ref()));
     let drawn = overlay.action_frame_measured(&measure).unwrap();
-    let hit = s.hero_button_rect(view, 0, &measure).unwrap();
+    let hit = s.hero_rect(view, &measure).unwrap();
     assert_eq!([hit.x, hit.y, hit.w, hit.h], [drawn.x, drawn.y, drawn.w, drawn.h], "the hit rect is the drawn pill");
 
-    let hero = Some(FocusKey { entry, elem: HERO_PLAY_ELEM });
-    let (_, opened, _) = step(&mut s, view, hero, &ScreenEvent::Activate(HERO_PLAY_ELEM));
+    let hero = Some(FocusKey { entry, elem: HERO_ELEM });
+    let (_, opened, _) = step(&mut s, view, hero, &ScreenEvent::Activate(HERO_ELEM));
     let retries = |out: &[Stamped<TestHost>]| out.iter().any(|st| matches!(&st.fx,
         Fx::App(AppFx::Store(StoreId::Hubs, StoreCmd::Hubs(HubsCmd::Retry)))));
     assert!(!retries(&opened), "Connect asks; it does not retry");
@@ -2300,7 +2142,7 @@ fn a_failed_home_over_an_offered_server_asks_the_shared_question() {
     assert_eq!(overlay.action, Some(plaintext_question::try_again()));
     assert!(overlay.reason.and_then(|r| r.to_str().ok()).is_some_and(|r|
         r.contains("Settings \u{2192} Unencrypted connections")), "{:?}", overlay.reason);
-    let (_, retried, _) = step(&mut s, view, hero, &ScreenEvent::Activate(HERO_PLAY_ELEM));
+    let (_, retried, _) = step(&mut s, view, hero, &ScreenEvent::Activate(HERO_ELEM));
     assert!(retries(&retried), "an answered question is not put again from a failure");
     assert!(!s.plaintext_alert.is_open());
     crate::catalog::grant::reset_for_test();
@@ -2527,7 +2369,7 @@ fn back_from_the_collection_page_returns_focus_to_the_heading() {
 }
 
 /// A shelf whose cards are still below the screen's bottom edge already has its heading on screen:
-/// the heading sits `TITLE_DY` ABOVE the cards. Culling the shelf by its card rect alone left that
+/// the title's line box is the top of the row, 86 above the cards. Culling the shelf by its card rect alone left that
 /// heading undrawn until the first card pixel crossed the edge, so scrolling down the grid made the
 /// next shelf's title pop in at full ink instead of sliding up with the page.
 #[test]
@@ -2552,11 +2394,11 @@ fn a_shelf_heading_on_screen_is_drawn_while_its_cards_are_still_below_the_edge()
         .any(|run| run.contains(title.as_str()))
     };
     // Cards 4px under the bottom edge; the heading's line is well inside the screen.
-    s.grid.shelves[0].base_y = SCR_H + 4.0;
-    assert!(heading_y(s.grid.shelves[0].base_y, s.grid.shelves[0].lift()) < SCR_H - 20.0);
+    s.grid.shelves[0].base_y = SCR_H + 4.0 - ROW_CARDS_DY;
+    assert!(title_cap_top(s.grid.shelves[0].base_y, &FixtureMeasure) < SCR_H - 20.0);
     assert!(drawn(&s), "the heading above an off-screen card row must still be drawn");
     // …and a shelf whose heading has not reached the edge yet is still culled.
-    s.grid.shelves[0].base_y = SCR_H + TITLE_DY + 4.0;
+    s.grid.shelves[0].base_y = SCR_H + 4.0;
     assert!(!drawn(&s), "a shelf entirely below the screen draws nothing");
 }
 
@@ -2611,12 +2453,13 @@ fn hero_tick(ms: u32) -> ScreenEvent<TestHost> {
     ScreenEvent::Tick(Tick { ms, dt_us: 16_000 })
 }
 
-/// Right at the edge of the hero's controls: the press that flips the billboard by hand.
-fn hero_edge_right() -> ScreenEvent<TestHost> {
+/// Right on the hero: the press that flips the billboard by hand, which the page takes before the
+/// engine sees it.
+fn hero_right() -> ScreenEvent<TestHost> {
     ScreenEvent::Input(InputEvent {
         at: Tick::default(),
         source: Source::Sdl,
-        kind: InputKind::Key { key: Key::Right, sym: 0, wcode: 0, edge: Edge::Down, at_edge: true },
+        kind: InputKind::Key { key: Key::Right, sym: 0, wcode: 0, edge: Edge::Down, at_edge: false },
     })
 }
 
@@ -2707,30 +2550,30 @@ fn a_manual_hero_flip_lands_on_a_preloaded_backdrop_with_no_ground_frame() {
     assert!(s.outgoing.is_none(), "no flip yet");
     assert!(reveal(s.backdrop.tex.0, &s.backdrop.art) > 0.999, "hero 0's backdrop is up");
 
-    // A MANUAL flip: Right at the edge of the hero's controls.
-    let play = FocusKey { entry: s.entry, elem: HERO_PLAY_ELEM };
-    let right = hero_edge_right();
+    // A MANUAL flip: Right on the hero.
+    let play = FocusKey { entry: s.entry, elem: HERO_ELEM };
+    let right = hero_right();
     let (handled, _, _) = step(&mut s, view, Some(play), &right);
-    assert_eq!(handled, Handled::Yes, "Right at the hero's edge flips the billboard");
+    assert_eq!(handled, Handled::Yes, "Right on the hero flips the billboard");
     HERO_ART.with(|a| a.borrow_mut().probed.clear());
     let _ = step(&mut s, view, Some(play), &tick(126 * 16));
 
-    assert!(s.outgoing.is_some(), "the slide is running");
+    assert!(s.outgoing.is_some(), "the crossfade is running");
     assert_eq!(s.carousel_index(view), 1);
     let incoming_a = reveal(s.backdrop.tex.0, &s.backdrop.art);
     let outgoing_a = reveal(s.backdrop.outgoing_tex.0, &s.backdrop.outgoing_art);
     assert!(
         s.backdrop.tex.0 != 0 && incoming_a > 0.999,
-        "the incoming backdrop must slide in fully revealed (tex {}, alpha {incoming_a}), not \
-         fade in over the ground after the slide",
+        "the incoming backdrop must cross in fully revealed (tex {}, alpha {incoming_a}), not \
+         fade in over the page after the crossfade",
         s.backdrop.tex.0
     );
     assert!(
-        wash_hidden(s.snap.pos, incoming_a, Some(outgoing_a)),
-        "no frame of the flip may show the flat ground (incoming {incoming_a}, outgoing {outgoing_a})"
+        outgoing_a > 0.999,
+        "no frame of the flip may show the bare page through the outgoing layer ({outgoing_a})"
     );
 
-    // …and the new neighbours are asked for on the flip itself, not after the slide settles.
+    // …and the new neighbours are asked for on the flip itself, not after the crossfade settles.
     let probed = HERO_ART.with(|a| a.borrow().probed.clone());
     assert!(
         probed.contains(&art(2)),
@@ -2782,8 +2625,8 @@ fn the_first_frame_of_a_manual_flip_draws_only_the_outgoing_and_incoming_backdro
     };
     let who = |tex: u32| (0..n).find(|&i| tex_of(i) == tex);
     let tick = hero_tick;
-    let play = |s: &HomeScreen| FocusKey { entry: s.entry, elem: HERO_PLAY_ELEM };
-    let right = hero_edge_right();
+    let play = |s: &HomeScreen| FocusKey { entry: s.entry, elem: HERO_ELEM };
+    let right = hero_right();
     // What the frame puts on screen: every backdrop-sized textured quad that reaches the panel.
     let backdrops = |s: &mut HomeScreen| {
         let context = cx(view, Some(play(s)));
@@ -2792,7 +2635,7 @@ fn the_first_frame_of_a_manual_flip_draws_only_the_outgoing_and_incoming_backdro
             nj_gfx::gfx::without_frame_clear(|| Screen::<TestHost>::draw(s, &mut f));
         })
         .into_iter()
-        .filter(|(_, r, a)| r.w >= SCR_W && *a > 0.01 && r.x < SCR_W && r.x + r.w > 0.0)
+        .filter(|(_, r, a)| r.w >= crate::ui::landing_hero::ART.w && *a > 0.01 && r.x < SCR_W && r.x + r.w > 0.0)
         .collect::<Vec<_>>()
     };
 
@@ -2816,7 +2659,7 @@ fn the_first_frame_of_a_manual_flip_draws_only_the_outgoing_and_incoming_backdro
         frames(&mut s, 1);
         let key = play(&s);
         let (handled, _, _) = step(&mut s, view, Some(key), &right);
-        assert_eq!(handled, Handled::Yes, "press {press}: Right at the hero's edge flips");
+        assert_eq!(handled, Handled::Yes, "press {press}: Right on the hero flips");
         assert_eq!(s.carousel_index(view), press % n);
         let drawn = backdrops(&mut s);
         let (outgoing, incoming) = (press - 1, press);
@@ -2831,24 +2674,24 @@ fn the_first_frame_of_a_manual_flip_draws_only_the_outgoing_and_incoming_backdro
             );
         }
         assert!(
-            drawn.iter().any(|&(tex, r, a)| who(tex) == Some(outgoing % n) && r.x.abs() < 1.0 && a > 0.99),
-            "press {press}: the outgoing hero {outgoing}'s backdrop must still fill the panel on \
-             the flip's first frame, not the bare ground; drew {drawn:?}"
+            drawn.iter().any(|&(tex, _, a)| who(tex) == Some(outgoing % n) && a > 0.99),
+            "press {press}: the outgoing hero {outgoing}'s backdrop must still be whole on the \
+             flip's first frame, not the bare page; drew {drawn:?}"
         );
         frames(&mut s, settle);
         if settle > 0 {
-            assert!(s.outgoing.is_some(), "press 2 must land while slide 1 is still running");
+            assert!(s.outgoing.is_some(), "press 2 must land while crossfade 1 is still running");
             assert_eq!(s.hero_flip_cd, 0.0, "…and past the flip cooldown");
         }
     }
 }
 
 /// The page-freeze holds Home's snapshot until the page is quiescent so first poster admission can
-/// settle behind it. The ambient wash dissolve and the hero focus pop are decorative — neither
+/// settle behind it. The backdrop's reveal and the focused hero's band are decorative — neither
 /// moves layout or the grid — so they must be visible pixel motion (`page_moving`) yet not page
 /// layout motion (`page_layout_moving`), or Home rides the whole 600 ms hold cap.
 #[test]
-fn decorative_wash_and_hero_pop_do_not_hold_page_quiescence() {
+fn decorative_reveal_and_focus_band_do_not_hold_page_quiescence() {
     let _guard = nj_base::testlock::serial();
     let mut state = crate::catalog_fetch::PmsState::default();
     let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
@@ -2858,7 +2701,7 @@ fn decorative_wash_and_hero_pop_do_not_hold_page_quiescence() {
     s.snap.jump(1.0);
     s.snap_target = 1.0;
     s.layout_grid();
-    let key = FocusKey { entry: s.entry, elem: HERO_PLAY_ELEM };
+    let key = FocusKey { entry: s.entry, elem: HERO_ELEM };
     let mut saw_decor = false;
     let mut layout_moving_frames = 0;
     for i in 1..40u32 {
@@ -2867,7 +2710,7 @@ fn decorative_wash_and_hero_pop_do_not_hold_page_quiescence() {
         saw_decor |= nj_machine::idle::page_moving();
         layout_moving_frames += usize::from(nj_machine::idle::page_layout_moving());
     }
-    assert!(saw_decor, "the hero pop / wash dissolve must still report visible page motion");
+    assert!(saw_decor, "the focus band must still report visible page motion");
     assert_eq!(layout_moving_frames, 0, "decorative springs must not count as page layout motion");
 }
 
@@ -2997,11 +2840,7 @@ fn stops_are_recorded_only_for_rows_on_screen_or_focused() {
     s.snap.jump(1.0);
     s.snap_target = 1.0;
     s.layout_grid();
-    let on_screen = |s: &HomeScreen, row: usize| {
-        let shelf = &s.grid.shelves[row];
-        let top = heading_y(shelf.base_y, shelf.lift());
-        on_axis(top, shelf.base_y + CARD_H + shelf.under_band() - top, SCR_H, 0.0)
-    };
+    let on_screen = |s: &HomeScreen, row: usize| on_axis(s.grid.shelves[row].base_y, s.pitch(row), SCR_H, 0.0);
     let visible: Vec<usize> = (0..s.rows.len()).filter(|&r| on_screen(&s, r)).collect();
     assert!(!visible.is_empty() && visible.len() < s.rows.len(), "the fixture must straddle the screen edge");
     let far = s.rows.len() - 1;
@@ -3255,7 +3094,8 @@ fn incremental_republication_duplicate_home_rows_keep_last_key_places_and_first_
     assert_indexes_agree(&page);
 }
 
-/// Grade the production Jellyfin DTO -> catalog row -> tile caption path, including resume edges.
+/// Grade the production Jellyfin DTO -> catalog row -> landscape card path: the show over the
+/// episode's name, its code on the badge, and the resume edges that decide the bar.
 #[test]
 fn continue_watching_uses_jellyfin_episode_numbers_and_resume_metadata() {
     let _serial = nj_base::testlock::serial();
@@ -3263,31 +3103,24 @@ fn continue_watching_uses_jellyfin_episode_numbers_and_resume_metadata() {
     let episode = |offset, index: Option<i64>, season: Option<i64>| {
         let dto: crate::jf::models::BaseItemDto = serde_json::from_value(serde_json::json!({
             "Id":"00000000002010000000000000000000", "Type":"Episode", "Name":"Pilot",
-            "SeriesName":"A very long series title whose poster already identifies the show",
+            "SeriesName":"Laura",
             "SeriesId":"00000000002000000000000000000000",
             "IndexNumber":index, "ParentIndexNumber":season, "RunTimeTicks":27_000_000_000_i64,
             "UserData":{"PlaybackPositionTicks":offset}
         })).unwrap();
         crate::catalog_fetch::parse_item(&crate::jf::convert::item(&dto, 0), crate::catalog::ServerId::default())
     };
-    let caption = |m: &PmsMovie| card_row::focused_caption(&tile_facts::of(m), true).unwrap().to_str().unwrap().to_string();
     let m = episode(12_000_000_000_i64, Some(5), Some(2));
     assert_eq!((m.ep_index, m.season_index, m.resume_ms), (5, 2, 1_200_000));
     assert!(m.resume_frac().is_some());
-    assert_eq!(caption(&m), "S2 · E5 · 25 min left");
-    assert_eq!(caption(&episode(0, Some(5), Some(2))), "S2 · E5 · New episode");
-    assert_eq!(caption(&episode(12_000_000_000_i64, Some(5), Some(0))), "E5 · 25 min left");
-    assert_eq!(caption(&episode(12_000_000_000_i64, Some(5), None)), "E5 · 25 min left");
-    assert!(caption(&episode(12_000_000_000_i64, None, Some(2))).starts_with("A very long series title"));
+    let label = card_row::tile_label(&tile_facts::of(&m), true);
+    let text = |c: &Option<std::ffi::CString>| c.as_ref().map(|c| c.to_str().unwrap().to_string());
+    assert_eq!((text(&label.title), text(&label.caption)), (Some("Laura".into()), Some("Pilot".into())));
+    assert_eq!(crate::ui::widgets::episode_code(&tile_facts::of(&m)).as_deref(), Some("S02E05"));
+    assert_eq!(crate::ui::widgets::episode_code(&tile_facts::of(&episode(0, None, Some(2)))), None);
     for offset in [27_000_000_000_i64, 36_000_000_000_i64] {
-        let finished = episode(offset, Some(5), Some(2));
-        assert!(finished.resume_frac().is_none());
-        assert_eq!(caption(&finished), "S2 · E5 · New episode", "no time promised without a resume bar");
+        assert!(episode(offset, Some(5), Some(2)).resume_frac().is_none(), "no bar once finished");
     }
-    let movie = PmsMovie { title: "Movie".into(), dur_ns: 45 * 60 * 1_000_000_000,
-        resume_ms: 20 * 60_000, ..Default::default() };
-    assert_eq!(caption(&movie), "25 min left");
-    assert!(card_row::focused_caption(&tile_facts::of(&PmsMovie::default()), true).is_none());
 }
 
 /// **The pointer moves Home by its edges, never by a hover.** A wheel (the edge glide, fractional,
@@ -3302,7 +3135,7 @@ fn the_edge_glide_moves_home_a_hover_does_not_and_a_click_rests_its_card() {
     let snapshot = crate::catalog_fetch::hubs_snapshot(&state);
     let view = snapshot.view();
     let mut s = screen(view);
-    let hero = FocusKey { entry: s.entry, elem: HERO_PLAY_ELEM };
+    let hero = FocusKey { entry: s.entry, elem: HERO_ELEM };
     let card = |s: &HomeScreen, row: usize| FocusKey { entry: s.entry, elem: s.rows[row].elems[0] };
     let tick = |s: &mut HomeScreen, focus: FocusKey<u32>| {
         for _ in 0..3 { step(s, view, Some(focus), &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 })); }

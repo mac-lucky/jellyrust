@@ -46,15 +46,22 @@ fn nested_draw_preserves_navigation_at_rest_and_through_push_and_pop() {
     let navigation = NavPresentation {
         page_alpha: 0.21, chrome_alpha: 0.37, view_tab: Some(2), blur_amount: 0.63,
     };
-    let cases: &[(&str, f32, f32, bool, &[u32])] = &[
-        ("rest after pop", 0.0, 0.0, false, &[2]),
-        ("rest after push", 1.0, 1.0, false, &[2]),
-        ("mid-push", 0.5, 1.0, false, &[1, 2]),
-        ("mid-pop", 0.5, 0.0, true, &[2, 3]),
+    // A surface rooted at the Settings root draws the root (1) still under every page as Litefin's
+    // category list, never in the sliding parent role; one rooted at any other page (a dev boot
+    // target) slides its pages as before.
+    let cases: &[(&str, SettingsPage, f32, f32, bool, &[u32])] = &[
+        ("rest after pop", SettingsPage::Legal, 0.0, 0.0, false, &[2]),
+        ("rest after push", SettingsPage::Legal, 1.0, 1.0, false, &[2]),
+        ("mid-push", SettingsPage::Legal, 0.5, 1.0, false, &[1, 2]),
+        ("mid-pop", SettingsPage::Legal, 0.5, 0.0, true, &[2, 3]),
+        ("menu, rest after pop", SettingsPage::Root, 0.0, 0.0, false, &[1, 2]),
+        ("menu, rest after push", SettingsPage::Root, 1.0, 1.0, false, &[1, 2]),
+        ("menu, mid-push", SettingsPage::Root, 0.5, 1.0, false, &[1, 2]),
+        ("menu, mid-pop", SettingsPage::Root, 0.5, 0.0, true, &[1, 2, 3]),
     ];
     let mut actual = Vec::new();
     let mut expected = Vec::new();
-    for &(label, pos, target, popping, order) in cases {
+    for &(label, root, pos, target, popping, order) in cases {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let instance = |id| Instance {
             id: InstanceId(id),
@@ -68,7 +75,7 @@ fn nested_draw_preserves_navigation_at_rest_and_through_push_and_pop() {
         let mut inner = NavStack::new(Box::new(Immediate));
         for id in [1, 2] {
             inner.entries.push(Entry {
-                id: EntryId(id), arg: SettingsPage::Root, ret: ReturnState::default(),
+                id: EntryId(id), arg: if id == 1 { root } else { SettingsPage::Playback }, ret: ReturnState::default(),
                 inst: Some(instance(id)), evicted: false,
             });
         }
@@ -77,7 +84,7 @@ fn nested_draw_preserves_navigation_at_rest_and_through_push_and_pop() {
             inner, ids: Minter::default(),
             push: Push { route: crate::ui::route_screen::RoutePush::at(pos), open: target == 1.0,
                 leaving: popping.then(|| instance(3)) },
-            ground: RouteGround::new(), ground_ready: false, remembered: Vec::new(),
+            ground: RouteGround::new(), ground_ready: false, remembered: Vec::new(), boot: Vec::new(),
         };
         let outer = cx(None);
         let c = inner_cx(&outer);
@@ -181,7 +188,40 @@ fn every_root_detail_line_fits_a_known_good_width() {
         checked, 10,
         "expected a detail line on exactly Back on Home, Favorite libraries, Video & playback, Audio & \
          subtitles, Language, Automatically Sign In, Play trailers automatically, Privacy & \
-         data, Legal notices, and About Native Jelly — got {checked}; \
+         data, Legal notices, and About JellyRust — got {checked}; \
          did the signed-in multi-user fixture stop building one of these rows?"
     );
+}
+
+/// **Popping back to the category list crossfades the content panel's header** (finding: the
+/// uncovered root drew its header at full strength under the leaving page's for the whole pop).
+/// Mid-pop no run in the header band is at full strength: the root's rides the parent role
+/// (1 - t), the leaving page's the child role (t). At rest the root's is whole again.
+#[test]
+fn a_pop_to_the_list_crossfades_the_panel_header() {
+    let _g = nj_base::testlock::serial();
+    let _sess = scratch_session("surface-pop-header");
+    let mut s = RouteSurface::new(EntryId(0), InstanceId(0), Family::Settings, SettingsPage::Root,
+        crate::catalog_fetch::HubsSnapshot::empty_for_test().view());
+    step(&mut s, ScreenEvent::Mount, None);
+    forwarded(&mut s, Fx::Nav(NavOp::Push(SettingsPage::Playback)));
+    settle(&mut s);
+    forwarded(&mut s, Fx::Nav(NavOp::Pop));
+    assert!(s.push.leaving.is_some() && s.inner.depth() == 1, "popping back to the list");
+    s.push.route = crate::ui::route_screen::RoutePush::at(0.5);
+    let band = RouteLayout::panel().narrative;
+    let strongest = |s: &mut RouteSurface| {
+        let outer = cx(None);
+        let c = inner_cx(&outer);
+        let mut f = DrawFrame::new(&c, Painter::recording());
+        crate::ui::draw_census::capture_runs(|| s.draw_pages(&mut f, Painter::recording()))
+            .into_iter()
+            .filter(|r| band.contains(r.at.x, r.at.y))
+            .map(|r| r.ink[3])
+            .fold(0.0, f32::max)
+    };
+    let mid = strongest(&mut s);
+    assert!(mid > 0.0 && mid <= 0.51, "a header run mid-pop at alpha {mid}");
+    settle(&mut s);
+    assert!((strongest(&mut s) - 1.0).abs() < 1e-3, "at rest the root's header is whole");
 }

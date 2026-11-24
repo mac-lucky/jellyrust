@@ -89,7 +89,6 @@ fn bare(sid: ServerId, rk: &str) -> DetailScreen {
         preview_prose: 1.0,
         preview_synopsis: 1.0,
         preview_chrome: 1.0,
-        preview_field: 1.0,
         preview_base_scrim: 1.0,
         preview_logo: Spring::at(0.0),
         preview_played_for: None,
@@ -102,7 +101,7 @@ fn bare(sid: ServerId, rk: &str) -> DetailScreen {
         refresh_gen: 0,
         scroll: Spring::at(0.0),
         scroll_target: 0.0,
-        free: false, episode_scroll: Spring::at(0.0), episode_free: false,
+        free: false,
         tab_scroll: Spring::at(0.0),
         episode_scale: [Spring::at(1.0); EP_SCALE_MAX],
         episode_text_lift: [crate::ui::text_lift::TextLift::new(); EP_SCALE_MAX],
@@ -115,10 +114,8 @@ fn bare(sid: ServerId, rk: &str) -> DetailScreen {
         tabs: TabStrip::new(),
         season_pop: CtlPop::new(),
         ctl_pop: CtlPop::new(),
-        disc_unfurl: [Spring::at(0.0); 3],
         season_metrics: season::Metrics::new(),
         about_rows: about::Rows::new(),
-        ground: AmbientWash::flat(theme::SURFACE_APP),
         selected: {
             // No production `HubsStore`/`PmsState` is ever seeded in this file (fixtures come from
             // `crate::metadata::set_current_for_test`, not the hub catalog), so an empty owned
@@ -333,7 +330,7 @@ fn assert_strip_hit_geometry(screen: &DetailScreen, elems: &[u32], measure: &cra
 }
 
 #[test]
-fn detail_focus_navigation_walks_the_filmstrip_through_tabs_and_both_rows() {
+fn detail_focus_navigation_walks_the_episode_list_through_tabs_and_both_stops() {
     let sid = ServerId::UNSET;
     let _guard = install(fixture(sid));
     let mut screen = bare(sid, "show");
@@ -343,72 +340,38 @@ fn detail_focus_navigation_walks_the_filmstrip_through_tabs_and_both_rows() {
     let context = cx(&measure, None);
     let owner = InputOwner::Entry(EntryId(8));
     let mut engine = FocusEngine::new();
+    let key = |i, row| FocusKey { entry: EntryId(8), elem: screen.engine_key(episodes::elem(i, row).unwrap()).unwrap() };
     let tab = FocusKey { entry: EntryId(8), elem: screen.engine_key(season::elem(0).unwrap()).unwrap() };
-    let still = FocusKey { entry: EntryId(8), elem: screen.engine_key(episodes::elem(0, episodes::Row::Still).unwrap()).unwrap() };
-    let text = FocusKey { entry: EntryId(8), elem: screen.engine_key(episodes::elem(0, episodes::Row::Text).unwrap()).unwrap() };
 
     assert!(matches!(engine.set(owner, tab, Some(season::SEASON_GROUP), By::Restore), Outcome::Moved { .. }));
-    let got_still = expect_move(
-        move_dir(&mut engine, &screen, owner, Dir::Down, &context),
-        "season tabs must enter the filmstrip",
-    );
-    assert_eq!(got_still, still);
-    let got_text = expect_move(
-        move_dir(&mut engine, &screen, owner, Dir::Down, &context),
-        "still must descend to its metadata row",
-    );
-    assert_eq!(got_text, text);
-    let out = expect_move(
-        move_dir(&mut engine, &screen, owner, Dir::Down, &context),
-        "metadata row must enter the next section",
-    );
-    assert_eq!(out.elem, screen.engine_key(cast::elem(0).unwrap()).unwrap());
+    let got = expect_move(move_dir(&mut engine, &screen, owner, Dir::Down, &context), "season tabs enter the list");
+    assert_eq!(got, key(0, episodes::Row::Still));
+    let got = expect_move(move_dir(&mut engine, &screen, owner, Dir::Right, &context), "a card reaches its button");
+    assert_eq!(got, key(0, episodes::Row::Text));
+    let got = expect_move(move_dir(&mut engine, &screen, owner, Dir::Down, &context), "the button column walks down");
+    assert_eq!(got, key(1, episodes::Row::Text));
+    let got = expect_move(move_dir(&mut engine, &screen, owner, Dir::Left, &context), "a button returns to its card");
+    assert_eq!(got, key(1, episodes::Row::Still));
+    let got = expect_move(move_dir(&mut engine, &screen, owner, Dir::Up, &context), "the card column walks up");
+    assert_eq!(got, key(0, episodes::Row::Still));
+    let got = expect_move(move_dir(&mut engine, &screen, owner, Dir::Up, &context), "the first row leaves for the tabs");
+    assert_eq!(got, tab);
 
-    let back_text = expect_move(
-        move_dir(&mut engine, &screen, owner, Dir::Up, &context),
-        "cast must return to the metadata row",
-    );
-    assert_eq!(back_text, text);
-    let back_still = expect_move(
-        move_dir(&mut engine, &screen, owner, Dir::Up, &context),
-        "metadata row must return to still",
-    );
-    assert_eq!(back_still, still);
-    let back_tab = expect_move(
-        move_dir(&mut engine, &screen, owner, Dir::Up, &context),
-        "still must return to season tabs",
-    );
-    assert_eq!(back_tab, tab);
-
-    for row in [episodes::Row::Still, episodes::Row::Text] {
-        let first = FocusKey { entry: EntryId(8), elem: screen.engine_key(episodes::elem(0, row).unwrap()).unwrap() };
-        let last = FocusKey { entry: EntryId(8), elem: screen.engine_key(episodes::elem(11, row).unwrap()).unwrap() };
-        let mut at = first;
-        assert!(matches!(engine.set(owner, first, Some(episodes::EPISODES_GROUP), By::Restore), Outcome::Moved { .. }));
-        let mut right_stops = 0;
-        for _ in 0..20 {
-            match move_dir(&mut engine, &screen, owner, Dir::Right, &context) {
-                Outcome::Moved { to, .. } => at = to,
-                Outcome::Edge(_) | Outcome::Nothing => {
-                    right_stops += 1;
-                    assert_eq!(engine.current(owner), Some(at), "RIGHT edge must preserve focus");
-                }
-            }
-        }
-        assert_eq!(at, last, "RIGHT must clamp at the last episode for {row:?}");
-        assert!(right_stops > 0, "RIGHT must exercise the last-episode edge for {row:?}");
-        let mut left_stops = 0;
-        for _ in 0..20 {
-            match move_dir(&mut engine, &screen, owner, Dir::Left, &context) {
-                Outcome::Moved { to, .. } => at = to,
-                Outcome::Edge(_) | Outcome::Nothing => {
-                    left_stops += 1;
-                    assert_eq!(engine.current(owner), Some(at), "LEFT edge must preserve focus");
-                }
-            }
-        }
-        assert_eq!(at, first, "LEFT must clamp at the first episode for {row:?}");
-        assert!(left_stops > 0, "LEFT must exercise the first-episode edge for {row:?}");
+    // DOWN walks every row and the last one leaves the list for the next section.
+    assert!(matches!(engine.set(owner, key(0, episodes::Row::Still), Some(episodes::EPISODES_GROUP), By::Restore), Outcome::Moved { .. }));
+    let mut at = key(0, episodes::Row::Still);
+    for i in 1..12 {
+        at = expect_move(move_dir(&mut engine, &screen, owner, Dir::Down, &context), "DOWN walks the list");
+        assert_eq!(at, key(i, episodes::Row::Still));
+    }
+    let out = expect_move(move_dir(&mut engine, &screen, owner, Dir::Down, &context), "the last row leaves the list");
+    assert!(matches!(screen.locate(out.elem, test_store().view()), Some(Located::Cast(_))), "{out:?} after {at:?}");
+    for (dir, row) in [(Dir::Left, episodes::Row::Still), (Dir::Right, episodes::Row::Text)] {
+        let k = key(5, row);
+        assert!(matches!(engine.set(owner, k, Some(episodes::EPISODES_GROUP), By::Restore), Outcome::Moved { .. }));
+        assert!(!matches!(move_dir(&mut engine, &screen, owner, dir, &context), Outcome::Moved { .. }),
+            "{dir:?} past the {row:?} column stays put");
+        assert_eq!(engine.current(owner), Some(k));
     }
     clear();
 }
@@ -423,26 +386,23 @@ fn detail_focus_places_and_hit_map_agree_for_all_three_scrolled_strips() {
     let related_elems: Vec<_> = (0..12).map(|i| related::elem(i).unwrap()).collect();
     let cast_elems: Vec<_> = (0..12).map(|i| cast::elem(i).unwrap()).collect();
 
-    for scroll in [0.0, 137.0, 1024.0] {
-        screen.episode_scroll.jump(scroll);
-        scroll_to(&mut screen, 2);
-        assert_strip_hit_geometry(&screen, &episode_elems, &measure);
-    }
+    scroll_to(&mut screen, 2);
+    assert_strip_hit_geometry(&screen, &episode_elems, &measure);
 
     for focus in [0, 6, 11] {
         for _ in 0..180 {
-            screen.related.update(12, Some(focus), &crate::ui::card_row::RowStyle::HOME, 1.0 / 60.0);
-            screen.cast.update(12, Some(focus), &crate::ui::card_row::RowStyle::CAST, 1.0 / 60.0);
+            screen.related.update(12, Some(focus), &super::section::POSTERS, 1.0 / 60.0);
+            screen.cast.update(12, Some(focus), &super::section::POSTERS, 1.0 / 60.0);
         }
         for _ in 0..180 {
-            screen.related.update(12, None, &crate::ui::card_row::RowStyle::HOME, 1.0 / 60.0);
-            screen.cast.update(12, None, &crate::ui::card_row::RowStyle::CAST, 1.0 / 60.0);
+            screen.related.update(12, None, &super::section::POSTERS, 1.0 / 60.0);
+            screen.cast.update(12, None, &super::section::POSTERS, 1.0 / 60.0);
         }
         // Exact rest removes the fractional enlargement that used to make an edge-aligned
         // tile count as clipped. Deliberately straddle the viewport instead of testing residue.
         let partial = 137.0 + focus as f32 * 11.0;
-        screen.related.restore_scroll(partial, 12, &crate::ui::card_row::RowStyle::HOME);
-        screen.cast.restore_scroll(partial, 12, &crate::ui::card_row::RowStyle::CAST);
+        screen.related.restore_scroll(partial, 12, &super::section::POSTERS);
+        screen.cast.restore_scroll(partial, 12, &super::section::POSTERS);
         scroll_to(&mut screen, 3);
         assert_strip_hit_geometry(&screen, &related_elems, &measure);
         scroll_to(&mut screen, 4);
@@ -492,7 +452,7 @@ fn detail_focus_up_from_filmstrip_lands_on_the_selected_season_not_the_nearest_t
         };
         let far_episode = FocusKey {
             entry: EntryId(8),
-            elem: screen.engine_key(episodes::elem(3, episodes::Row::Still).unwrap()).unwrap(),
+            elem: screen.engine_key(episodes::elem(0, episodes::Row::Text).unwrap()).unwrap(),
         };
         assert!(matches!(
             engine.set(owner, far_episode, Some(episodes::EPISODES_GROUP), By::Restore),
@@ -500,7 +460,7 @@ fn detail_focus_up_from_filmstrip_lands_on_the_selected_season_not_the_nearest_t
         ));
         let up = expect_move(
             move_dir(&mut engine, &screen, owner, Dir::Up, &context),
-            "UP from a far-right episode must reach the season strip",
+            "UP from the first episode's button must reach the season strip",
         );
         assert_eq!(
             up, selected_tab,

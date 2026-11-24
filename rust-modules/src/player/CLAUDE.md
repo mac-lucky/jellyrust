@@ -271,10 +271,18 @@ something.
 - **App-switch lifecycle** (handled in `app/run.rs`, the frame loop; the machine and the
   transport-pause contract are `player/lifecycle.rs`, which `app::lifecycle` re-exports; details in
   the `docs/agent-reference.md` gotchas): OS
-  background suspends the buffer-feed preserving the session. Foreground tracks one exact Load
+  background suspends the buffer-feed preserving the session, and tells the server it is paused
+  there (`route::report_parked`; an app close before the restore reports `Stopped` from it). Foreground tracks one exact Load
   attempt at a time, follows reducer-approved superseding or rollback attempts, retries an exact
   failure without repeating route preparation, and applies the saved clock only after `Started`.
-  Preserve the suspend/reload pairing if you touch playback.
+  The suspend always saves `Playing`: a film open when the app went to the background plays on
+  return, even one paused just before (the owner's rule). The other half of that rule: a television
+  switched off (standby, suspend, power off; not the screen saver or screen off) during the park
+  brings it back PAUSED, through the paused-frame restore (`settle_park_clock` at `0x106`, fed by
+  the port's power watch, `nj_platform::devcaps::power`; unknown keeps `Playing`). Whether webOS
+  keeps the process alive across standby is unmeasured on the household sets: if it does not, a
+  cold launch lands on Home and this never fires. Preserve the suspend/reload pairing if you touch
+  playback.
 
 ## Verifying playback changes
 

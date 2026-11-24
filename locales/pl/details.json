@@ -1,0 +1,18 @@
+{
+  "details.runtime_hm": "{hours}h {minutes}m",
+  "details.runtime_m": "{minutes}m",
+  "details.ends_at": "Koniec o {time}",
+  "details.aired": "Wyemitowano {date}",
+  "details.show_more": "Pokaż więcej",
+  "details.genres": "Gatunki",
+  "details.directors": "Reżyserzy",
+  "details.writers": "Scenarzyści",
+  "details.audio": "Dźwięk",
+  "details.subtitles": "Napisy",
+  "details.seasons": "Sezony",
+  "details.special_features": "Dodatki",
+  "details.more_like_this": "Więcej podobnych",
+  "details.added": "Dodano {date}",
+  "details.studios": "Studia",
+  "details.favorite": "Ulubione"
+}

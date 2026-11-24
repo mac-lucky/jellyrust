@@ -27,7 +27,7 @@ Audio passthrough remains the television's Digital Sound Output setting.
 
 ## Jellyfin user preferences
 
-**Audio & subtitles** edits the four playback fields of the signed-in user's Jellyfin
+**Audio & subtitles** edits the six playback fields of the signed-in user's Jellyfin
 `UserConfiguration` (`jf/preferences.rs`, issue #41):
 
 | Row | Field | Options |
@@ -36,10 +36,47 @@ Audio passthrough remains the television's Digital Sound Output setting.
 | Subtitles | `SubtitleMode` | As the file marks them (`Default`), When audio isn't in the subtitle language (`Smart`), Always, Only forced subtitles (`OnlyForced`), Off (`None`) |
 | Subtitle language | `SubtitleLanguagePreference` | No preference, or one of the server's languages |
 | Default audio track | `PlayDefaultAudioTrack` | Play the file's default track, or Prefer my audio language |
+| Remember audio choice | `RememberAudioSelections` | On (the server's default), Off |
+| Remember subtitle choice | `RememberSubtitleSelections` | On (the server's default), Off |
+
+With a Remember field on, the server keeps the track each progress report names for that film and
+serves it back as the source's `DefaultAudioStreamIndex`/`DefaultSubtitleStreamIndex` (subtitles
+Off as -1), which playback starts on (`docs/jellyfin-playback.md`, "Remembered tracks").
 
 The values live on the server, per user, so every Jellyfin client of that user shares them, and
-nothing is stored on the television. Playback reads them from `/Users/Me` at each start
+nothing of them is stored on the television. Playback reads them from `/Users/Me` at each start
 (`Jf::language_prefs`), so a save applies from the next playback.
+
+The page's first row, **Dubbing and voice-over**, is the exception: Jellyfin has no such field, so
+it is saved on this television (`Session::voice_preference`, captured into `ResolveEnv` at each
+play), its row says so, and the page lists it from the moment it opens, whether or not the account
+preferences load. It ranks audio tracks by what their title names (`route::voice_kind`: "lektor
+ai"/"ai lektor" is an AI voice-over, "lektor"/"voice-over" a voice-over, "dubbing" or the word
+"dub" a dub):
+
+| Option | Effect on the automatic pick |
+|---|---|
+| No preference (default) | none: the ladder as before |
+| Dubbing first | within the chosen language: dubbing, an unnamed track, a voice-over, an AI voice-over |
+| Dubbing, never voice-over | voice-over and AI voice-over tracks are never picked; dubbing first in its language |
+| No AI voice-over | AI voice-over tracks are never picked |
+
+An excluded track is skipped by every rung of the audio ladder (the server's pick, the languages,
+the file's default, the any-playable fallback) on both direct play and conversion, and a
+conversion names an allowed track rather than leaving the choice to the server. When every track
+would be excluded, none is; under Force Direct Play, which cannot convert, neither is one when the
+exclusion leaves nothing it can force-play. A track picked by hand (the player's menu, the Detail
+page's chooser) plays as picked for that playback; a pick the server remembers comes back as its
+pick next time, and the preference skips it again if it excludes it. The Smart subtitle mode
+judges by the audio that plays: the direct-play pick, or the track a conversion carries. The
+Detail page's facts row walks the same ladder under the same preference.
+
+An external audio track (Jellyfin's `IsExternal`: a sidecar file beside the video, such as
+`ai-lektor`'s `<video>.pl.lektor.mka`) is never direct-played, because the file direct play reads
+does not hold it: an automatic pick that lands on one is a conversion (the server remuxes it in),
+unless a better-ranked track in its language direct-plays; Force Direct Play passes over it; a
+hand pick of one in the player asks the server for it instead of switching natively; and a retry or
+quality change while one plays converts it in again rather than swapping it for an embedded track.
 
 A load reads `GET /Users/Me` (its `Id` must be the signed-in user, or the answer is refused as
 stale) and `GET /Localization/Cultures`. The languages are the server's list, keyed by
@@ -49,7 +86,7 @@ visible and selected.
 
 `POST /Users/Configuration?userId=` replaces the WHOLE configuration, so a save reads
 `/Users/Me` again, changes only the field picked, and sends every other field back as the server
-gave it. If the four fields no longer match what the page showed (another client changed them),
+gave it. If the six fields no longer match what the page showed (another client changed them),
 the save is refused as stale and the page reloads instead of overwriting a change nobody saw. A
 pick of the value already checked sends nothing. Confirmed values stay authoritative if a save
 fails; the page offers Retry. A request captured under one sign-in cannot be saved under another.

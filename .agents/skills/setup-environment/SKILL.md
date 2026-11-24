@@ -184,8 +184,8 @@ test` stops before it deploys**, saying the app directory does not exist. That i
 correct and it is not a toolchain fault: `make deploy` scp's into an app directory that
 is already registered, while creating an app is appinstalld's job — SAM has to learn the
 id and the per-id LS2 role file has to be written. Three builds live on one TV now
-(`com.sostk.nativejelly`, what users install, `com.sostk.nativejelly.debug`, the Makefile's
-**default**, and `com.sostk.nativejelly.nightly`, the nightly build), so install this one once
+(`com.macluckylab.jellyrust`, what users install, `com.macluckylab.jellyrust.debug`, the Makefile's
+**default**, and `com.macluckylab.jellyrust.nightly`, the nightly build), so install this one once
 and everything after it is a plain `make test`:
 
 ```bash

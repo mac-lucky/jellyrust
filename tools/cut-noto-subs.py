@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cut the shipped subtitle faces `pkg/fonts/subs/*.ttf` (and their manifest) from pinned Noto Sans
-Bold releases, and keep the "PlxSubs" alias on `pkg/appfont-bold.ttf`.
+Bold releases, and keep the "PlxSubs" alias on `pkg/appfont-inter-bold.ttf`.
 
     python3 tools/cut-noto-subs.py --fetch DIR      # download the pinned inputs into a NEW, empty DIR
     python3 tools/cut-noto-subs.py DIR              # cut from DIR (verifies every sha256 first)
@@ -18,7 +18,7 @@ Arabic would draw unshaped. See `docs/ass-subtitles.md` "Fonts" for how libass p
 file, with NO coverage check). Thai, Devanagari, Arabic and the rest must therefore be reachable
 BY FAMILY NAME. Each face here keeps its real English name ("Noto Sans Thai", name ID 1 under
 Windows langID 0x0409) and gains "PlxSubs" (0x0407) and "Inter" (0x040C) as ID 1 and ID 4 records
-(`tools/plxsubs_names.py` says why those languages). `pkg/appfont-bold.ttf` gets "PlxSubs" too, and
+(`tools/plxsubs_names.py` says why those languages). `pkg/appfont-inter-bold.ttf` gets "PlxSubs" too, and
 is added to the renderer FIRST, so Latin, digits and punctuation never fall to a Noto face.
 
 **Which scripts.** Every script used by a language in the account language picker
@@ -46,7 +46,7 @@ a test (`ass/fonts/tests.rs`) holds it. Tibetan is the one face not from the cur
   4. **Win metrics normalised.** libass sizes a face from `usWinAscent + usWinDescent` and its own
      em, so a Noto face with tall win metrics would render smaller than Inter in the same line
      and change the line height. `usWinAscent/usWinDescent`, `hhea` and the typo metrics are
-     rewritten to Inter Bold's ratios (2269/2048 and 660/2048 em, read from `pkg/appfont-bold.ttf`
+     rewritten to Inter Bold's ratios (2269/2048 and 660/2048 em, read from `pkg/appfont-inter-bold.ttf`
      at run time), scaled to the face's upem.
   5. The name records above. Name IDs 0, 7, 13 and 14 (copyright, trademark, licence, licence URL)
      are asserted present: OFL 1.1 §2 wants the notice to travel with the Font Software, and none of
@@ -77,7 +77,7 @@ from fontTools import version as FONTTOOLS_VERSION  # noqa: E402
 REPO = Path(__file__).resolve().parent.parent
 OUT_DIR = REPO / "pkg" / "fonts" / "subs"
 MANIFEST = OUT_DIR / "manifest.json"
-INTER_BOLD = REPO / "pkg" / "appfont-bold.ttf"
+INTER_BOLD = REPO / "pkg" / "appfont-inter-bold.ttf"
 
 # --- the pins. Change URL, bytes and sha256 together or not at all. -----------------------------
 MONOREPO = "https://raw.githubusercontent.com/notofonts/notofonts.github.io"
@@ -464,7 +464,7 @@ def check() -> None:
         if sha256_of(path) != face["sha256"]:
             raise SystemExit(f"{path.name} does not match the manifest; re-run the cut")
     if alias_inter_bold(write=False):
-        raise SystemExit("pkg/appfont-bold.ttf lacks the PlxSubs alias; run the cut to add it")
+        raise SystemExit("pkg/appfont-inter-bold.ttf lacks the PlxSubs alias; run the cut to add it")
     if language_buckets(manifest["faces"]) != manifest["buckets"]:
         raise SystemExit("the manifest's language buckets are stale; re-run the cut")
     print(f"{len(manifest['faces'])} faces match the manifest")

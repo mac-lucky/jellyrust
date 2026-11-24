@@ -135,7 +135,7 @@ fn every_audio_and_subtitles_field_pushes_its_picker() {
     let _signed_in = crate::jf::preferences::LiveSignInForTest::new("http://10.0.0.2:8096", "nav-structure-audio");
     let (request, snapshot) = PreferenceRequest::fixture_for_test("http://10.0.0.2:8096", "nav-structure-audio", AudioPreferences::default());
     let items = super::super::preferences::nav_items_for_test(super::super::preferences::Kind::AudioSubtitles, Some(&AudioPreferences::default()));
-    assert_eq!(items.len(), 4, "{items:?}");
+    assert_eq!(items.len(), 7, "{items:?}");
     assert_every_nav_item_pushes_exactly_its_dest("audio & subtitles", &items, &|| {
         let (mut d, mut rig, id) = consent_opened(SettingsPage::AudioSubtitles);
         frame(&mut d, &mut rig, 32, vec![]);
@@ -169,10 +169,11 @@ fn every_language_nav_item_pushes_exactly_its_dest() {
                     kind: InputKind::Key { key: Key::Right, sym: 0, wcode: 0, edge: Edge::Down, at_edge: true } }),
             };
             assert_eq!(surface.inner.top().unwrap().arg, SettingsPage::Language);
+            let depth = surface.inner.depth();
             step(&mut surface, ev, Some(focus));
             assert_eq!(surface.inner.top().unwrap().arg, dest,
                 "language: {method:?} on key {elem} must push exactly {dest:?}");
-            assert_eq!(surface.inner.depth(), 2, "language: {method:?} pushed exactly one page");
+            assert_eq!(surface.inner.depth(), depth + 1, "language: {method:?} pushed exactly one page");
         }
     }
 }
@@ -189,6 +190,7 @@ fn every_legal_index_row_pushes_its_own_document() {
 
 #[test]
 fn every_consent_settings_preview_row_pushes_its_preview() {
+    let _reporting = super::super::consent::offer_reporting_for_test(); // litefin: the upstream rows
     let _g = nj_base::testlock::serial();
     let _sess = scratch_session("nav-structure-consent");
     let items = super::super::consent::nav_items_for_test(None);

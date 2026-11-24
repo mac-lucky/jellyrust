@@ -74,8 +74,9 @@
 //! `/System/Info/Public` at that origin answered with that id under the current generations
 //! (`crate::jf::plaintext`). It is bound to the same identity and network generations as every
 //! grant, and dies the same ways. Unlike a Plex grant it admits its origin for the client the
-//! registry holds there whatever machine id that slot carries — a Jellyfin install registers by
-//! address, with no machine id — because the origin itself is what was verified. Such a grant is
+//! registry holds there whatever machine id that slot carries — the server's own id once a
+//! sign-in learned it (`jf::seat`), none before, and never the grant's `jf:` key — because the
+//! origin itself is what was verified. Such a grant is
 //! never queued for plex.tv rediscovery: the Jellyfin side re-verifies and re-mints it.
 //!
 //! ## Offers
@@ -998,8 +999,9 @@ mod tests {
         assert!(!admits(&grants, now, Some("other"), &lan()), "another server");
     }
 
-    /// A Jellyfin grant admits its verified origin for whatever slot holds it — a Jellyfin install
-    /// registers by address, with no machine id — while a Plex grant never admits an empty id.
+    /// A Jellyfin grant admits its verified origin for whatever slot holds it — a Jellyfin slot
+    /// carries the server's own id, or none, never the grant's `jf:` key — while a Plex grant
+    /// never admits an empty id.
     #[test]
     fn a_jellyfin_grant_admits_its_origin_for_any_slot_and_a_plex_one_does_not() {
         let now = GrantScope { identity: 3, network: 5 };

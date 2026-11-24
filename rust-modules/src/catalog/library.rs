@@ -61,11 +61,15 @@ impl Client {
     /// without another round trip — and a guid whose kind we do not recognise sends no `type` at
     /// all rather than guessing 1, because a wrong type answers `size 0` and would read as "that
     /// server does not have it".
-    pub fn find_by_guid(&self, guid: &str) -> Option<MediaContainer> {
+    ///
+    /// `kind` is the origin item's own type (`movie` / `show` / `episode`, as `Metadata::kind`). A
+    /// Jellyfin guid carries none, and TMDb and TVDB number each type separately, so Jellyfin
+    /// matches only items of that type (`jf::Jf::find_by_guid`).
+    pub fn find_by_guid(&self, guid: &str, kind: &str) -> Option<MediaContainer> {
         if guid.is_empty() {
             return None;
         }
-        if let Some(j) = self.jf() { return j.find_by_guid(guid); }
+        if let Some(j) = self.jf() { return j.find_by_guid(guid, kind); }
         let mut q = QueryBuilder::new("/library/all".to_string()).str("guid", guid);
         if let Some(t) = guid_type(guid) {
             q = q.int("type", t);
@@ -251,6 +255,17 @@ impl Client {
         self.get_ok(&format!(
             "/:/unscrobble?key={rating_key}&identifier=com.plexapp.plugins.library"
         ))
+    }
+
+    /// Mark or unmark the viewer's favourite. Jellyfin only: Plex keeps no favourites, so a Plex
+    /// server answers `false` (and offers no heart, [`Self::keeps_favorites`]).
+    pub fn set_favorite(&self, rating_key: &str, on: bool) -> bool {
+        self.jf().is_some_and(|j| j.set_favorite(rating_key, on))
+    }
+
+    /// Does this server keep favourites at all? The detail page offers its heart only where one does.
+    pub fn keeps_favorites(&self) -> bool {
+        self.jf().is_some()
     }
 
     /// Fetch a SIDECAR subtitle (`Stream.key`, i.e. `/library/streams/{id}`) for the client

@@ -358,7 +358,7 @@ pub(super) fn transcode_spec<'a>(
 }
 
 
-pub(crate) use crate::catalog::session::{PlaybackQuality as Quality, DirectPlayMode, NextEpisodeMode, SkipInterval, RootBack, InstantDpadSeeking, EpisodeNavigation, SubtitleSize, SubtitlePosition};
+pub(crate) use crate::catalog::session::{PlaybackQuality as Quality, DirectPlayMode, NextEpisodeMode, SkipInterval, RootBack, InstantDpadSeeking, EpisodeNavigation, SubtitleSize, SubtitlePosition, VoicePreference};
 
 
 /// The ladder IN ORDER, best first. The ONE place row order lives, so the picker's index mapping
@@ -810,6 +810,9 @@ pub(crate) struct ResolveEnv {
     pub sub_sid: i64,
     /// A retry carries the viewer's explicit Off as well as a positive subtitle id.
     pub subtitle_override: Option<i64>,
+    /// `subtitle_override` `Some(0)` is an Off somebody chose (the pre-play choice, or a retry of a
+    /// playback whose Off was one), not merely a retry of one that showed no subtitle.
+    pub subtitle_off: bool,
     /// `audio_sid` is the VIEWER's pick (the Detail page's track chooser), not a session or retry
     /// carry: a track that cannot direct-play is then converted rather than swapped for a
     /// direct-playable sibling, as a pick in the player's own track menu is
@@ -823,6 +826,9 @@ pub(crate) struct ResolveEnv {
     pub quality: Quality,
     /// Captured with the quality preference; never re-read by a worker.
     pub direct_play_mode: DirectPlayMode,
+    /// The dubbing/lektor preference ([`voice_preference`]), captured the same way; only ever
+    /// read through [`AudioLangPrefs::voice`].
+    pub voice: VoicePreference,
     /// The SOURCE's whole-stream bitrate in **kbps**, or `0` when nobody has measured it — the
     /// other half of what [`quality_policy`] needs, beside the frame size the playing-item store
     /// already carries.
@@ -1039,6 +1045,9 @@ pub(crate) struct Plan {
     /// conversion of this item carries the subtitle the user was already watching. On a
     /// conversion it is set only when the answer delivered one ([`Plan::sub_delivery`]).
     pub sub_sid: i64,
+    /// This playback starts with an Off somebody chose: the viewer's pre-play Off (or a retry's
+    /// carried one), or the server's remembered Off. See [`Session::cur_sub_off`].
+    pub sub_off: bool,
     /// client-renderer ordinal for that subtitle (`metadata::sub_render_ordinal`). None = subs off.
     pub sub_render_ordinal: Option<i32>,
     /// How a CONVERSION delivers `sub_sid` (`None` on direct play, where the client draws the
@@ -1197,28 +1206,33 @@ pub(super) fn build_stream(rk: &str, part: &str, vcodec: &str, acodec: &str, env
         ));
     }
     let streamable = part_is_streamable(part);
-    let tracks = plan
-        .playing
-        .as_ref()
-        .map(|p| p.audio.as_slice())
-        .unwrap_or(&[]);
+    // Owned (a few streams, once per resolve), so the subtitle decision below may mark the playing
+    // item's sidecar while the audio list is still in use.
+    let audio_tracks = plan.playing.as_ref().map(|p| p.audio.clone()).unwrap_or_default();
+    let tracks = audio_tracks.as_slice();
     // The signed-in user's own language preferences (Jellyfin keeps them per user, not per show),
     // ranked the way the server's MediaStreamSelector ranks them.
     let user_prefs = if rk.is_empty() { None } else { client.language_prefs() };
     let audio_prefs = AudioLangPrefs {
         language: user_prefs.as_ref().and_then(|p| p.audio.as_deref()),
         prefer_default: user_prefs.as_ref().is_none_or(|p| p.play_default_audio_track),
+        voice: env.voice,
     };
-    let audio_sel = if env.audio_sid > 0 {
-        tracks.iter().enumerate().find(|(_, t)| t.id == env.audio_sid
+    // A carried sidecar (a retry or quality change while it plays) is converted in again like a
+    // chosen track: smart direct play would swap it for a different voice the file holds.
+    let carried_sidecar = tracks.iter().any(|t| t.id == env.audio_sid && t.external);
+    let dp_audio = |prefs| if env.audio_sid > 0 {
+        tracks.iter().enumerate().find(|(_, t)| t.id == env.audio_sid && !t.external
             && audio_direct_plays_with(caps, env.direct_play_mode, &t.codec, t.channels))
             .map(|(i, t)| (i as i32, t.codec.to_lowercase(), t.id))
-            .or_else(|| (!forced && !env.audio_explicit).then(|| pick_dp_audio_mode(caps, tracks, acodec, audio_prefs, DirectPlayMode::Auto)).flatten())
+            .or_else(|| (!forced && !env.audio_explicit && !carried_sidecar)
+                .then(|| pick_dp_audio_mode(caps, tracks, acodec, prefs, DirectPlayMode::Auto)).flatten())
     } else if rk.is_empty() {
         None
     } else {
-        pick_dp_audio_mode(caps, tracks, acodec, audio_prefs, env.direct_play_mode)
+        pick_dp_audio_mode(caps, tracks, acodec, prefs, env.direct_play_mode)
     };
+    let audio_sel = dp_audio(audio_prefs);
     if let Some(lang) = audio_prefs.language {
         let hit = audio_sel
             .as_ref()
@@ -1237,11 +1251,42 @@ pub(super) fn build_stream(rk: &str, part: &str, vcodec: &str, acodec: &str, env
             }
         ));
     }
-    // the language of the audio that will play — what the Smart subtitle mode is judged by
-    let audio_lang: String = audio_sel
-        .as_ref()
-        .and_then(|(i, _, _)| usize::try_from(*i).ok())
-        .and_then(|i| tracks.get(i))
+    let audio_id = audio_sel.as_ref().map(|(_, _, id)| *id).unwrap_or(0);
+    // What the connection allows (`link_policy` — a relay forbids the two flavours that ship the
+    // file's own bytes) and what the direct-play mode setting allows, composed so the stricter
+    // wins.
+    let location = client.link();
+    let allowed = direct_play_policy(env.direct_play_mode, crate::catalog::link_policy(location));
+    let direct_candidate = allowed.direct_play && video_dp && streamable && !part.is_empty()
+        && (audio_sel.is_some() || tracks.is_empty());
+    // Direct play feeds the smart-DP audio pick; a conversion can carry any track (the server
+    // converts what the panel cannot decode), so it carries the preference-ranked one.
+    let ask_audio = if direct_candidate {
+        audio_id
+    } else {
+        encode_audio_id(audio_id, env.audio_sid, tracks, audio_prefs)
+    };
+    if audio_prefs.voice != VoicePreference::Any {
+        let any = AudioLangPrefs { voice: VoicePreference::Any, ..audio_prefs };
+        let any_dp = dp_audio(any).map_or(0, |(_, _, id)| id);
+        let base = if direct_candidate { any_dp } else { encode_audio_id(any_dp, env.audio_sid, tracks, any) };
+        if base != ask_audio {
+            let track = |id: i64| tracks.iter().find(|s| s.id == id)
+                .map_or_else(|| format!("{id}"), |s| format!("{id} {} {:?}", s.lang_code, voice_kind(s)));
+            crate::player::log(&format!(
+                "route: voice preference {:?} — audio {} instead of {}",
+                audio_prefs.voice, track(ask_audio), track(base),
+            ));
+        }
+    }
+    // the language of the audio that will play — what the Smart subtitle mode is judged by: the
+    // direct-play pick, or the track a conversion carries, which need not be that pick
+    let carried = if direct_candidate {
+        audio_sel.as_ref().and_then(|(i, _, _)| usize::try_from(*i).ok()).and_then(|i| tracks.get(i))
+    } else {
+        tracks.iter().find(|s| ask_audio > 0 && s.id == ask_audio)
+    };
+    let audio_lang: String = carried
         .or_else(|| tracks.iter().find(|s| s.default))
         .or_else(|| tracks.first())
         .map(|s| s.lang_code.clone())
@@ -1251,19 +1296,28 @@ pub(super) fn build_stream(rk: &str, part: &str, vcodec: &str, acodec: &str, env
         mode: user_prefs.as_ref().map_or(SubtitleMode::Default, |p| SubtitleMode::parse(&p.subtitle_mode)),
     };
     plan.sub_pref_lang = subtitle_prefs.language.map(str::to_string);
-    // ONE subtitle decision for the negotiation and the direct-play plan.
-    let sub_pick = plan.playing.as_ref().and_then(|p| match env.subtitle_override {
+    // ONE subtitle decision for the negotiation and the direct-play plan. A film the server
+    // remembers with subtitles Off starts with none, whatever the preferences would turn on.
+    let mut sub_pick = plan.playing.as_ref().and_then(|p| match env.subtitle_override {
         Some(id) => p.subs.iter()
             .position(|s| s.id == id && !s.external && embedded_subtitle_renderable(&s.codec))
             .and_then(|i| (id > 0).then_some((id, crate::metadata::sub_render_ordinal(&p.subs, i)))),
+        None if p.subs_off => None,
         None => pick_dp_subtitle_pref(&p.subs, subtitle_prefs, &audio_lang),
     });
-    let audio_id = audio_sel.as_ref().map(|(_, _, id)| *id).unwrap_or(0);
-    // What the connection allows (`link_policy` — a relay forbids the two flavours that ship the
-    // file's own bytes) and what the direct-play mode setting allows, composed so the stricter
-    // wins.
-    let location = client.link();
-    let allowed = direct_play_policy(env.direct_play_mode, crate::catalog::link_policy(location));
+    plan.sub_off = match env.subtitle_override {
+        Some(_) => env.subtitle_off,
+        None => plan.playing.as_ref().is_some_and(|p| p.subs_off),
+    };
+    // An automatic sidecar pick (ordinal -1) is switched on the way the server's own selection is:
+    // marked selected, so a conversion asks for it (`server_selected_sidecar`) and a direct-play
+    // landing restores it as the client's sidecar (`player::sidecar::restore_server_selection`).
+    if let (Some((id, ord)), Some(item)) = (sub_pick, plan.playing.as_mut()) {
+        if ord < 0 {
+            for sub in &mut item.subs { sub.selected = sub.id == id; }
+            sub_pick = None;
+        }
+    }
     if forced {
         let failure = if part.is_empty() { Some(ForcedFailure::NoOriginal) }
             else if !streamable { Some(ForcedFailure::Container) }
@@ -1310,28 +1364,17 @@ pub(super) fn build_stream(rk: &str, part: &str, vcodec: &str, acodec: &str, env
         .map(|p| p.bitrate)
         .filter(|&v| v > 0)
         .unwrap_or(env.src_kbps);
-    let direct_candidate = allowed.direct_play && video_dp && streamable && !part.is_empty()
-        && (audio_sel.is_some() || tracks.is_empty());
-    // Direct play feeds the smart-DP audio pick; a conversion can carry any track (the server
-    // converts what the panel cannot decode), so it carries the preference-ranked one.
-    let ask_audio = if direct_candidate {
-        audio_id
-    } else {
-        encode_audio_id(audio_id, env.audio_sid, tracks, audio_prefs)
-    };
-    // ONE subtitle for either path. Direct play draws the file's own track (`sub_pick`). A
-    // conversion asks for the same pick — else the sidecar the server has selected, else a retry's
-    // track (`env.sub_sid`) — and the answer says how it arrives (`Plan::sub_delivery`). Nothing
-    // here forces a burn: the server burns only a track no soft delivery fits.
-    let subtitle_id = if direct_candidate {
-        sub_pick.map_or(0, |(id, _)| id)
-    } else {
-        sub_pick
-            .map(|(id, _)| id)
-            .or_else(|| plan.playing.as_ref().and_then(crate::metadata::server_selected_sidecar).map(|s| s.id))
-            .or((env.sub_sid > 0).then_some(env.sub_sid))
-            .unwrap_or(0)
-    };
+    // ONE subtitle for either path: the pick (`sub_pick`), else the sidecar the server has
+    // selected, else, asking for a conversion, a retry's track (`env.sub_sid`); the answer says
+    // how it arrives (`Plan::sub_delivery`). A direct-play candidate asks for the sidecar too: the
+    // server may still answer with a conversion, which then delivers it as its own file, while a
+    // direct play draws it from that file anyway (`restore_server_selection`). Nothing here forces
+    // a burn: the server burns only a track no soft delivery fits.
+    let subtitle_id = sub_pick
+        .map(|(id, _)| id)
+        .or_else(|| plan.playing.as_ref().and_then(crate::metadata::server_selected_sidecar).map(|s| s.id))
+        .or((!direct_candidate && env.sub_sid > 0).then_some(env.sub_sid))
+        .unwrap_or(0);
     let negotiation = client.negotiate(&crate::catalog::PlaybackAsk {
         rk,
         session: &session,
@@ -1541,6 +1584,83 @@ pub(super) struct AudioLangPrefs<'a> {
     pub language: Option<&'a str>,
     /// `PlayDefaultAudioTrack`: the file's own default track outranks the language preference.
     pub prefer_default: bool,
+    /// This television's dubbing/lektor preference (no Jellyfin field holds it): which tracks
+    /// every rung of the ladder may take, and which it takes first within a language
+    /// ([`Voice`]).
+    pub voice: VoicePreference,
+}
+
+/// What kind of voice an audio track carries, as its title names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum VoiceKind { Dubbing, Lektor, AiLektor, Unknown }
+
+/// Classify an audio track by its title, case-insensitively. `Stream::title` is Jellyfin's
+/// `Title`; its audio `DisplayTitle` is that title plus language, codec and layout, so the title
+/// is the only part that can name the kind. `ai-lektor` tags its track "Lektor AI".
+pub(super) fn voice_kind(s: &crate::metadata::Stream) -> VoiceKind {
+    let title = s.title.to_lowercase();
+    if title.contains("lektor ai") || title.contains("ai lektor") {
+        VoiceKind::AiLektor
+    } else if ["lektor", "voice-over", "voiceover", "voice over"].iter().any(|w| title.contains(w)) {
+        VoiceKind::Lektor
+    } else if title.contains("dubbing") || title.split(|c: char| !c.is_alphanumeric()).any(|w| w == "dub") {
+        VoiceKind::Dubbing
+    } else {
+        VoiceKind::Unknown
+    }
+}
+
+/// [`AudioLangPrefs::voice`] over one item's audio tracks: which tracks a rung may take and which
+/// it takes first within a language. Under `Any` every track ranks the same, so nothing moves.
+#[derive(Clone, Copy)]
+struct Voice {
+    pref: VoicePreference,
+    /// The preference would exclude every track, so it excludes none: something always plays.
+    lenient: bool,
+}
+
+impl Voice {
+    fn of(pref: VoicePreference, tracks: &[crate::metadata::Stream]) -> Self {
+        let strict = Voice { pref, lenient: false };
+        Voice { pref, lenient: tracks.iter().all(|s| strict.rank(s).is_none()) }
+    }
+
+    /// `None`: never picked automatically. Otherwise lower plays first within a language.
+    fn rank(self, s: &crate::metadata::Stream) -> Option<u8> {
+        use VoiceKind::{AiLektor, Dubbing, Lektor, Unknown};
+        use VoicePreference::{Any, DubbingFirst, DubbingNoLektor, NoAiLektor};
+        if self.lenient {
+            return Some(0);
+        }
+        match (self.pref, voice_kind(s)) {
+            (Any, _) | (NoAiLektor, Dubbing | Lektor | Unknown) => Some(0),
+            (NoAiLektor | DubbingNoLektor, AiLektor) | (DubbingNoLektor, Lektor) => None,
+            (DubbingFirst | DubbingNoLektor, Dubbing) => Some(0),
+            (DubbingFirst | DubbingNoLektor, Unknown) => Some(1),
+            (DubbingFirst, Lektor) => Some(2),
+            (DubbingFirst, AiLektor) => Some(3),
+        }
+    }
+
+    /// Whether the preference rules out any of these tracks.
+    fn skips_any(self, tracks: &[crate::metadata::Stream]) -> bool {
+        tracks.iter().any(|s| self.rank(s).is_none())
+    }
+
+    /// The track at `i` (a rung's pick), or the best-ranked track in its language that `ok`
+    /// accepts, when that one ranks strictly higher. Never another language.
+    fn best(
+        self, tracks: &[crate::metadata::Stream], i: usize, ok: impl Fn(&crate::metadata::Stream) -> bool,
+    ) -> usize {
+        let Some(at) = self.rank(&tracks[i]) else { return i };
+        tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| ok(s) && lang_matches(&s.lang_code, &tracks[i].lang_code))
+            .filter_map(|(j, s)| self.rank(s).filter(|&r| r < at).map(|r| (r, j)))
+            .min()
+            .map_or(i, |(_, j)| j)
+    }
 }
 
 /// One thing an audio pick may honour. [`audio_intents`] ranks them — THE precedence, decided
@@ -1549,26 +1669,39 @@ pub(super) struct AudioLangPrefs<'a> {
 /// ranking and take the first entry they can carry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AudioIntent<'a> {
-    /// The user's language preference, when the item has a track in it.
+    /// The server's pick for this user (`selected`: Jellyfin's `DefaultAudioStreamIndex`, the
+    /// film's remembered track or the server's own ranking of the preferences below).
+    ServerPick,
+    /// A language: the server pick's own (so a remembered English track the panel cannot decode
+    /// gives way to an English sibling, not to the default dub), or the user's preference, when
+    /// the item has a track in it.
     Language(&'a str),
     /// The file's own default track.
     FileDefault,
 }
 
-/// Jellyfin's order: with `PlayDefaultAudioTrack` the file's default track first, then the
-/// preferred language; without it the preferred language first. A preference with no track in
-/// it is left out.
-fn audio_intents<'a>(tracks: &[crate::metadata::Stream], prefs: AudioLangPrefs<'a>) -> Vec<AudioIntent<'a>> {
+/// The server's pick and its language first; then Jellyfin's order: with `PlayDefaultAudioTrack`
+/// the file's default track first, then the preferred language; without it the preferred language
+/// first. A preference with no track in it is left out.
+fn audio_intents<'a>(tracks: &'a [crate::metadata::Stream], prefs: AudioLangPrefs<'a>) -> Vec<AudioIntent<'a>> {
+    let mut out = Vec::new();
+    if let Some(s) = tracks.iter().find(|s| s.selected) {
+        out.push(AudioIntent::ServerPick);
+        if !s.lang_code.is_empty() {
+            out.push(AudioIntent::Language(&s.lang_code));
+        }
+    }
     let lang = prefs
         .language
         .map(str::trim)
         .filter(|l| !l.is_empty() && tracks.iter().any(|s| lang_matches(l, &s.lang_code)))
         .map(AudioIntent::Language);
     if prefs.prefer_default && tracks.iter().any(|s| s.default) {
-        std::iter::once(AudioIntent::FileDefault).chain(lang).collect()
+        out.extend(std::iter::once(AudioIntent::FileDefault).chain(lang));
     } else {
-        lang.into_iter().chain(std::iter::once(AudioIntent::FileDefault)).collect()
+        out.extend(lang.into_iter().chain(std::iter::once(AudioIntent::FileDefault)));
     }
+    out
 }
 
 
@@ -1577,6 +1710,7 @@ fn audio_intents<'a>(tracks: &[crate::metadata::Stream], prefs: AudioLangPrefs<'
 /// only when the track list is unavailable), else the index into `playing().audio`, with that
 /// track's stream id so the reports can name the truth. [`audio_intents`] ranks what to honour;
 /// this takes the first entry it can carry:
+///   - [`AudioIntent::ServerPick`]: the server's pick, when it is direct-playable;
 ///   - [`AudioIntent::Language`]: the first direct-playable track in it;
 ///   - [`AudioIntent::FileDefault`]: the file's flagged default track if its codec is
 ///     direct-playable — by EXPLICIT index (matching by codec alone fed the first same-codec
@@ -1587,6 +1721,10 @@ fn audio_intents<'a>(tracks: &[crate::metadata::Stream], prefs: AudioLangPrefs<'
 ///
 /// An intent this path cannot carry falls through rather than forcing a conversion to obey it,
 /// which would drop the whole smart-direct-play class onto the server's encoder for one track.
+/// An external sidecar is the exception when `convertible`: a rung that lands on one is None
+/// (the conversion carries it, as the server's `AudioIsExternal` remux always did), unless a
+/// better-ranked direct-playable track in its language exists. Force Direct Play passes `false`,
+/// and its rungs pass over a sidecar like an undecodable codec.
 ///
 /// PURE: takes the playing item's audio tracks explicitly instead of reaching into
 /// `metadata::playing()`, whose `Vec`s the track menu and info panel hold slices into.
@@ -1631,13 +1769,21 @@ fn pick_dp_audio_mode(
     tracks: &[crate::metadata::Stream], default_acodec: &str,
     prefs: AudioLangPrefs<'_>, mode: DirectPlayMode,
 ) -> Option<(i32, String, i64)> {
-    pick_dp_audio_eligible(tracks, default_acodec, prefs,
-        |codec, channels| audio_direct_plays_with(caps, mode, codec, channels))
+    let eligible = |codec: &str, channels| audio_direct_plays_with(caps, mode, codec, channels);
+    let convertible = mode != DirectPlayMode::Forced;
+    pick_dp_audio_eligible(tracks, default_acodec, prefs, eligible, convertible).or_else(|| {
+        // Force Direct Play has no conversion to carry what the voice preference left: when it
+        // leaves nothing force-playable, ignore it, as when it excludes every track.
+        let any = AudioLangPrefs { voice: VoicePreference::Any, ..prefs };
+        (!convertible && prefs.voice != VoicePreference::Any)
+            .then(|| pick_dp_audio_eligible(tracks, default_acodec, any, eligible, false))
+            .flatten()
+    })
 }
 
 fn pick_dp_audio_eligible(
     tracks: &[crate::metadata::Stream], default_acodec: &str, prefs: AudioLangPrefs<'_>,
-    eligible: impl Fn(&str, i64) -> bool,
+    eligible: impl Fn(&str, i64) -> bool, convertible: bool,
 ) -> Option<(i32, String, i64)> {
     let dp = |codec: &str| eligible(codec, 0);
     if tracks.is_empty() {
@@ -1648,26 +1794,39 @@ fn pick_dp_audio_eligible(
             None
         };
     }
-    let pick = |i: usize| (i as i32, tracks[i].codec.to_lowercase(), tracks[i].id);
-    let dp_at = |s: &crate::metadata::Stream| eligible(&s.codec, s.channels);
+    let voice = Voice::of(prefs.voice, tracks);
+    // A track the voice preference excludes is never direct-playable here, on any rung, and an
+    // external sidecar never is: it is not in the file direct play reads.
+    let dp_at = |s: &crate::metadata::Stream| {
+        voice.rank(s).is_some() && !s.external && eligible(&s.codec, s.channels)
+    };
+    // A rung may also land on a sidecar when a conversion can carry it, and then it does: falling
+    // through to an embedded sibling would play a different track than the one the rung named.
+    let named = |s: &crate::metadata::Stream| dp_at(s) || (convertible && s.external && voice.rank(s).is_some());
+    let pick = |i: usize| {
+        let i = voice.best(tracks, i, dp_at);
+        (!tracks[i].external).then(|| (i as i32, tracks[i].codec.to_lowercase(), tracks[i].id))
+    };
     let honoured = audio_intents(tracks, prefs).into_iter().find_map(|intent| match intent {
+        AudioIntent::ServerPick => tracks.iter().position(|s| s.selected && named(s)),
         AudioIntent::Language(l) => tracks
             .iter()
-            .position(|s| dp_at(s) && lang_matches(l, &s.lang_code)),
-        AudioIntent::FileDefault => tracks.iter().position(|s| s.default && dp_at(s)),
+            .position(|s| named(s) && lang_matches(l, &s.lang_code)),
+        AudioIntent::FileDefault => tracks.iter().position(|s| s.default && named(s)),
     });
     if let Some(i) = honoured {
-        return Some(pick(i));
+        // A landing on a sidecar with no better-ranked embedded track is a conversion (None).
+        return pick(i);
     }
     if !tracks.iter().any(|s| s.default) {
         // Once the server supplied tracks, their concrete channel count outranks the codec-only
         // Media default. Never erase a known 8-channel refusal by rechecking it as unknown/0.
         if let Some(i) = tracks.iter().position(|s| s.codec.eq_ignore_ascii_case(default_acodec) && dp_at(s)) {
-            return Some(pick(i));
+            return pick(i);
         }
     }
     // any direct-playable track (smart direct-play over a non-DP default)
-    tracks.iter().position(dp_at).map(pick)
+    tracks.iter().position(dp_at).and_then(pick)
 }
 
 /// Stream id a CONVERSION carries — [`audio_intents`]' ranking with no codec limit, since the
@@ -1675,11 +1834,17 @@ fn pick_dp_audio_eligible(
 ///
 /// `env_audio_sid` is the session/retry pick and wins when set (a mid-play quality drop keeps
 /// what is already playing); a cold play zeros it (`request_play`). Otherwise:
+///   - [`AudioIntent::ServerPick`]: the server's pick itself, whatever its codec;
 ///   - [`AudioIntent::Language`]: the direct-play pick when it is already in that language (so
 ///     lowering quality preserves the dub and does not needlessly encode a lossless sibling),
 ///     else the first track in it, whatever its codec;
 ///   - [`AudioIntent::FileDefault`]: the file's default track itself, whatever its codec;
 ///   - else the direct-play pick; `0` lets the server choose.
+///
+/// The voice preference ([`Voice`]) holds here as on direct play: an excluded track is skipped by
+/// every rung, a rung's track gives way to a better-ranked one in its language, and when nothing
+/// is named while a track is excluded the first allowed track is, since the server's own choice
+/// could be the excluded one.
 pub(super) fn encode_audio_id(
     dp_audio_id: i64,
     env_audio_sid: i64,
@@ -1689,19 +1854,22 @@ pub(super) fn encode_audio_id(
     if env_audio_sid > 0 {
         return env_audio_sid;
     }
+    let voice = Voice::of(prefs.voice, tracks);
+    let ok = |s: &crate::metadata::Stream| s.id > 0 && voice.rank(s).is_some();
+    let id = |i: usize| tracks[voice.best(tracks, i, ok)].id;
     audio_intents(tracks, prefs)
         .into_iter()
         .find_map(|intent| match intent {
-            AudioIntent::Language(l)
-                if tracks.iter().any(|s| s.id == dp_audio_id && lang_matches(l, &s.lang_code)) =>
-            {
-                Some(dp_audio_id)
-            }
-            AudioIntent::Language(l) => {
-                tracks.iter().find(|s| s.id > 0 && lang_matches(l, &s.lang_code)).map(|s| s.id)
-            }
-            AudioIntent::FileDefault => tracks.iter().find(|s| s.default && s.id > 0).map(|s| s.id),
+            AudioIntent::ServerPick => tracks.iter().position(|s| s.selected && ok(s)).map(id),
+            AudioIntent::Language(l) => tracks
+                .iter()
+                .position(|s| s.id == dp_audio_id && lang_matches(l, &s.lang_code))
+                .or_else(|| tracks.iter().position(|s| ok(s) && lang_matches(l, &s.lang_code)))
+                .map(id),
+            AudioIntent::FileDefault => tracks.iter().position(|s| s.default && ok(s)).map(id),
         })
+        // Nothing named: the server would choose, and its choice may be the excluded track.
+        .or_else(|| if dp_audio_id == 0 && voice.skips_any(tracks) { tracks.iter().position(ok).map(id) } else { None })
         .unwrap_or(dp_audio_id)
 }
 
@@ -1767,10 +1935,13 @@ pub(super) struct SubtitleLangPrefs<'a> {
     pub mode: SubtitleMode,
 }
 
-/// The subtitle to turn ON at the start of a direct play: an explicit selection first
-/// ([`pick_dp_subtitle`]), then the rules of the server's own `MediaStreamSelector` over the
-/// renderable embedded tracks, preferred language ranked first. `audio_lang` is the language of
-/// the audio that will play — what `Smart` judges by.
+/// The subtitle to turn ON at the start of a direct play: the server's selection first
+/// ([`pick_dp_subtitle`], or an external one left to the sidecar path), then the rules of the
+/// server's own `MediaStreamSelector` over the tracks the client draws (renderable embedded ones
+/// and text sidecars, [`crate::metadata::Stream::sidecar_renderable`]), external first as the
+/// server ranks them, then preferred language. `audio_lang` is the language of the audio that will
+/// play: what `Smart` judges by. A sidecar comes back with ordinal -1
+/// (`metadata::sub_render_ordinal`'s convention); `build_stream` switches it on as a selection.
 pub(super) fn pick_dp_subtitle_pref(
     subs: &[crate::metadata::Stream], prefs: SubtitleLangPrefs<'_>, audio_lang: &str,
 ) -> Option<(i64, i32)> {
@@ -1782,12 +1953,14 @@ pub(super) fn pick_dp_subtitle_pref(
     }
     let lang = prefs.language.map(str::trim).filter(|l| !l.is_empty());
     let in_lang = |s: &crate::metadata::Stream| lang.is_some_and(|l| lang_matches(l, &s.lang_code));
-    let mut order: Vec<usize> = (0..subs.len())
-        .filter(|&i| !subs[i].external && embedded_subtitle_renderable(&subs[i].codec) && subs[i].id > 0)
-        .collect();
-    order.sort_by_key(|&i| !in_lang(&subs[i]));
+    let drawable = |s: &crate::metadata::Stream| {
+        s.id > 0 && if s.external { s.sidecar_renderable() } else { embedded_subtitle_renderable(&s.codec) }
+    };
+    let mut order: Vec<usize> = (0..subs.len()).filter(|&i| drawable(&subs[i])).collect();
+    order.sort_by_key(|&i| (!subs[i].external, !in_lang(&subs[i])));
     let first = |pred: &dyn Fn(&crate::metadata::Stream) -> bool| order.iter().copied().find(|&i| pred(&subs[i]));
-    let flagged = |s: &crate::metadata::Stream| s.default || s.forced;
+    // The server's Default mode turns on any external track as well as a flagged one.
+    let flagged = |s: &crate::metadata::Stream| s.external || s.default || s.forced;
     let forced = |s: &crate::metadata::Stream| s.forced;
     let i = match prefs.mode {
         SubtitleMode::None => None,
@@ -1802,8 +1975,7 @@ pub(super) fn pick_dp_subtitle_pref(
             }
         }
     }?;
-    let ord = crate::metadata::sub_render_ordinal(subs, i);
-    (ord >= 0).then_some((subs[i].id, ord))
+    Some((subs[i].id, crate::metadata::sub_render_ordinal(subs, i)))
 }
 
 /// Software feed formats and Dolby Vision declaration support. Forced mode bypasses device bounds
@@ -1939,6 +2111,12 @@ pub(crate) enum Preview {
 
 /// [`playback_preview`]'s pure core — the three-way answer from the fields it actually needs, so
 /// a caller holding an EPISODE's file and a show's stream list can ask the same question.
+///
+/// The audio half walks the direct-play ladder itself, under `voice` (the dubbing/lektor
+/// preference Play will capture; `Any` for a track the viewer chose): a direct-playable track the
+/// preference excludes is no reason to direct-play, and a pick that lands on an external sidecar
+/// is a conversion. It knows the server's pick and the file's flags, not the user's language
+/// preference, so it ranks as Jellyfin's default `PlayDefaultAudioTrack` does.
 pub(crate) fn playback_preview_of(
     part: &str,
     vcodec: &str,
@@ -1946,14 +2124,14 @@ pub(crate) fn playback_preview_of(
     height: i64,
     dv: crate::metadata::DvPresentation,
     audio_streams: &[crate::metadata::Stream],
+    voice: VoicePreference,
 ) -> Option<Preview> {
     if part.is_empty() {
         return None; // nothing playable loaded (a show still resolving its episode)
     }
     let video = video_direct_plays(vcodec, width, height, dv, &crate::catalog::capabilities::start_caps());
-    let audio = audio_streams
-        .iter()
-        .any(|a| crate::catalog::is_dp_audio_track(&a.codec, a.channels));
+    let prefs = AudioLangPrefs { language: None, prefer_default: true, voice };
+    let audio = pick_dp_audio_eligible(audio_streams, "", prefs, crate::catalog::is_dp_audio_track, true).is_some();
     // Mirrors `build_stream`'s own ladder: the video gate decides whether an ENCODER runs at all,
     // and only once it has passed do the container and the audio decide between pulling the file
     // ourselves and asking the server to repackage it.
@@ -2062,7 +2240,9 @@ mod codec_agreement_tests;
 mod beside_tests {
     use crate::catalog::rendezvous_test_support::Rendezvous;
 
-    const G: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    // A 13-hex-digit prefix no other test interns: rating keys keep only that prefix and the
+    // reverse map is process-global, so a shared prefix let another test's id win the lookup.
+    const G: &str = "be51de0000003000000000000000000c";
 
     fn answer(path: &str) -> String {
         if path.starts_with(&format!("/Items/{G}?")) {

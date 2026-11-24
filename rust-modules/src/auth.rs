@@ -744,7 +744,10 @@ pub(crate) fn install_captured_registry(origin: &Origin, address: &str, token: &
     };
     let primary_connection =
         crate::catalog::ConnectionFacts::new(tier, crate::catalog::IpVersion::of_host(address));
-    let id = register("", origin, token, pin, primary_connection);
+    // A Jellyfin primary is named by the server id its sign-in learned (`jf::seat`), so whatever
+    // is kept per server (`Client::machine_id`: subtitle timing, the poster disk cache) is kept.
+    let machine = crate::jf::seat::get(origin).map(|s| s.server_id).unwrap_or_default();
+    let id = register(&machine, origin, token, pin, primary_connection);
     crate::catalog::set_current(id);
     for source in extras {
         let Some(origin) = source.origin() else { continue };

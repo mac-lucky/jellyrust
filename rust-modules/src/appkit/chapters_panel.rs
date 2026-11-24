@@ -193,9 +193,30 @@ fn chapters<'a>(meta: metadata::MetadataView<'a>) -> &'a [metadata::Chapter] {
 fn n(meta: metadata::MetadataView<'_>) -> c_int {
     chapters(meta).len() as c_int
 }
-/// whether the PLAYING item has chapters — drives showing/hiding the Chapters tab
+/// whether the PLAYING item has chapters — drives the OSD's Chapters and chapter-skip buttons
 pub(crate) fn has_chapters(meta: metadata::MetadataView<'_>) -> bool {
     n(meta) > 0
+}
+/// Every chapter's start, ms, in order — the seek row's ticks and the OSD's previous / next
+/// chapter buttons read these.
+pub(crate) fn chapter_starts(meta: metadata::MetadataView<'_>) -> Vec<i64> {
+    chapters(meta).iter().map(|c| c.start_ms).collect()
+}
+/// PURE: where the OSD's previous / next chapter button seeks from `at_ms`, given the chapter
+/// `starts` (ms, ascending). Previous returns to the start of the chapter playing, or — within its
+/// first 3 s, where that would be no move at all — the one before; next is the following chapter,
+/// `None` from the last.
+pub(crate) fn chapter_jump(starts: &[i64], at_ms: i64, forward: bool) -> Option<i64> {
+    const BACK_GRACE_MS: i64 = 3_000;
+    if forward {
+        return starts.iter().copied().find(|&s| s > at_ms + 500);
+    }
+    let current = starts.iter().rposition(|&s| s <= at_ms)?;
+    if at_ms - starts[current] > BACK_GRACE_MS || current == 0 {
+        Some(starts[current])
+    } else {
+        Some(starts[current - 1])
+    }
 }
 /// how many chapters the PLAYING item has — what the owning screen reads from its host's metadata
 /// view and hands to [`ChaptersPart::count`], so this widget never names the host's trait
@@ -450,5 +471,19 @@ mod focus_tests {
                 (n(test_store().view()) > 0).then_some(GroupId(0))
             );
         });
+    }
+
+    /// The OSD's chapter buttons: previous returns to the playing chapter's start, or past it to
+    /// the one before within its first 3 s; next takes the following start and stops at the last.
+    #[test]
+    fn chapter_skips_land_on_chapter_starts() {
+        let starts = [0, 60_000, 120_000];
+        assert_eq!(chapter_jump(&starts, 90_000, false), Some(60_000), "back to this chapter's start");
+        assert_eq!(chapter_jump(&starts, 61_000, false), Some(0), "just in: the one before");
+        assert_eq!(chapter_jump(&starts, 1_000, false), Some(0), "the first chapter has nothing before it");
+        assert_eq!(chapter_jump(&starts, 90_000, true), Some(120_000));
+        assert_eq!(chapter_jump(&starts, 119_800, true), None, "already at the last start");
+        assert_eq!(chapter_jump(&[], 5_000, true), None);
+        assert_eq!(chapter_jump(&[], 5_000, false), None);
     }
 }

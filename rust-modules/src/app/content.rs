@@ -9,7 +9,7 @@
 
 use super::*;
 use super::run::Frame;
-use crate::screens::registry::{AppMsg, ContentArg, ContentReq, HomeHubIdentity, HomeItemIdentity, HomeReq, HomeTab, PageMemory};
+use crate::screens::registry::{AppMsg, ContentArg, ContentReq, HomeHubIdentity, HomeItemIdentity, HomeReq, PageMemory};
 use nj_machine::machine::{Delivery, EntryId, Fx, InputOwner, MachineId, NavOp};
 use crate::ui::screen::{ReturnState, ScreenEvent};
 
@@ -673,22 +673,11 @@ fn home_requests(app: &mut App, now: u32) {
                 app.pages.emit(MachineId::Nav, Fx::Deliver(source,
                     Delivery::Screen(ScreenEvent::Enter(crate::ui::screen::Enter::Fresh { focus }))));
             }
-            HomeReq::Account => chip_activate(&mut app.pages),
-            HomeReq::Tab(tab) => {
-                // A pointer may name the last presented map after favourites changed. The
-                // stable key must not resurrect a destination the current strip withdrew.
-                if !home_tab_available(app.bridge.browse_directory(), tab) { continue; }
-                match tab {
-                    // The Home pill ON Home: nothing to navigate to, but a transition queued a
-                    // moment ago is still withdrawable, and that is what this press means.
-                    HomeTab::Home => { bridge::nav_cancel(&mut app.pages); }
-                    other => bridge::nav_tab(&mut app.pages, &mut app.bridge, other, None, Some(ret)),
-                }
-            }
             HomeReq::Play { sid, rk, resume_ns } =>
                 activate_home_item(app, source, entry, sid, &rk, Some(resume_ns), ret, now),
             HomeReq::Detail { sid, rk } =>
                 activate_home_item(app, source, entry, sid, &rk, None, ret, now),
+            HomeReq::Library(section) => bridge::open_library(&mut app.pages, &mut app.bridge, section, Some(ret)),
             HomeReq::ItemMenu { sid, rk } => {
                 let snapshot = app.bridge.hubs_snapshot();
                 let Some(item) = home_item(snapshot.view(), sid, &rk)
@@ -739,18 +728,7 @@ fn search_requests(app: &mut App) {
         let Some(entry) = app.pages.nav.entry_of_instance(instance) else { continue };
         if app.route() != AppArg::Search || app.pages.nav.input_owner() != Some(InputOwner::Entry(entry)) { continue; }
         match &request {
-            SearchReq::Back => bridge::nav_tab(&mut app.pages, &mut app.bridge, HomeTab::Home, None, Some(ret)),
-            SearchReq::Tab(tab) => {
-                if !app.bridge.search_tab_available(*tab) { continue; }
-                if matches!(tab, HomeTab::Search) { continue }
-                bridge::nav_tab(&mut app.pages, &mut app.bridge, *tab,
-                    Some(crate::app::chrome::Pill::Home), Some(ret));
-            }
-            SearchReq::Account => {
-                // The owned screen releases its keyboard before emitting this request. Do not
-                // call chip_activate's legacy Search editing-state teardown a second time.
-                bridge::open_account_menu(&mut app.pages);
-            }
+            SearchReq::Back => bridge::nav_home(&mut app.pages, Some(ret)),
             SearchReq::Detail { .. } | SearchReq::Person { .. } | SearchReq::Collection { .. } => {
                 let Some((item, _)) = app.bridge.search_selection(&app.pages, entry, ret.focus) else { continue };
                 let Some(target) = search_target(&item, &request) else { continue };
@@ -854,15 +832,8 @@ fn library_requests(app: &mut App, now: u32) {
                 app.pages.nav.next_style = crate::ui::containers::modal::Style::Compact;
                 app.pages.request(source, NavOp::Present(AppArg::LibraryMenu(LibraryMenuArg { host: instance, target, kind, anchor })));
             }
-            LibraryReq::Account => chip_activate(&mut app.pages),
-            LibraryReq::BackToHome { kind } => {
-                bridge::nav_tab(&mut app.pages, &mut app.bridge, HomeTab::Home,
-                    Some(crate::app::chrome::Pill::Section(kind)), Some(ret));
-            }
-            LibraryReq::Tab(tab) => {
-                bridge::nav_tab(&mut app.pages, &mut app.bridge, tab,
-                    Some(crate::app::chrome::Pill::Home), Some(ret));
-            }
+            LibraryReq::BackToHome => bridge::nav_home(&mut app.pages, Some(ret)),
+            LibraryReq::Shuffle { sid, section } => bridge::pick_random(&mut app.pages, &mut app.bridge, Some((sid, section))),
             LibraryReq::ItemMenu { sid, rk, from_deck } => {
                 let Some((item, opener)) = app.bridge.library_selection(&app.pages, entry, ret.focus) else { continue };
                 if item.sid != sid || item.rk != rk || !crate::screens::item_menu::has_actions(&item) { continue; }
@@ -881,18 +852,6 @@ fn library_requests(app: &mut App, now: u32) {
             }
         }
     }
-}
-
-fn home_tab_available(
-    directory: crate::stores::browse::DirectoryView<'_>,
-    tab: HomeTab,
-) -> bool {
-    let kind = match tab {
-        HomeTab::Movies => Some(crate::stores::browse::SecKind::Movie),
-        HomeTab::Shows => Some(crate::stores::browse::SecKind::Show),
-        _ => None,
-    };
-    kind.is_none_or(|kind| directory.tab_of_kind(kind).is_some())
 }
 
 fn library_publication_command(
@@ -1080,29 +1039,6 @@ mod library_publication_tests {
             }],
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn home_tab_validation_reads_the_supplied_directory() {
-        let sid = crate::catalog::ServerId::from_raw(3);
-        let directory = crate::stores::browse::DirectorySnapshot::fixture(7, 0, vec![
-            crate::stores::browse::SectionView {
-                sid: Some(sid),
-                key: 11,
-                kind: crate::stores::browse::SecKind::Movie,
-                row: crate::stores::browse::SrcRow {
-                    section: 0,
-                    title: "Movies".into(),
-                    pinned: true,
-                    current: true,
-                    ..Default::default()
-                },
-            },
-        ]);
-
-        assert!(home_tab_available(directory.view(), HomeTab::Movies));
-        assert!(!home_tab_available(directory.view(), HomeTab::Shows));
-        assert!(home_tab_available(directory.view(), HomeTab::Home));
     }
 
     #[test]
@@ -1933,7 +1869,8 @@ fn activate_home_item(app: &mut App, source: MachineId, entry: EntryId,
 // one. `NavStack::request` captures it at the request itself, so there is no window in which a
 // request exists without the state it returns to.)
 
-/// Playback restores the retained origin, then asks that instance to reveal the played episode.
+/// Playback restores the retained origin, then asks that instance to reveal the played episode,
+/// and arms the page's re-read (`App::post_play_detail`) for when the stop's reports have landed.
 pub(crate) fn restore_played_entry(app: &mut App) {
     // **The origin entry has just been uncovered by `exit_player`'s `PopTo`**, so the page to
     // address is the top one and the `Spot` to restore is its OWN `ReturnState` — the state the
@@ -1941,22 +1878,26 @@ pub(crate) fn restore_played_entry(app: &mut App) {
     // spot, a copy of the same thing kept beside the tree.
     let Some(entry) = app.pages.nav.top_page() else { return };
     let AppArg::Content(ContentArg::Detail { sid, rk }) = &entry.arg else { return };
+    let (sid, rk) = (*sid, rk.clone());
     let Some(instance) = entry.inst.as_ref().map(|i| i.id) else { return };
     let PageMemory::Detail(memory) = &entry.ret.memory else { return };
     let mut spot = memory.spot.clone();
     let meta = app.bridge.metadata_view();
-    let episode = meta.playing().filter(|p| p.sid == *sid)
+    let episode = meta.playing().filter(|p| p.sid == sid)
         .and_then(|_| meta.now_playing())
-        .filter(|n| n.is_episode && n.detail_rk == *rk)
+        .filter(|n| n.is_episode && n.detail_rk == rk)
         .map(|n| { spot.season = Some(n.season); crate::route::cur_rk(&app.player.session) });
     if episode.is_some() {
         app.pages.emit(MachineId::Nav, Fx::Deliver(MachineId::Instance(instance),
             Delivery::Screen(ScreenEvent::App(AppMsg::DetailRestore {
                 spot,
-                episode,
+                episode: episode.clone(),
                 refresh: crate::screens::registry::DetailRefreshPhase::None,
             }))));
     }
+    // The page still holds the item it fetched before Play: its Resume, progress, watched state
+    // and (for a show) next episode are the pre-playback ones until it reads the item again.
+    app.post_play_detail = Some(crate::stores::viewstate::DetailRefresh { sid, rk, keep: episode });
 }
 
 pub(crate) fn refresh_content(

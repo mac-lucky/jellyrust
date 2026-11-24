@@ -120,7 +120,7 @@ impl Fixture {
         }
     }
     fn screen(&self) -> LibraryScreen {
-        let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Movie);
+        let mut page = LibraryScreen::new(ENTRY, InstanceId(19), None);
         page.sync(&self.cx(None));
         page
     }
@@ -410,7 +410,8 @@ fn switch_diagnostic_requests_type_sort_filter_and_rail_actions() {
             &mut present,
         ),
     );
-    assert_eq!(page.wanted_kind, Some(SecKind::Show));
+    let shows = fixture.directory.view().sections().iter().find(|s| s.kind == SecKind::Show).map(|s| s.key);
+    assert_eq!(page.wanted.as_ref().map(|w| w.key), shows, "the switch addresses the first TV library");
     page.command(
         LibraryCmd::SwitchStep(1),
         &cx,
@@ -450,14 +451,16 @@ fn switch_diagnostic_requests_type_sort_filter_and_rail_actions() {
     }
 }
 
+/// BACK on a letter returns to the exact title the grid remembered; OK jumps to the letter's
+/// first title (Litefin's alphabet bar). Entering the bar moves nothing.
 #[test]
-fn rail_keyboard_ok_and_back_return_the_exact_engine_remembered_item() {
+fn bar_keyboard_back_returns_the_remembered_item_and_ok_jumps_to_the_letter() {
     let _guard = nj_base::testlock::serial();
     for key in [Key::Ok, Key::Back] {
         let fixture = Fixture::new();
         let mut page = fixture.screen();
         let mut engine = FocusEngine::new();
-        let grid = page.key(page.pair.detail.elems[17]);
+        let grid = page.key(page.pair.detail.elems[3]);
         engine.set(
             OWNER,
             grid,
@@ -467,9 +470,9 @@ fn rail_keyboard_ok_and_back_return_the_exact_engine_remembered_item() {
         let mut links = Vec::new();
         <LibraryScreen as Screen<HostFixture>>::links(&page, &mut links);
         let Outcome::Moved { from, to, by } =
-            engine.move_dir(OWNER, &page, &links, Dir::Right, &fixture.cx(Some(grid)))
+            engine.move_dir(OWNER, &page, &links, Dir::Up, &fixture.cx(Some(grid)))
         else {
-            panic!("enter rail")
+            panic!("enter the bar")
         };
         let mut output = Vec::new();
         let mut present = nj_machine::present::Present::new();
@@ -507,17 +510,18 @@ fn rail_keyboard_ok_and_back_return_the_exact_engine_remembered_item() {
             ),
             Handled::Yes
         );
-        let target = output
-            .into_iter()
-            .find_map(|e| match e.fx {
-                Fx::Deliver(_, Delivery::Screen(ScreenEvent::Enter(Enter::Fresh { focus }))) => {
-                    Some(focus)
-                }
-                _ => None,
-            })
-            .expect("rail keys request an engine seat, not document Home");
+        let mut target = None;
+        for effect in output {
+            match effect.fx {
+                Fx::Remember { group, elem } => engine.remember_projected(ENTRY, group, elem),
+                Fx::Deliver(_, Delivery::Screen(ScreenEvent::Enter(Enter::Fresh { focus }))) => target = Some(focus),
+                _ => {}
+            }
+        }
+        let target = target.expect("bar keys request an engine seat, not document Home");
         engine.enter(OWNER, &page, target, None, &fixture.cx(Some(to)));
-        assert_eq!(engine.current(OWNER), Some(grid));
+        let expected = if key == Key::Ok { page.key(page.pair.detail.elems[0]) } else { grid };
+        assert_eq!(engine.current(OWNER), Some(expected), "{key:?}");
     }
 }
 

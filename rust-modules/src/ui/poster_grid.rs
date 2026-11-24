@@ -1,23 +1,41 @@
 //! Uniform portrait-grid geometry and caption motion shared by the grids of the application.
 //!
-//! [`GridBands`] is the collapsing caption band every grid row uses (lifted from the Library's
-//! All grid, which still owns its own rail-aware layout and reads the bands through
-//! [`GridBand`]): only the focused row reserves `card_row::UNDER_LABEL_H` under its posters, and
-//! rows below it move down by what that row grows. The free functions are the six-column grid
-//! of a page without an alphabet rail (the Collection page) — row pitch, band-aware cell
-//! placement, culling window and reveal arithmetic, so draw, focus placement, scrolling and
-//! paging all describe the same cells. [`neighbour`], [`settled`] and [`growth_before`] are
-//! column-count agnostic, and the Library's rail-aware layout uses them too.
+//! The grid is Litefin's Library poster grid (`docs/litefin-look.md` 6): seven columns across the
+//! page's 1720px content box (the 100px rail, then 50 of padding each side) with a 20px gap, so a
+//! 228.6 card box, a 248.6 pitch and a 216.6 x 334 picture, every card the classic card with its
+//! label (4.2). The free functions are that grid at the Collection page's content edge (the
+//! Library positions its own at [`LEFT`]) — row pitch, cell placement, culling window and reveal
+//! arithmetic, so draw, focus placement, scrolling and paging all describe the same cells.
+//! [`GridBands`] is the caption band every grid row reads through [`GridBand`]; every card wears its
+//! label, so no band opens or closes and [`growth_before`] is 0. [`neighbour`], [`settled`] and
+//! [`growth_before`] are column-count agnostic, and the Library's rail-aware layout uses them too.
 
 use crate::ui::card_row::{self, RowStyle, LABEL_BAND_COLLAPSED, UNDER_LABEL_H};
-use crate::ui::consts::{CARD_H, CARD_W, MARGIN_X, MARGIN_Y, SCR_H, SCR_W, UNDER_LABEL_AIR};
+use crate::ui::consts::{card_image, CARD_INSET, CONTENT_LEFT, MARGIN_X, MARGIN_Y, SCR_H, SCR_W};
 use crate::ui::{Rect, Spring};
 
-pub(crate) const COLS: usize = 6;
-pub(crate) const GAP: f32 = (SCR_W - 2.0 * MARGIN_X - COLS as f32 * CARD_W) / (COLS as f32 - 1.0);
-pub(crate) const STYLE: RowStyle = RowStyle { gap: GAP, ..RowStyle::HOME };
-/// A COLLAPSED row's pitch; a row whose band is open adds its share of `card_row::BAND_OPEN`.
-pub(crate) const ROW_PITCH: f32 = CARD_H + LABEL_BAND_COLLAPSED + UNDER_LABEL_AIR;
+pub(crate) const COLS: usize = 7;
+/// Litefin's grid gap between card boxes, both ways (`.library-grid.mode-dynamic`).
+const BOX_GAP: f32 = 20.0;
+/// The library page's side padding (`.library-content` `20 50 40 50`).
+const PAGE_PAD_X: f32 = 50.0;
+/// One card box: `(1720 + 20) / 7 - 20` = 228.6.
+const BOX_W: f32 = (SCR_W - CONTENT_LEFT - 2.0 * PAGE_PAD_X + BOX_GAP) / COLS as f32 - BOX_GAP;
+/// The grid poster's picture, 216.6 x 333.9 (spec 6: "about 216.6 x 334").
+pub(crate) const CARD_W: f32 = card_image(BOX_W, 1.5).0;
+pub(crate) const CARD_H: f32 = card_image(BOX_W, 1.5).1;
+/// Picture to picture across a row: the box gap plus both cards' insets.
+pub(crate) const GAP: f32 = BOX_GAP + 2.0 * CARD_INSET;
+/// The first column's picture on Litefin's library page: the box at `CONTENT_LEFT + 50` = 150, its
+/// picture [`CARD_INSET`] in. The Library places its grid here; [`cell`] keeps the Collection page's
+/// own content edge, [`MARGIN_X`].
+pub(crate) const LEFT: f32 = CONTENT_LEFT + PAGE_PAD_X + CARD_INSET;
+pub(crate) const STYLE: RowStyle = RowStyle { w: CARD_W, h: CARD_H, gap: GAP, margin_x: LEFT, ..RowStyle::HOME };
+/// Label block bottom → the next row's picture: the card's bottom border, the 20 gap, then the
+/// next card's border and ring.
+const ROW_AIR: f32 = BOX_GAP + 2.0 * CARD_INSET - crate::ui::theme::FOCUS_RING_W;
+/// One grid row, picture top to picture top: 436.7.
+pub(crate) const ROW_PITCH: f32 = CARD_H + LABEL_BAND_COLLAPSED + ROW_AIR;
 
 /// Only the focused and closing bands are represented, independent of catalog size.
 /// Sixteen spans more row moves than a complete spring at normal remote repeat speed.
@@ -86,8 +104,7 @@ impl GridBands {
 }
 
 /// The SETTLED bands of a grid whose focus is `row` — every reveal and scroll bound is computed
-/// from where the bands are going, never from their live springs (`card_row::settled_top`'s
-/// argument).
+/// from where the bands are going, never from their live springs.
 pub(crate) fn settled(row: Option<usize>) -> [GridBand; 1] {
     [row.map_or(GridBand::CLOSED, |row| GridBand { row, expansion: 1.0 })]
 }
@@ -170,15 +187,25 @@ pub(crate) fn visible(len: usize, top: f32, scroll: f32) -> std::ops::Range<usiz
 mod tests {
     use super::*;
 
+    /// Litefin's grid (`docs/litefin-look.md` 6): seven 228.6 card boxes 20 apart across the
+    /// 1720px content box from x = 150, so a 216.6 x 334 picture on a 248.6 pitch, and a row under
+    /// it as far below as its labels, the border and the 20 gap put the next.
     #[test]
-    fn six_portraits_keep_existing_card_size_and_share_one_pitch() {
+    fn seven_portraits_fill_litefin_s_content_box_on_one_pitch() {
         let a = cell(0, 400.0, 0.0, &[]);
-        let b = cell(5, 400.0, 0.0, &[]);
-        let next = cell(6, 400.0, 0.0, &[]);
-        assert_eq!((a.w, a.h), (CARD_W, CARD_H));
-        assert!(b.x + b.w <= SCR_W - MARGIN_X + 0.01);
+        let b = cell(COLS - 1, 400.0, 0.0, &[]);
+        let next = cell(COLS, 400.0, 0.0, &[]);
+        assert!((a.w - 216.571).abs() < 0.01 && (a.h - 333.857).abs() < 0.01, "{a:?}");
+        assert_eq!(a.x, MARGIN_X, "the Collection page's content edge");
+        assert_eq!(LEFT - CARD_INSET, CONTENT_LEFT + 50.0, "the library's first box at x = 150");
+        let last_box_end = LEFT + (COLS - 1) as f32 * (CARD_W + GAP) + CARD_W + CARD_INSET;
+        assert!((last_box_end - (SCR_W - 50.0)).abs() < 0.01, "and its last box ends 50 from the edge");
+        assert!(b.x + b.w <= SCR_W - MARGIN_X, "the Collection page's grid stays inside the margin");
+        assert!((cell(1, 400.0, 0.0, &[]).x - a.x - 248.571).abs() < 0.01);
         assert_eq!(next.x, a.x);
         assert!((next.y - a.y - ROW_PITCH).abs() < 0.01);
+        assert!((ROW_PITCH - (CARD_H + UNDER_LABEL_H + 29.0)).abs() < 1e-3);
+        assert_eq!((STYLE.w, STYLE.h, STYLE.margin_x), (CARD_W, CARD_H, LEFT));
     }
 
     /// C2: a row focused below the first scrolls the page so a row's top rests exactly on the
@@ -189,21 +216,22 @@ mod tests {
         let (top, edge, len) = (520.0, 96.0, 18);
         let at = snap_row(0.0, 1, len, top, edge);
         assert_eq!(cell(0, top, at, &settled(Some(1))).y, edge, "row 0 rests on the edge");
-        let focused = cell(6, top, at, &settled(Some(1)));
+        let focused = cell(COLS, top, at, &settled(Some(1)));
         assert!(focused.y + CARD_H + UNDER_LABEL_H <= SCR_H - MARGIN_Y, "and the focused row shows whole");
         let at2 = snap_row(at, 2, len, top, edge);
-        assert_eq!(cell(6, top, at2, &settled(Some(2))).y, edge, "down again: the next row takes the edge");
+        assert_eq!(cell(COLS, top, at2, &settled(Some(2))).y, edge, "down again: the next row takes the edge");
         assert_eq!(snap_row(at2, 1, len, top, edge), at2, "up to a row already on screen: no move");
         assert_eq!(snap_row(at2, 0, len, top, edge), 0.0, "row 0 reveals the head");
     }
 
-    /// The focused row's caption band opens and pushes only the rows below it; a revealed
-    /// row's posters AND caption clear the bottom margin, the last row's included.
+    /// Every card wears its label, so a focused row moves no other row; a revealed row's pictures
+    /// AND labels clear the bottom margin, the last row's included.
     #[test]
-    fn an_open_band_moves_only_the_rows_below_and_the_revealed_caption_fits() {
+    fn a_focused_row_moves_no_other_and_its_revealed_labels_fit() {
         let bands = settled(Some(1));
-        assert_eq!(cell(6, 400.0, 0.0, &bands).y, cell(6, 400.0, 0.0, &[]).y, "the focused row stays");
-        assert!((cell(12, 400.0, 0.0, &bands).y - cell(12, 400.0, 0.0, &[]).y - card_row::BAND_OPEN).abs() < 0.01);
+        for index in [COLS, 2 * COLS] {
+            assert_eq!(cell(index, 400.0, 0.0, &bands).y, cell(index, 400.0, 0.0, &[]).y);
+        }
         let len = 40;
         for row in [0, 3, rows(len) - 1] {
             let scroll = reveal_row(0.0, row, len, 400.0);
@@ -226,7 +254,8 @@ mod tests {
         let closing = geometry.iter().find(|b| b.row == 0).unwrap().expansion;
         assert!(opened > 0.0 && opened < 1.0 && closing > 0.0 && closing < 1.0);
         assert!((opened + closing - 1.0).abs() < 0.0001);
-        assert_eq!(card_row::band_reveal(opened), 0.0, "caption waits until its space is open");
+        assert_eq!(card_row::band_reveal(opened), 1.0, "every label is on screen throughout");
+        assert_eq!(growth_before(2, &geometry), 0.0, "and no band pushes a row");
         for _ in 0..120 { bands.tick(k, 1.0 / 60.0); }
         let (_, moving) = nj_machine::idle::scoped_motion(|| bands.tick(k, 1.0 / 60.0));
         assert!(!moving, "a settled grid lets idle suppression sleep");

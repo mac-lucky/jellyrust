@@ -1,0 +1,25 @@
+{
+  "home.my_media": {
+    "value": "My Media",
+    "description": "Home row heading over the library tiles (Litefin HeaderMyMedia), the first row under the hero"
+  },
+  "home.next_up": {
+    "value": "Next Up",
+    "description": "Home row heading over the next unwatched episode of each series being watched (Litefin NextUp), its own row after Continue Watching"
+  },
+  "home.runtime_hours": {
+    "value": "{hours}h {minutes}m",
+    "args": {
+      "hours": "i64",
+      "minutes": "i64"
+    },
+    "description": "Hero meta line runtime of one hour or more, Litefin's compact form (1h 52m)"
+  },
+  "home.runtime_minutes": {
+    "value": "{minutes}m",
+    "args": {
+      "minutes": "i64"
+    },
+    "description": "Hero meta line runtime under an hour, Litefin's compact form (52m)"
+  }
+}

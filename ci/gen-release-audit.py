@@ -63,18 +63,17 @@ END = "<!-- END GENERATED -->"
 #     nativejelly-remote       release 0   dev 2      the world-writable FIFO
 #     nativejelly-capture      release 0   dev 1      the TCP capture listener
 #     nativejelly-drawmask     release 0   dev 1
-#     nativejelly-heroground   release 0   dev 2
 #
-# `nativejelly-overdraw` is NOT in this list and must not be added: it counted **1 in the release
-# binary**, because `shaders/fs_hero.frag` names it in a COMMENT and the shader source is
-# `include_str!`'d, so the literal ships in every configuration. That is the whole hazard of
-# string-table evidence in one example — the string is there and the code is not.
+# `nativejelly-overdraw` is NOT in this list: it counted **1 in the release binary**, because
+# `shaders/fs_hero.frag` (retired since, with the `nativejelly-heroground` witness) named it in a
+# COMMENT and the shader source is `include_str!`'d, so the literal shipped in every configuration.
+# Re-measure both sides before adding it. That is the whole hazard of string-table evidence in one
+# example — the string is there and the code is not.
 DEV_WITNESSES = (
     b"nativejelly-noidle",
     b"nativejelly-remote",
     b"nativejelly-capture",
     b"nativejelly-drawmask",
-    b"nativejelly-heroground",
 )
 
 # A build machine's directory layout inside a shipped file: `ci/hostpath.py`, the one rule
@@ -381,7 +380,7 @@ def generate(args) -> str:
     rows = [
         row("flavour", f"`{app_id}` — "
             + ("the stable id, which is what users install"
-               if app_id == "com.sostk.nativejelly" else "**not the stable id**")),
+               if app_id == "com.macluckylab.jellyrust" else "**not the stable id**")),
         row("cargo features", f"`{args.build_config}`" if args.build_config
             else "not recorded in the assets — the dev-trigger row below is the same property, "
                  "measured on the bytes"),

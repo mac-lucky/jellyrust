@@ -20,8 +20,9 @@ new Starfish API is required. Pins, checksums, license notices and corresponding
 are part of the normal package/source-bundle workflow.
 
 Fonts. libass runs with no font provider, so it finds a face by family name among the faces the
-engine adds when a renderer is created (`ass/fonts.rs`): `appfont.ttf` and `appfont-bold.ttf`
-(Inter, the family the synthesized style names), `appfont-cjk.ttf`, then the
+engine adds when a renderer is created (`ass/fonts.rs`): `appfont-inter.ttf` and
+`appfont-inter-bold.ttf` (Inter, the family the synthesized style names; the UI's own
+`appfont*.ttf` is Poppins and libass never sees it), `appfont-cjk.ttf`, then the
 22 `fonts/subs/NotoSans<Script>-Bold.ttf` faces listed in `fonts/subs/manifest.json`, in manifest
 order. Each Noto face answers to "PlxSubs" and "Inter" too, carries nothing Inter Bold covers, and
 has Inter Bold's win-metric proportions, so authored ASS naming an unknown family falls to a face

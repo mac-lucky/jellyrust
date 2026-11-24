@@ -431,9 +431,18 @@ a dead source is **absent** from Home and states itself in its own library secti
     separate `CACHE` today; when it is wired up, it must install into/drop the cache above
     (`install_locked`/`drop_cache_locked`, under `IO`) instead of maintaining a second copy of the
     session.
-- **Track selection is server-side, via `PUT /library/parts/{id}`** (set the chosen audio/subtitle
-  stream + subtitle burn), **not** query params on the stream URL. The server re-selects for the next
-  decision; the client re-requests the part. See `[[audio-subtitle-track-switching]]`.
+- **The server remembers track picks; the client asks for one per playback.** Each source of an item
+  read carries `DefaultAudioStreamIndex`/`DefaultSubtitleStreamIndex` for the asking user (the
+  film's remembered pick under `RememberAudioSelections`/`RememberSubtitleSelections`, -1 =
+  subtitles remembered Off, else the server's ranking of the user's preferences);
+  `jf::convert::media` turns them into `Stream.selected` and `MediaPart::subtitles_off`, which
+  `route::build_stream` honours first. The pick itself goes in the PlaybackInfo ask
+  (`AudioStreamIndex`/`SubtitleStreamIndex`), and every progress report names the live tracks, an
+  Off somebody chose (the menu, the pre-play choice, or the remembered Off the film started from) as
+  -1, which is what the server remembers; a playback with no subtitle nobody turned off sends none,
+  or the server would remember Off for it on every client. There is no Plex-style `PUT
+  /library/parts`.
+  `docs/jellyfin-playback.md`, "Remembered tracks".
 - **Subtitles: the client renders them, and a conversion burns only what it must.** Direct play
   draws the file's own track. A conversion asks for the selected subtitle and the PlaybackInfo
   answer says how it arrives (`MediaStream.DeliveryMethod` → `jf::playback::SubtitleDelivery`): a

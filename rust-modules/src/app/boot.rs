@@ -445,6 +445,8 @@ pub(crate) fn direct_trigger_server() -> Result<crate::catalog::ServerId, String
 pub(crate) enum BootTo {
     Home,
     Login,
+    /// Jellyfin users are kept and none is signed in: who's watching.
+    Profiles,
 }
 
 /// Pure capture boundary shared by actual boot and owner bootstrap regression fixtures.
@@ -639,7 +641,7 @@ pub(crate) unsafe fn construct(
     // the first thing a desktop shows, so the two builds spell it differently: the device keeps
     // the process-shaped name every log, `pidof` recipe and skill already uses.
     #[cfg(feature = "hostsim")]
-    let title = c"Native Jelly";
+    let title = c"JellyRust";
     #[cfg(not(feature = "hostsim"))]
     let title = c"nativejelly";
     let win = SDL_CreateWindow(title.as_ptr(), wx, wy, ww_req, wh_req, SDL_WINDOW_FLAGS);
@@ -833,6 +835,9 @@ pub(crate) unsafe fn construct(
     //     still goes through the who's-watching picker first on interactive boots, unless
     //     Automatically Sign In is on and a profile is already seated (that skip is an explicit
     //     opt-in, PIN included). Automated boots and a roster of one still skip the picker.
+    //     A kept Jellyfin sign-in its server refuses (revoked, expired) → the sign-in page at
+    //     *Sign in as name*; Jellyfin users kept with none signed in → who's watching
+    //     (`jf_login::at_boot`).
     //  4. Nothing → the QR sign-in flow (no credentials are compiled in — like a real client).
     // The destination itself is [`BootTo`], at module scope with the rest of the vocabulary.
     //
@@ -868,21 +873,14 @@ pub(crate) unsafe fn construct(
     // A kept Jellyfin sign-in boots exactly as the injected dev primary does — one server, its
     // token, no plex.tv — under its own seat. The injected token still wins, as it does over a
     // stored Plex session, so automation never runs as whoever signed in on this television.
-    let jf_stored = (!controlled && !forced_login && dev_token.is_empty())
-        .then(|| crate::jf::store::load(&session)).flatten()
-        .and_then(|s| s.origin().map(|origin| (origin, s)));
-    if let Some((origin, stored)) = &jf_stored {
-        crate::jf::seat::register_with(origin, stored.seat());
-        log(&format!("boot: stored Jellyfin sign-in at {}", origin.log_form()));
-        // A server reached without encryption gets its token only after it has answered, here and
-        // now, as the server the person allowed (`jf::plaintext`). Asked before anything is
-        // installed: a token registered at an origin it may not travel to is blanked on the spot.
-        if crate::jf::plaintext::needs_consent(origin) {
-            match crate::jf::plaintext::admit(origin, &crate::jf::ids::normalize(&stored.server_id)) {
-                Ok(()) => log("boot: the Jellyfin server answered as itself — its unencrypted connection is allowed"),
-                Err(e) => log(&format!("boot: the Jellyfin server's unencrypted connection is not allowed yet ({e:?})")),
-            }
-        }
+    // `jf_login::at_boot` also says what to do when the kept sign-ins leave nobody to boot as.
+    let jf_kept = (!controlled && !forced_login && dev_token.is_empty())
+        .then(|| super::jf_login::at_boot(&session)).flatten();
+    let jf_stored = match &jf_kept {
+        Some(super::jf_login::Kept::Active(origin, stored)) => Some((origin.clone(), stored.clone())),
+        _ => None,
+    };
+    if let Some((_, stored)) = &jf_stored {
         // History an earlier build kept under no profile (one Jellyfin user, empty key) becomes
         // the active user's, before anything reads it: their pins must not look "never asked".
         let key = stored.profile_key();
@@ -943,6 +941,7 @@ pub(crate) unsafe fn construct(
     crate::route::restore_root_back(session.root_back());
     crate::route::restore_instant_dpad_seeking(session.instant_dpad_seeking());
     crate::route::restore_episode_navigation(session.episode_navigation());
+    crate::route::restore_voice_preference(session.voice_preference());
     // The subtitle tone rides the same file and the same moment: a preference, restored once.
     crate::player::restore_subtitle_tone(session.subtitle_tone());
     crate::player::restore_audio_enhancements(session.audio_enhancements());
@@ -1000,6 +999,11 @@ pub(crate) unsafe fn construct(
             }
             BootTo::Home
         } else { BootTo::Login }
+    } else if let Some(super::jf_login::Kept::SignInAgain(opening)) = &jf_kept {
+        bridge.login_opens_as(opening.clone());
+        BootTo::Login
+    } else if matches!(jf_kept, Some(super::jf_login::Kept::WhoIsWatching)) {
+        BootTo::Profiles
     } else {
         // Nothing kept: Jellyfin sign-in. Legacy plex.tv sessions are not resumed.
         log("boot: no session — Jellyfin sign-in");
@@ -1048,10 +1052,6 @@ pub(crate) unsafe fn construct(
         crate::dev::scenarios::arm_drawmask();
         crate::dev::scenarios::arm_cardsplit();
     }
-    // dev: /tmp/nativejelly-heroground — draw the hero's photograph and BOTH of its scrim fields
-    // in one pass instead of the art plus four blended gradient quads over it. Absent, the
-    // shipped four-quad path draws, which is what makes this an A/B on one binary.
-    if !controlled { crate::dev::scenarios::arm_heroground(); }
     // dev: /tmp/nativejelly-nobudget — the frame budget's A/B CONTROL leg (spec §8.1). Read here
     // with the other boot triggers; applied to the one `Budget` below, once the tree exists.
     let nobudget = !controlled && crate::dev::scenarios::nobudget_armed();
@@ -1342,6 +1342,7 @@ pub(crate) unsafe fn construct(
         // Both of these enter the `Route::Login | Route::Profiles` block below, which asks as
         // soon as the account is authorized — earlier than here, and before the picker.
         BootTo::Login => AppArg::Login,
+        BootTo::Profiles => AppArg::Profiles,
     };
     // (dev: /tmp/nativejelly-acct used to open the profile menu HERE, beside a
     // `route = Route::Account { over: BarHost::Home }`. The menu is a `ModalStack` surface since
@@ -1443,6 +1444,7 @@ pub(crate) unsafe fn construct(
         menu_play_await: None,
         prev,
         refresh_hubs_at,
+        post_play_detail: None,
         library_poll: Default::default(),
         plaintext_upgrade: Default::default(),
         ev,

@@ -72,16 +72,31 @@ fn mid_dive_the_art_keeps_the_top_and_the_wash_alone_has_the_foot() {
     assert_eq!(bands.map(q), [None, Some((0.0, 600.0, SCR_W, SCR_H - 600.0)), None, None]);
 }
 
-/// Home's ramp as the ground carries it is `base_scrim_a` — the curve the two layered `rect`s
-/// drew and the legibility table is graded on — at both stops, either side of each, and beyond.
+/// A two-segment ramp with a midpoint knee, `[start, knee, mid alpha, foot alpha]`: zero above
+/// `start`, `mid` at the knee, `foot` at the panel's foot. The fixture the ramp tests grade on.
+fn knee_ramp(strength: f32) -> [f32; 4] {
+    let foot = 0.30 + 0.64 * strength.clamp(0.0, 1.0);
+    [0.34 * SCR_H, 0.65 * SCR_H, foot * 0.55, foot]
+}
+
+/// [`knee_ramp`]'s alpha at `y`, written out piece by piece: the reference `WashRamp` must match.
+fn knee_ramp_a(y: f32, strength: f32) -> f32 {
+    let [y0, knee, mid, foot] = knee_ramp(strength);
+    if y <= y0 { 0.0 }
+    else if y < knee { mid * (y - y0) / (knee - y0) }
+    else { mid + (foot - mid) * ((y - knee) / (SCR_H - knee)).clamp(0.0, 1.0) }
+}
+
+/// A ramp with a knee, as the ground carries it, is the piecewise curve it describes — at both
+/// stops, either side of each, and beyond.
 #[test]
-fn the_grounds_ramp_is_the_hero_scrim_curve() {
-    for hero_a in [0.02f32, 0.35, 1.0] {
-        let [y0, knee, mid, foot] = crate::ui::landing_hero::base_scrim_ramp(hero_a);
+fn the_grounds_ramp_is_its_piecewise_curve() {
+    for strength in [0.02f32, 0.35, 1.0] {
+        let [y0, knee, mid, foot] = knee_ramp(strength);
         let ramp = WashRamp { ink: theme::scrim(1.0), stops: [(y0, 0.0), (knee, mid), (SCR_H, foot)] };
         for y in [0.0f32, 200.0, y0, y0 + 0.4, 500.0, knee - 1.0, knee, knee + 1.0, 900.0, SCR_H] {
-            let want = crate::ui::landing_hero::base_scrim_a(y, hero_a);
-            assert!((ramp.alpha(y) - want).abs() < 1e-5, "hero_a {hero_a} y {y}: {} vs {want}", ramp.alpha(y));
+            let want = knee_ramp_a(y, strength);
+            assert!((ramp.alpha(y) - want).abs() < 1e-5, "strength {strength} y {y}: {} vs {want}", ramp.alpha(y));
         }
     }
     // Detail's single stop, written by repeating its foot: linear to the foot, never a divide by 0.
@@ -97,7 +112,7 @@ fn the_grounds_ramp_is_the_hero_scrim_curve() {
 /// the vertex shader's `mix(u_inka.x, u_inka.y, a_pos.y)` interpolates to.
 #[test]
 fn the_ramp_is_straight_inside_every_strip_the_ground_draws() {
-    let [y0, knee, mid, foot] = crate::ui::landing_hero::base_scrim_ramp(1.0);
+    let [y0, knee, mid, foot] = knee_ramp(1.0);
     let ramp = WashRamp { ink: theme::scrim(1.0), stops: [(y0, 0.0), (knee, mid), (SCR_H, foot)] };
     for band in [Rect::FULL, Rect::new(0.0, 600.0, SCR_W, 480.0), Rect::new(0.0, 0.0, SCR_W, 300.0)] {
         let strips: Vec<Rect> = cut_at(band, [Some(y0), Some(knee)]).collect();

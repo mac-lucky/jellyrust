@@ -1323,6 +1323,7 @@ mod tests {
     /// [`install_trace_eraser`] is what `app::enter_application` runs at boot.
     #[test]
     fn a_failed_preview_trace_is_erased_through_telemetrys_hook() {
+        let _endpoint = crate::telemetry::consent::as_if_configured(); // upstream's configured-build gates
         use crate::telemetry::consent::{self, Consent};
         let _g = nj_base::testlock::serial();
         let previous = consent::current();

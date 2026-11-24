@@ -9,9 +9,24 @@
 #![allow(dead_code)]
 use std::os::raw::{c_int, c_uint};
 
-pub const CARD_W: f32 = 250.0;
-pub const CARD_H: f32 = 375.0;
-pub const GAP: f32 = 30.0;
+/// **A Litefin card's visible image, from its card BOX.** `.media-card` carries a 3px transparent
+/// border and its `.card-image` the 3px focus ring ([`crate::ui::theme::FOCUS_RING_W`]), so the
+/// picture is [`CARD_INSET`] narrower than the box on each side; its height is `ratio` of the image
+/// box's OUTER width (the ring included), which is why it is a hair taller than an exact ratio
+/// (`docs/litefin-look.md` 4.2 table and note, 6 Grid). Every card size in the app is one call.
+pub const fn card_image(box_w: f32, ratio: f32) -> (f32, f32) {
+    (box_w - 2.0 * CARD_INSET, ratio * (box_w - 2.0 * (CARD_INSET - crate::ui::theme::FOCUS_RING_W)))
+}
+/// Card box edge to its picture: the 3px transparent card border plus the 3px focus ring.
+pub const CARD_INSET: f32 = 3.0 + crate::ui::theme::FOCUS_RING_W;
+/// The classic poster's card box (4.2: 240 on a 264 pitch; Latest rows, seasons, similar, cast).
+const POSTER_BOX: f32 = 240.0;
+/// The poster's visible image, 228 x 351 (4.2).
+pub const CARD_W: f32 = card_image(POSTER_BOX, 1.5).0;
+pub const CARD_H: f32 = card_image(POSTER_BOX, 1.5).1;
+/// Image to image along a shelf: the boxes' 12 + 12 margins plus both insets, so the pitch is
+/// 264 (4.2). Every classic shelf shape keeps it, landscape (424 pitch) included.
+pub const GAP: f32 = 24.0 + 2.0 * CARD_INSET;
 /// **The safe area's LEFT/RIGHT keep-out — 5% of [`SCR_W`], and the reason it is 96 rather than 90.**
 ///
 /// A television overscans: the panel shows less than the frame it is handed, by a margin the set
@@ -30,6 +45,16 @@ pub const GAP: f32 = 30.0;
 /// — it grades the composed rects, not this literal, so a future audit is free to move this
 /// number again without rewriting the test.
 pub const MARGIN_X: f32 = 96.0;
+/// **The content's left edge beside Litefin's rail** - every Litefin page starts at x=100, the
+/// right edge of the 100px icon rail (`docs/litefin-look.md` 2.4 Page left edge, 3). A token of its
+/// own rather than a new [`MARGIN_X`]: that one is the overscan keep-out on both sides and stays
+/// 96, and 100 is inside it, so content laid out from here is inside [`SAFE`] by construction.
+pub const CONTENT_LEFT: f32 = crate::ui::theme::sidebar::RAIL_W;
+/// **A shelf's first picture**, x = 178: the content edge, the row's 60 side padding, the first
+/// card's 12 margin and its [`CARD_INSET`] (`docs/litefin-look.md` 4.2 Track; the heading sits at
+/// `CONTENT_LEFT + 60`). `RowStyle::HOME`'s and `RowStyle::EPISODE`'s `margin_x`: a screen draws a
+/// shelf's cards from here.
+pub const CARD_LEFT: f32 = CONTENT_LEFT + 60.0 + 12.0 + CARD_INSET;
 /// **The safe area's TOP/BOTTOM keep-out — 5% of [`SCR_H`].** [`MARGIN_X`]'s missing twin: until
 /// 2026-08-23 the vertical bound was simply unstated, so nothing in the tree bounded it and nothing
 /// could check it. It bit in four places — the shared top bar sat at y=44, the detail page's pinned
@@ -42,44 +67,32 @@ pub const MARGIN_Y: f32 = 54.0;
 pub const ROW_TITLE_H: f32 = 30.0;
 /// Hub-title cap top above the shelf's `row_y` origin — the heading draws at `row_y − TITLE_DY`,
 /// minus whatever `CardRow::lift` has raised it by. Named because it is a LAYOUT relationship two
-/// other constants here are derived against ([`CARD_DY`]'s air, [`GRID_TOP_Y`]'s clearance under the
-/// profile chip) and because the shelf heading is now a multi-run flow rather than one `p.text`.
+/// other constants here are derived against ([`CARD_DY`]'s air, [`GRID_TOP_Y`]'s snap line) and because the shelf heading is now a multi-run flow rather than one `p.text`.
 pub const TITLE_DY: f32 = 34.0;
-/// Card top below the shelf's `row_y` origin (the hub title draws at `row_y − `[`TITLE_DY`]): the air
-/// between a section title and its posters, held on magnification too because `title_lift` raises the
-/// title by the same amount the popped card's top rises.
-pub const CARD_DY: f32 = 26.0;
-/// Air kept between the bottom of a focused label block ([`crate::ui::card_row::UNDER_LABEL_H`])
-/// and the next row's topmost ink — item 11. The one number Home and Library now BOTH derive their
-/// row pitch from, instead of each hand-authoring its own: Home always gave this 22px (folded,
-/// unnamed, into the old `ROW_PITCH = CARD_H + ROW_TITLE_H + 144.0`), while Library's old
-/// `PITCH = CARD_H + 96.0` gave a two-line label block only 4px of air — glued to the next row's
-/// card, which is the bug this item reports. Derived by working the layout backward from the code:
-/// `ROW_PITCH − TITLE_DY − CARD_DY − CARD_H − UNDER_LABEL_H` and the old `PITCH − CARD_H −
-/// UNDER_LABEL_H` both land here once expressed against the SAME [`crate::ui::card_row::UNDER_LABEL_H`],
-/// confirmed against sim screenshots of both grids with a two-line focused label.
-pub const UNDER_LABEL_AIR: f32 = 22.0;
-/// Room for the shelf title above the row, plus the focused card's under-label block
-/// ([`crate::ui::card_row::UNDER_LABEL_H`]) and [`UNDER_LABEL_AIR`] of air below it before the next
-/// shelf's own title. Replaces the old `CARD_H + ROW_TITLE_H + 144.0` — same 549px total
-/// (`34 + 26 + 375 + 92 + 22`), now built from the same two named constants Library's `PITCH` uses,
-/// instead of a bare `144` that silently baked in a DIFFERENT air than Library's `96` did.
-///
-/// **Since 2026-09-05 it is the pitch of a FOCUSED shelf — the maximum — rather than the pitch of
-/// every shelf.** The label block exists only while its shelf holds focus, and reserving all 92px
-/// of it on all of them spent most of a 1080 panel on emptiness; a shelf column is now a running
-/// sum of `card_row::ROW_PITCH_FIXED + card_row::under_band(e)`, which is exactly this at `e == 1`.
-/// Every screen that stacks shelves — Home, the Library, Search and the person page — accumulates
-/// it that way, and `card_row::settled_top` is the closed form a scroll target must use. What is
-/// unchanged is that this constant remains the ONE authority on a poster shelf's rhythm: the four
-/// screens differ in their fixed part (a landscape row, a typed search block), never in the band.
+/// Card top below the shelf's `row_y` origin (the hub title draws at `row_y − `[`TITLE_DY`]):
+/// Litefin's heading cap top to picture top. The 32px title's 48px line box puts its cap top 13
+/// down (Poppins: half-leading 1.6, ascender 1.05, cap .70), then 14 to the track, the track's 24
+/// of room for the focus pop, the card border and the ring: `48 - 13 + 14 + 24 + 3 + 3` = 79 =
+/// `TITLE_DY + CARD_DY` (`docs/litefin-look.md` 4.2 Row title, Spacing). The heading's own lift
+/// over a popped card is a few px at the 1.02 pop, so the 24 already holds it.
+pub const CARD_DY: f32 = 79.0 - TITLE_DY;
+/// Air between the bottom of a card's label block ([`crate::ui::card_row::UNDER_LABEL_H`]) and the
+/// next row's topmost ink, its heading's cap top: the card's bottom border 3, the row's 38 below
+/// its labels, the 28 between rows and the next heading's 13 to its cap top (4.2 Spacing). Home,
+/// Library shelves, Search and Details all build their pitch from it.
+pub const UNDER_LABEL_AIR: f32 = 3.0 + 38.0 + 28.0 + 13.0;
+/// **One classic poster shelf, heading to heading**: Litefin's row title line, the track, the
+/// 363px card box with its labels, the 38 under them and the 28 to the next row, 585.75px
+/// (`docs/litefin-look.md` 4.2's 585.8, the title line held to a binary fraction), built from the
+/// named parts so the clearance tests check it.
+/// Every card wears its label, so every shelf has this pitch whether it holds focus or not
+/// (`card_row::under_band` is constant); a landscape shelf differs only in its picture height.
 pub const ROW_PITCH: f32 =
     TITLE_DY + CARD_DY + CARD_H + crate::ui::card_row::UNDER_LABEL_H + UNDER_LABEL_AIR;
 pub const CONTENT_Y: f32 = 200.0;
-/// Off-screen cull/clip-edge slack for a focused card's glow AND its risen drop-shadow — big enough
-/// to cover the worst case, a large poster's `CARD_SHADOW_BLUR + CARD_SHADOW_DY` (44+18=62) plus a
-/// 1px AA margin, rounded up.
-pub const GLOW_PAD: f32 = 64.0;
+/// Off-screen cull/clip-edge slack past a card's picture: its 3px focus ring and the 1.02 pop's
+/// growth (3.5px on a poster), plus a pixel. Litefin's cards cast no shadow and wear no glow.
+pub const GLOW_PAD: f32 = 8.0;
 pub(crate) use nj_base::surface::{LOGICAL_H as SCR_H, LOGICAL_W as SCR_W};
 
 /// **The safe area itself** — the box every piece of REQUIRED content has to fit inside, as one
@@ -117,12 +130,11 @@ pub fn inside_safe(r: crate::ui::Rect) -> bool {
 /// the whole shelf by that much, so the peek is 17px shallower here to keep the composition the
 /// hero view was tuned to (828 → 811; card top = `PEEK_Y + CARD_DY` = 837, as the popped one was).
 pub const PEEK_Y: f32 = 811.0;
-// shelf top in grid view — leaves the first hub title (row_y − TITLE_DY, lifted up to ~10 more when its
-// leftmost card magnifies) a clear space::MD under the profile chip (bottom edge 126).
-// 176 until 2026-08-23: it moved with the top bar, which dropped 18px so its track clears MARGIN_Y
-// (`widgets::TOP_BAR_Y`). The clearance under the chip is what this number IS, so it follows the bar
-// rather than staying put and letting the heading crowd it.
-pub const GRID_TOP_Y: f32 = 194.0;
+/// Shelf top in grid view. There is no top bar to clear any more (the Litefin rail is on the
+/// left): Litefin snaps the focused row 40 below the top of the screen
+/// (`docs/litefin-look.md` 4.2), which puts a 32px row title's cap top at ~53, so the first hub
+/// title (`row_y − TITLE_DY`) sits on the safe area's top edge instead, one pixel lower.
+pub const GRID_TOP_Y: f32 = MARGIN_Y + TITLE_DY;
 
 // SDL keycodes (scancode | SDLK_SCANCODE_MASK, or ASCII)
 pub const SDLK_RIGHT: c_uint = 79 | (1 << 30);

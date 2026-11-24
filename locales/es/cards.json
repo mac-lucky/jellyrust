@@ -1,0 +1,4 @@
+{
+  "cards.episode_code": "T{season}E{episode}",
+  "cards.as_role": "como {role}"
+}

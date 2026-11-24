@@ -11,7 +11,7 @@
 use super::*;
 
 pub(crate) use crate::player::lifecycle::{
-    clock_for_suspend_now, drive_foreground, paused, poll_foreground_load, resume_if_paused,
+    drive_foreground, paused, poll_foreground_load, resume_if_paused,
     set_paused, set_transport_paused, transport_target, viewer_paused, ForegroundActivation,
     ForegroundActuator, ForegroundClock, ForegroundInput, ForegroundLifecycle, ForegroundLoadStart,
     ForegroundLoadStatus,
@@ -37,6 +37,10 @@ impl ForegroundActuator for PlayerForegroundActuator<'_> {
 
     fn before_load(&mut self, resume_ns: i64, clock: ForegroundClock) {
         if matches!(clock, ForegroundClock::Paused) {
+            // The film may have been playing when it was parked (a television switched off during
+            // the park): the Pause is the restore's, so the new Engine arms its Initial hold from
+            // it and the paused-frame seek below has a Pause to keep.
+            set_paused(true);
             *self.repause_at = resume_ns;
             set_resume_pend(true);
             crate::player::TX.begin_paused_seek();

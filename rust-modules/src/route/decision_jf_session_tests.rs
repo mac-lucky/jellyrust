@@ -406,6 +406,50 @@ fn a_subtitle_picked_during_a_conversion_is_delivered_softly_not_burned() {
     install_active_encoder("");
 }
 
+/// **Every report names the live subtitle, and Off as -1.** The server stores what a progress
+/// report says (`SessionManager.UpdatePlaybackSettings`) and serves it back as the film's
+/// `DefaultSubtitleStreamIndex` (`RememberSubtitleSelections`); a report that left Off out kept the
+/// last track remembered, and the film opened with it again on every client.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn every_progress_report_names_the_live_subtitle_and_off_as_minus_one() {
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    crate::player::reset_subtitle();
+    let lb = loopback(playback_info(true, "mkv", HEVC_EAC3_SRT, None));
+    let rk = jf_rk();
+    super::test_support::apply_plan(&mut ps,
+        Plan {
+            sid: lb.sid,
+            sess: "jf-subs-report".into(),
+            url: format!("http://127.0.0.1/videos/{JF_GUID}/stream.mkv?static=true"),
+            vcodec: "hevc".into(),
+            acodec: "eac3".into(),
+            sub_sid: 3,
+            sub_render_ordinal: Some(0),
+            ..Default::default()
+        },
+        &rk,
+    );
+    let lease = begin_timeline_reporting(&ps).expect("a timeline lease");
+    assert!(report_timeline(&lease, crate::catalog::TimelineState::Playing, 1_000, 7_200_000));
+    commit_subtitle_selection(&mut ps, -1, 0, true);
+    assert!(report_timeline(&lease, crate::catalog::TimelineState::Playing, 11_000, 7_200_000));
+    commit_subtitle_selection(&mut ps, 0, 3, true);
+    assert!(report_timeline(&lease, crate::catalog::TimelineState::Playing, 21_000, 7_200_000));
+    let seen = lb.finish();
+
+    let sent: Vec<serde_json::Value> = seen.iter()
+        .filter(|r| r.line.starts_with("POST /Sessions/Playing"))
+        .map(|r| r.json()["SubtitleStreamIndex"].clone())
+        .collect();
+    assert_eq!(sent, [serde_json::json!(2), serde_json::json!(-1), serde_json::json!(2)], "{seen:?}");
+
+    crate::player::reset_subtitle();
+    reset_session(&mut ps);
+    install_active_encoder("");
+}
+
 /// An external delivery the client cannot fetch through the server (a remote source's own
 /// subtitle URL) is asked again as a burn, rather than selected and never drawn.
 #[test]

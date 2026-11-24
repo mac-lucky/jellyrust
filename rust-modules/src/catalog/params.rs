@@ -293,7 +293,9 @@ pub struct StreamSelection {
 }
 
 /// One `/:/timeline` progress report (POST — the spec verb). `play_queue_*` empty = omit;
-/// `*_stream_id` 0 = omit. PMS exposes timeline playback and encoder ownership independently,
+/// `audio_stream_id` 0 = omit; `subtitle_stream_id` is the LIVE subtitle, -1 = an Off somebody
+/// chose (sent to Jellyfin as -1, which it remembers), 0 = no subtitle and no choice (omitted, so
+/// the server keeps what it remembers). PMS exposes timeline playback and encoder ownership independently,
 /// but active HLS playback reports the current encoder's coupled wire identity so they remain
 /// correlated.
 pub struct TimelineReport<'a> {

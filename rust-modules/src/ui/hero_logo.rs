@@ -15,10 +15,8 @@
 //! [`band_h`] — a CONSTANT, the rung's floor — never the drawn height. A taller logo spills UPWARD
 //! out of the band as pure paint. That is what keeps a bottom-anchored hero column from lurching the
 //! moment a texture lands, and what keeps two items with different logo aspects level through a hero
-//! flip. It also means a hero logo now paints ABOVE the hero scrim's knee
-//! (`widgets::HERO_SCRIM_KNEE`) — up to y≈260 on home — where the wedge is still feathering in; the
-//! clearance that matters there is the top chrome's (`widgets::TOP_BAR_BOTTOM`), asserted in
-//! `home.rs`'s `the_home_hero_logo_never_reaches_the_top_bar`.
+//! flip. A rung whose floor is its ceiling never spills: Home's Litefin logo box (`screens::home`'s
+//! `HERO_LOGO`, 400x130) is a plain contain, bottom-aligned in its band.
 //!
 //! There is deliberately no fade-in behind the text→logo swap: `ui::tex::logo_src` answers `None`
 //! both while the fetch is pending AND when the item simply has no clearLogo, so a cross-fade would
@@ -125,6 +123,16 @@ pub fn fit(rung: LogoRung, src_w: f32, src_h: f32, col_w: f32) -> (f32, f32) {
     (w, h)
 }
 
+/// The largest `w`×`h` of a `src_w`×`src_h` source inside a `box_w`×`box_h` box at its own aspect —
+/// CSS `object-fit: contain`. A degenerate source or box draws nothing.
+pub fn contain(src_w: f32, src_h: f32, box_w: f32, box_h: f32) -> (f32, f32) {
+    if !(src_w > 0.0) || !(src_h > 0.0) || box_w <= 0.0 || box_h <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let s = (box_w / src_w).min(box_h / src_h);
+    (src_w * s, src_h * s)
+}
+
 /// Bottom-anchor a `w`×`h` logo in `band`: its BOTTOM EDGE lands on the band's bottom edge — the
 /// same line the text fallback puts its BASELINE on, because a logo's bottom edge and a baseline are
 /// the same optical line. Overflow is upward and is paint, never layout.
@@ -150,6 +158,9 @@ pub struct HeroLogo<'a> {
     title: &'a str,
     rung: LogoRung,
     align: HAlign,
+    /// Litefin's detail logo (`docs/litefin-look.md` 5): `object-fit: contain` inside the band,
+    /// centred on it vertically, and no text fallback, because the page sets the title beside it.
+    contained: bool,
 }
 
 impl<'a> HeroLogo<'a> {
@@ -163,7 +174,14 @@ impl<'a> HeroLogo<'a> {
             title,
             rung,
             align: HAlign::Left,
+            contained: false,
         }
+    }
+    /// Draw the logo `contain`ed in the band (aligned by [`HeroLogo::align`], centred vertically)
+    /// and nothing at all when the item has none — see [`HeroLogo::contained`]'s field.
+    pub fn contained(mut self) -> Self {
+        self.contained = true;
+        self
     }
     /// Horizontal placement inside the band — the logo art and the text fallback share it, so the
     /// two cannot land on different edges.
@@ -177,6 +195,14 @@ impl<'a> HeroLogo<'a> {
     /// for both the logo tint and the fallback text (the value all three sites passed already).
     /// Draws only through `p`, so the caller's cascade alpha fades logo and fallback identically.
     pub fn draw(&self, p: Painter, band: Rect, measure: &dyn Measure) {
+        if self.contained {
+            if let Some((tex, sw, sh)) = crate::ui::tex::logo_src(self.sid, self.rk) {
+                let (w, h) = contain(sw, sh, band.w, band.h);
+                let r = place(band, w, h, self.align);
+                p.tex(tex, Rect::new(r.x, band.y + (band.h - h) * 0.5, w, h), 0.0, theme::TEXT_PRIMARY);
+            }
+            return;
+        }
         // Resolve the fallback before consulting the asynchronous texture cache. A recording and
         // its replay need the same measurement census even when the logo happened to be resident
         // in only one run; texture residency is paint state, not logical replay state.
@@ -217,6 +243,15 @@ mod tests {
     // `ui::tex::logo_src` + `text::elide`) is deliberately NOT tested here: it reaches GL and the
     // font, and `text_cap_band`'s host fallback would measure the fallback rather than the device
     // font, which is worse than no test.
+
+    /// `contain` keeps the aspect and touches the binding side of the box: a wordmark the width, a
+    /// square emblem the height (5: the 280x100 detail logo box).
+    #[test]
+    fn contain_fits_the_binding_side_at_the_sources_aspect() {
+        assert_eq!(contain(1500.0, 300.0, 280.0, 100.0), (280.0, 56.0));
+        assert_eq!(contain(400.0, 400.0, 280.0, 100.0), (100.0, 100.0));
+        assert_eq!(contain(0.0, 300.0, 280.0, 100.0), (0.0, 0.0));
+    }
 
     /// The whole low-risk claim in one assertion: the commonest logo shape does not move. If someone
     /// retunes [`theme::logo::HERO_AREA`] without meaning to shift wordmarks, this fires.
