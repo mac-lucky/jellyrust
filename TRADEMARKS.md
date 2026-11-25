@@ -28,7 +28,7 @@ produced or endorsed by the Litefin project and does not use its name or logo as
 
 ## Third-party components
 
-This software links against and bundles code owned by others, under their own licences — including
+This software links against and bundles code owned by others, under their own licences, including
 LGPL-2.1 components whose terms grant you rights neither `LICENSE` nor this file does. See
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), which travels inside the distributed package as
 well as in this repository.

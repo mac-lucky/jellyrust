@@ -1,4 +1,11 @@
-# PlxNative licensing
+# Licensing
+
+JellyRust is a modified version of [Native Jelly](https://github.com/sostk/native-jelly), itself a
+fork of [PlxNative](https://github.com/GLinnik21/plx-native). JellyRust's modifications are
+Copyright (c) 2026 macluckylab. JellyRust as a whole is licensed under the GNU General Public
+License, version 3 or (at your option) any later version: **GPL-3.0-or-later**. The rest of this
+file is PlxNative's licensing statement, kept as the GPL requires; it applies to JellyRust in the
+same way.
 
 Copyright (c) 2026 Gleb Linnik and contributors.
 PlxNative's own code is licensed under the GNU General Public License, version 3 or
@@ -21,4 +28,6 @@ Before conveying a binary, publish its matching complete source bundle and build
 next to that binary, at no additional charge, with clear version-specific directions. Retain the
 source access required by GPL section 6(d); do not substitute a moving main-branch link. Include
 required dependency sources, patches and configuration, and applicable installation information.
-Existing source offers for older releases are not cancelled. No binary is published by this change.
+Existing source offers for older releases are not cancelled. Every JellyRust release on GitHub
+attaches its matching source bundle, FFmpeg's source and the script that builds it next to the
+`.ipk`.
