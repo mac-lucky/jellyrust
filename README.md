@@ -58,8 +58,9 @@ Movies and TV shows only: no music, photos or live TV.
 3. Sign in with Quick Connect. **Never type a password into the app**: it logs keys and typed text
    to `/tmp` on the TV.
 
-Video playback is verified on one TV, an LG C1 (2021) on webOS 6.5.3. On every other firmware from
-webOS 4.0 up the app is only known to pass webosbrew's static compatibility check. If you try it on
+Video playback is verified on two TVs: an LG C1 (2021) on webOS 6.5.3 and an LG C5 (2025) on
+webOS 10.3.1. On every other firmware from webOS 4.0 up the app is only known to pass webosbrew's
+static compatibility check. If you try it on
 another set, please [report what happened](https://github.com/mac-lucky/jellyrust/issues), whether
 it worked or not.
 
