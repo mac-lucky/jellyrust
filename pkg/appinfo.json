@@ -1,6 +1,6 @@
 {
   "id": "com.macluckylab.jellyrust",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "vendor": "macluckylab",
   "type": "native",
   "main": "nativejelly",
