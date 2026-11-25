@@ -729,7 +729,6 @@ pub enum NavOpKind {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum MachineId {
     Session,
-    Consent,
     Input,
     Present,
     Nav,
@@ -744,7 +743,6 @@ impl MachineId {
     pub fn write_canon(self, c: &mut Canon) {
         match self {
             Self::Session => { c.u32(0); }
-            Self::Consent => { c.u32(1); }
             Self::Input => { c.u32(2); }
             Self::Present => { c.u32(3); }
             Self::Nav => { c.u32(4); }

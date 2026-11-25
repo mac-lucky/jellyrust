@@ -572,8 +572,7 @@ fn scrub_host_kv(s: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    // NB the `Refuse` half is gated to its only present caller (the lab bridge); Phase G widens
-    // the gate to `telemetry` when the Sentry client becomes a second one.
+    // NB the `Refuse` half is gated to its only caller (the lab bridge).
     use super::*;
 
     /// Every rewrite assertion below runs through the LOCAL exit, so it is graded in the default

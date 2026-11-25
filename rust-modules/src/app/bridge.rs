@@ -40,7 +40,7 @@ use std::ffi::CStr;
 
 use crate::screens::family::SettingsPage;
 use crate::screens::player::HudPolicy;
-use crate::screens::registry::{AppArg, AppFx, AppMounter, AppMsg, ConsentCmd, ContentArg, ContentReq, HomeCmd, HomeLike, HomeReq, ItemMenuKind, LibraryReq, LoopReq, PageMemory};
+use crate::screens::registry::{AppArg, AppFx, AppMounter, AppMsg, ContentArg, ContentReq, HomeCmd, HomeLike, HomeReq, ItemMenuKind, LibraryReq, LoopReq, PageMemory};
 use crate::stores::{StoreCmd, StoreEv, StoreId};
 use crate::ui::containers::modal::{HostRender, HostUpdate, Phase, Style};
 use crate::ui::dispatch::{CxParts, Dispatcher, FrameReport, Rig, Split};
@@ -74,11 +74,6 @@ pub(crate) struct AppHost;
 /// Is this argument the Settings family, whatever page it was rooted at?
 fn is_settings(a: &AppArg) -> bool {
     matches!(a, AppArg::Settings(_))
-}
-
-/// …and the first-run question, whatever stage it was rooted at.
-fn is_first_run_consent(a: &AppArg) -> bool {
-    matches!(a, AppArg::FirstRunConsent(_))
 }
 
 /// What the rail shows this frame: the current page's slot, the library on screen, whether the
@@ -259,58 +254,6 @@ impl crate::screens::registry::MetadataLike for AppHost {
 // the rig
 // ---------------------------------------------------------------------------------------------
 
-/// The consent MACHINE (§2.2): the physical owner of the two decisions. The adapter persists and
-/// publishes immutable snapshots; it never supplies the previous decision back to this owner.
-pub(crate) struct ConsentMachine {
-    current: crate::telemetry::consent::Consent,
-}
-
-impl ConsentMachine {
-    pub(crate) const SHAPE: &'static str =
-        "Consent{asked_version:u32,errors:bool,usage:bool,install_id:option<string>,errors_id:option<string>}";
-
-    fn from_initial(current: crate::telemetry::consent::Consent) -> Self { Self { current } }
-
-    fn record(&mut self, adapter: &mut super::adapters::consent::ConsentAdapter,
-        errors: bool, usage: bool) {
-        let next = crate::telemetry::consent::apply(
-            &self.current, errors, usage, crate::telemetry::mint_id);
-        for (asked, got, channel) in [
-            (errors, next.errors, "crash reports"),
-            (usage, next.usage, "usage analytics"),
-        ] {
-            if asked && !got {
-                nj_base::eventlog::log(&format!(
-                    "consent: no /dev/urandom — refusing {channel} rather than inventing an identifier"
-                ));
-            }
-        }
-        adapter.commit(&self.current, &next);
-        self.current = next;
-        crate::telemetry::flush_soon();
-    }
-
-    fn forget(&mut self, adapter: &mut super::adapters::consent::ConsentAdapter) {
-        adapter.forget(&self.current);
-        self.current = Default::default();
-    }
-
-    pub(crate) fn subhash(&self) -> u64 {
-        let mut c = Canon::new();
-        c.u32(self.current.asked_version)
-            .bool(self.current.errors)
-            .bool(self.current.usage);
-        for value in [&self.current.install_id, &self.current.errors_id] {
-            c.bool(value.is_some());
-            if let Some(value) = value { c.str(value); }
-        }
-        c.finish()
-    }
-
-    #[cfg(test)]
-    fn current(&self) -> &crate::telemetry::consent::Consent { &self.current }
-}
-
 /// What the bridge lends the dispatcher, and what it collects for the loop.
 pub(crate) struct Bridge {
     session_cache_generation: u64,
@@ -324,7 +267,6 @@ pub(crate) struct Bridge {
     /// same landing a Session handoff takes. It never passes through the Session owner, which
     /// speaks plex.tv only.
     jf_ready: Option<crate::auth::ReadyCreds>,
-    consent_adapter: super::adapters::consent::ConsentAdapter,
     stores: crate::stores::Stores,
     mounter: AppMounter,
     /// This frame's publication of the playback session — see `AppViews::session`. Refreshed by
@@ -372,7 +314,6 @@ pub(crate) struct Bridge {
     random: Option<(EntryId, std::sync::mpsc::Receiver<Option<(crate::catalog::ServerId, String)>>)>,
     home_commands: std::collections::VecDeque<HomeCmd>,
     library_commands: std::collections::VecDeque<crate::screens::registry::LibraryCmd>,
-    consent: ConsentMachine,
     /// Requests the owned screens made of the loop this frame (§14), drained by [`frame`]'s caller.
     reqs: Vec<LoopReq>,
     content_reqs: Vec<(MachineId, ContentReq, ReturnState<u32, PageMemory>)>,
@@ -447,7 +388,6 @@ impl Bridge {
         stores.metadata.arm_detail_tracker(initial.content.is_some());
         let mut bridge = Self::with_publications_and_stores(&TTF, now_us, initial.session.clone(),
             super::adapters::session::SessionAdapter::controlled_home(mt, replay),
-            initial.consent.clone(), super::adapters::consent::ConsentAdapter::live(),
             StorePublications {
                 hubs, listing:crate::stores::browse::ListingSnapshot::empty(),
                 directory:Default::default(), section_hubs:crate::stores::browse::HubsSnapshot::empty(),
@@ -462,14 +402,13 @@ impl Bridge {
         bridge
     }
     pub(crate) fn new(now_us: fn() -> u64, init: crate::auth::SessionInit,
-        consent: crate::telemetry::consent::Consent, mt: &nj_base::task::MainThread) -> Self {
+        mt: &nj_base::task::MainThread) -> Self {
         // A `static`, not `&TtfMeasure` inline: a unit-struct literal DOES const-promote to
         // `'static` today, but that is a rule about the expression rather than a promise about
         // this field, and a `static` states the lifetime outright. Same reasoning as the one
         // `screens::settings`'s test module writes out beside its own measure.
         static TTF: nj_gfx::text::TtfMeasure = nj_gfx::text::TtfMeasure;
-        Self::with_measure(&TTF, now_us, init, super::adapters::session::SessionAdapter::live(mt),
-            consent, super::adapters::consent::ConsentAdapter::live())
+        Self::with_measure(&TTF, now_us, init, super::adapters::session::SessionAdapter::live(mt))
     }
 
     /// The same bridge over a measure that needs no fonts — the ONLY constructor a host test may
@@ -480,20 +419,16 @@ impl Bridge {
         static FIXTURE: crate::ui::fixture::FixtureMeasure = crate::ui::fixture::FixtureMeasure;
         Self::with_measure(&FIXTURE, now_us,
             crate::auth::SessionInit::captured(crate::catalog::session::Session::default()),
-            super::adapters::session::SessionAdapter::fixture(), Default::default(),
-            super::adapters::consent::ConsentAdapter::fixture())
+            super::adapters::session::SessionAdapter::fixture())
     }
 
     fn with_measure(measure: &'static dyn Measure, now_us: fn() -> u64,
-        init: crate::auth::SessionInit, session_adapter: super::adapters::session::SessionAdapter,
-        consent: crate::telemetry::consent::Consent,
-        consent_adapter: super::adapters::consent::ConsentAdapter) -> Self {
+        init: crate::auth::SessionInit, session_adapter: super::adapters::session::SessionAdapter) -> Self {
         let stores = crate::stores::Stores::default();
         let mut directory = crate::stores::browse::DirectorySnapshot::default();
         let browse = stores.capture_browse(&mut directory);
         let search = stores.search_snapshot(browse.directory.view());
-        Self::with_publications_and_stores(measure, now_us, init, session_adapter, consent,
-            consent_adapter,
+        Self::with_publications_and_stores(measure, now_us, init, session_adapter,
             StorePublications {
             hubs: stores.hubs.snapshot(), listing: browse.listing,
             directory: browse.directory, section_hubs: browse.section_hubs,
@@ -505,8 +440,7 @@ impl Bridge {
     fn for_session_test(init: crate::auth::SessionInit) -> Self {
         static FIXTURE: crate::ui::fixture::FixtureMeasure = crate::ui::fixture::FixtureMeasure;
         let adapter = super::adapters::session::SessionAdapter::fixture_with(init.persisted.clone());
-        Self::with_publications(&FIXTURE, || 0, init, adapter, Default::default(),
-            super::adapters::consent::ConsentAdapter::fixture(), StorePublications {
+        Self::with_publications(&FIXTURE, || 0, init, adapter, StorePublications {
             hubs: crate::catalog_fetch::HubsSnapshot::empty_for_test(),
             listing: crate::stores::browse::ListingSnapshot::empty_for_test(),
             directory: Default::default(), section_hubs: crate::stores::browse::HubsSnapshot::empty_for_test(),
@@ -515,47 +449,14 @@ impl Bridge {
     }
 
     #[cfg(test)]
-    fn for_consent_test(consent: crate::telemetry::consent::Consent) -> Self {
-        static FIXTURE: crate::ui::fixture::FixtureMeasure = crate::ui::fixture::FixtureMeasure;
-        Self::with_publications(&FIXTURE, || 0,
-            crate::auth::SessionInit::captured(crate::catalog::session::Session::default()),
-            super::adapters::session::SessionAdapter::fixture(), consent,
-            super::adapters::consent::ConsentAdapter::fixture(), StorePublications {
-                hubs: crate::catalog_fetch::HubsSnapshot::empty_for_test(),
-                listing: crate::stores::browse::ListingSnapshot::empty(),
-                directory: Default::default(), section_hubs: crate::stores::browse::HubsSnapshot::empty(),
-                search: Default::default(),
-            })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn for_consent_resource_test(consent: crate::telemetry::consent::Consent) -> Self {
-        static FIXTURE: crate::ui::fixture::FixtureMeasure = crate::ui::fixture::FixtureMeasure;
-        Self::with_publications(&FIXTURE, || 0,
-            crate::auth::SessionInit::captured(crate::catalog::session::Session::default()),
-            super::adapters::session::SessionAdapter::fixture(), consent,
-            super::adapters::consent::ConsentAdapter::live(), StorePublications {
-                hubs: crate::catalog_fetch::HubsSnapshot::empty_for_test(),
-                listing: crate::stores::browse::ListingSnapshot::empty(),
-                directory: Default::default(), section_hubs: crate::stores::browse::HubsSnapshot::empty(),
-                search: Default::default(),
-            })
-    }
-
-    #[cfg(test)]
     fn with_publications(measure: &'static dyn Measure, now_us: fn() -> u64,
         init: crate::auth::SessionInit, session_adapter: super::adapters::session::SessionAdapter,
-        consent: crate::telemetry::consent::Consent,
-        consent_adapter: super::adapters::consent::ConsentAdapter,
         reads: StorePublications) -> Self {
-        Self::with_publications_and_stores(measure, now_us, init, session_adapter, consent,
-            consent_adapter, reads, Default::default())
+        Self::with_publications_and_stores(measure, now_us, init, session_adapter, reads, Default::default())
     }
 
     fn with_publications_and_stores(measure: &'static dyn Measure, now_us: fn() -> u64,
         init: crate::auth::SessionInit, session_adapter: super::adapters::session::SessionAdapter,
-        consent: crate::telemetry::consent::Consent,
-        consent_adapter: super::adapters::consent::ConsentAdapter,
         reads: StorePublications, stores: crate::stores::Stores) -> Self {
         Self {
             session_cache_generation: crate::catalog::session::visible_generation(),
@@ -566,7 +467,6 @@ impl Bridge {
             session_adapter,
             session_ready: None,
             jf_ready: None,
-            consent_adapter,
             stores,
             mounter: AppMounter::default(),
             playback: crate::route::PlaybackSession::IDLE,
@@ -589,7 +489,6 @@ impl Bridge {
             random: None,
             home_commands: std::collections::VecDeque::new(),
             library_commands: std::collections::VecDeque::new(),
-            consent: ConsentMachine::from_initial(consent),
             reqs: Vec::new(),
             content_reqs: Vec::new(),
             home_reqs: Vec::new(),
@@ -624,8 +523,6 @@ impl Bridge {
 
     /// Cached logical Session hash, including pending work even when its UI read is unchanged.
     pub fn session_subhash(&self) -> u64 { self.session.subhash() }
-    /// Physical Consent owner's decision hash; identifiers are folded, never serialized here.
-    pub fn consent_subhash(&self) -> u64 { self.consent.subhash() }
     pub(crate) fn initial_subhash(&self) -> u64 { self.initial_subhash }
     #[cfg(test)]
     pub(crate) fn profile_resource_view(&self) -> Option<std::sync::Arc<crate::catalog::session::CurrentProfile>> {
@@ -1419,15 +1316,6 @@ impl Rig<AppHost> for Bridge {
         }
     }
     fn deliver(&mut self, to: MachineId, msg: &AppMsg, parts: &CxParts<u32>, fx: &mut Effects<'_, AppHost>) -> Handled {
-        if let AppMsg::Consent(command) = msg {
-            if to != MachineId::Consent { return Handled::No; }
-            match command {
-                ConsentCmd::Record { errors, usage } => {
-                    self.consent.record(&mut self.consent_adapter, *errors, *usage);
-                }
-            }
-            return Handled::Yes;
-        }
         if let AppMsg::Session(event) = msg {
             use crate::auth::owner::SessionEvent;
             if to != MachineId::Session { return Handled::No; }
@@ -1643,8 +1531,6 @@ impl Bridge {
             AppFx::Store(id, cmd) => out.push(Fx::Deliver(MachineId::Store(id.ord()), Delivery::Machine(AppMsg::Store(cmd)))),
             AppFx::StoreWork(work) => out.push(Fx::Deliver(
                 MachineId::Store(work.store().ord()), Delivery::Machine(AppMsg::StoreWork(work)))),
-            AppFx::Consent(command) => out.push(Fx::Deliver(
-                MachineId::Consent, Delivery::Machine(AppMsg::Consent(command)))),
             AppFx::Loop(req) => self.reqs.push(req),
             AppFx::Content(req) => self.content_reqs.push((from, req, self.effect_return.clone())),
             AppFx::Home(req) => self.home_reqs.push((from, req, self.effect_return.clone())),
@@ -1664,7 +1550,7 @@ impl Bridge {
         use nj_machine::machine::{Addr, RequestId};
         if let Some(io) = &mut self.home_io {
             if matches!(effect, SessionFx::Capture { .. } | SessionFx::Work { .. }
-                | SessionFx::Coordinator(_) | SessionFx::Erase { .. } | SessionFx::Incident { .. }) {
+                | SessionFx::Coordinator(_) | SessionFx::Erase { .. }) {
                 io.failure = Some("unsupported controlled Home Session operation");
                 return;
             }
@@ -1730,16 +1616,9 @@ impl Bridge {
                     deliver(SessionEvent::Erased { epoch, leftovers });
                 }
             }
-            SessionFx::Incident { id, lane, report } => {
-                let delivery = self.session_adapter.report_incident(id, lane, report);
-                deliver(SessionEvent::IncidentReported { id, delivery });
-            }
             SessionFx::Coordinator(action) => {
                 if matches!(action, crate::auth::owner::CoordinatorAction::LocalDataErased) {
                     self.reqs.push(LoopReq::LocalDataErased);
-                }
-                if matches!(action, crate::auth::owner::CoordinatorAction::CloseTelemetry) {
-                    self.consent.forget(&mut self.consent_adapter);
                 }
                 self.session_adapter.coordinator(action);
             }
@@ -1872,12 +1751,6 @@ impl Bridge {
         if let Some(event) = self.session_adapter.take_erased(&mut self.stores.metadata) {
             results.push((nj_machine::machine::Addr { to: MachineId::Session, req: nj_machine::machine::RequestId(0) },
                 AppMsg::Session(event)));
-        }
-        // What became of the report whose Report ID the sign-in screen shows: held, delivered or
-        // dropped.
-        if let Some((id, delivery)) = self.session_adapter.take_incident_delivery() {
-            results.push((nj_machine::machine::Addr { to: MachineId::Session, req: nj_machine::machine::RequestId(0) },
-                AppMsg::Session(crate::auth::owner::SessionEvent::IncidentReported { id, delivery })));
         }
         results.extend(self.take_hubs_results());
         if self.home_io.is_some() {
@@ -2611,15 +2484,9 @@ pub(crate) fn nav_root_if_unsettled(d: &mut Dispatcher<AppHost>, arg: AppArg) {
 /// (a credentials handoff, a persistence warning, a phase change) is caught the moment it lands.
 ///
 /// This is the ONE production routing decision — `app/run.rs::land_results` calls it from the
-/// live loop, and the two tests that used to keep their own inline copy of this exact `match`
-/// (`session_picker_regression_tests.rs`'s `first_run_consent_over_the_picker_does_not_flip_
-/// mounts_every_frame` and `login_phase_follower_settles_and_does_not_recycle_the_qr_screen`) now
-/// call this function too, so a test can no longer pass by agreeing with its own copy of the bug
-/// instead of with production. (Mutation-tested 2026-09-17: reverting this function to the OLD
-/// shape — a bare `nav_root` every frame, `maybe_ask_consent` with no `top_settled_on` gate — fails
-/// the repro test; separately, making `NavStack::is_inert` always return `false` while routing
-/// `Root` through the OLD combined `Root`/`SelectTab` apply arm fails the container's own dedup
-/// tests. See the commit that added this doc for the exact runs.)
+/// live loop, and `session_picker_regression_tests.rs`'s
+/// `login_phase_follower_settles_and_does_not_recycle_the_qr_screen` calls this function too, so
+/// a test can no longer pass by agreeing with its own copy of the bug instead of with production.
 ///
 /// Guarded on the CALLER's route read (`app.route()`/`pages.top_arg()`) rather than inside: the
 /// guard is one `matches!` either way, and keeping it at the call site is what let the two tests
@@ -2654,13 +2521,10 @@ pub(crate) fn follow_auth_landing(pages: &mut Dispatcher<AppHost>, bridge: &mut 
         // and left the CONTAINER's entries — bodies, `ReturnState`s and all — exactly where they
         // were, because `sync_page` only ever moved the top. `reset_for_profile` is the whole tree.
         pages.reset_for_profile();
-        // …and only NOW can the first-run question be asked: `install_pms` registers the granted
-        // roster, which is the stable input to this decision even before asynchronous section
-        // discovery lands. It is asked per PROFILE, which is why it sits after the switch rather
-        // than after the sign-in. The sign-in's question first, before any per-profile step. On a
-        // Plex Home account it was already asked at the picker below and this is a no-op; on a
-        // single-user account this is the earliest authorized moment there is.
-        super::input::maybe_ask_consent(pages);
+        // …and only NOW can the first-run sources question be asked: `install_pms` registers the
+        // granted roster, which is the stable input to this decision even before asynchronous
+        // section discovery lands. It is asked per PROFILE, which is why it sits after the switch
+        // rather than after the sign-in.
         bridge.refresh_browse_directory();
         if crate::stores::browse::onboard::asks(bridge.browse_directory()) {
             nj_base::eventlog::log("login: server installed — asking which sources feed Home");
@@ -2675,8 +2539,8 @@ pub(crate) fn follow_auth_landing(pages: &mut Dispatcher<AppHost>, bridge: &mut 
         // The Jellyfin who's-watching screen: its own pick hands credentials over (the arm above),
         // and nothing the plex.tv Session owner says is about it.
     } else if bridge.auth_read().0.persistence_warning.is_some() {
-        // A fresh save could not be confirmed durable: keep the report reachable before
-        // consent/profile routing, exactly as 0.6.6 did — the warning is answered on the login
+        // A fresh save could not be confirmed durable: keep the warning reachable before
+        // profile routing, exactly as 0.6.6 did — the warning is answered on the login
         // screen itself (AUTH-03), not by moving on as if it were acknowledged.
         nav_root_if_unsettled(pages, AppArg::Login);
     } else {
@@ -2702,19 +2566,8 @@ pub(crate) fn follow_auth_landing(pages: &mut Dispatcher<AppHost>, bridge: &mut 
                 // then, so once Login (never retired) sat under the mint, this same call retired
                 // and re-minted `Profiles` every frame too. `Root` now truly replaces (§stack.rs)
                 // and `NavStack::request` drops an exactly-redundant request before it touches the
-                // transition at all, so the guard here is what lets the NEXT line ask "has the
-                // picker actually landed" honestly.
+                // transition at all.
                 nav_root_if_unsettled(pages, AppArg::Profiles);
-                // BEFORE the picker: the account is authorized, so the consent question is
-                // answerable, and the person holding the remote at this moment is the one who
-                // signed the television in. It draws over the picker's route on its own opaque
-                // ground — which means it must not be asked until Profiles is the SETTLED top:
-                // presenting it while Login is still fading out underneath would host it on the
-                // entry the `Root` above is about to retire, and the very next commit would
-                // orphan it (TV 2026-09-17's mount/unmount loop).
-                if top_settled_on(pages, &AppArg::Profiles) {
-                    super::input::maybe_ask_consent(pages);
-                }
             }
             _ => {
                 nav_root_if_unsettled(pages, AppArg::Login);
@@ -3124,20 +2977,6 @@ pub(crate) fn open_settings_at(d: &mut Dispatcher<AppHost>, page: SettingsPage) 
     d.request(MachineId::Nav, NavOp::Present(AppArg::Settings(page)));
 }
 
-/// Present the first-run consent question at its first stage (idempotent while it is up).
-pub(crate) fn open_first_run_consent(d: &mut Dispatcher<AppHost>) {
-    open_first_run_consent_at(d, 0);
-}
-
-/// …at `stage`, which only `/tmp/nativejelly-consent=product` ever names.
-pub(crate) fn open_first_run_consent_at(d: &mut Dispatcher<AppHost>, stage: u8) {
-    if surface_up(d, is_first_run_consent) {
-        return;
-    }
-    d.nav.next_style = Style::Opaque { snapshot: false };
-    d.request(MachineId::Nav, NavOp::Present(AppArg::FirstRunConsent(stage)));
-}
-
 /// Dismiss whichever surface is up (the loop's teardown paths: sign-out, a profile reset).
 pub(crate) fn dismiss_surfaces(d: &mut Dispatcher<AppHost>) {
     let ids: Vec<EntryId> = d
@@ -3243,10 +3082,6 @@ pub(crate) fn settings_up(d: &Dispatcher<AppHost>) -> bool {
     surface_up(d, is_settings)
 }
 
-/// Is the first-run question up (any phase)?
-pub(crate) fn consent_up(d: &Dispatcher<AppHost>) -> bool {
-    surface_up(d, is_first_run_consent)
-}
 
 /// Is the tree's top PAGE engine-focused rather than ladder-focused — i.e. does the DISPATCHER
 /// draw it? The predicate is the screen's own `FocusSource`, not a list of routes, so a page
@@ -3572,9 +3407,6 @@ mod session_resource_tests;
 #[cfg(test)]
 #[path = "recording_erasure_tests.rs"]
 mod recording_erasure_tests;
-#[cfg(test)]
-#[path = "consent_owner_tests.rs"]
-mod consent_owner_tests;
 #[cfg(test)]
 #[path = "session_worker_adapter_tests.rs"]
 mod session_worker_adapter_tests;

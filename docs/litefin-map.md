@@ -11,8 +11,8 @@ Superseded since by the theme/telemetry/Polish lanes (trust these over the secti
 - Fonts: pkg/appfont.ttf = Poppins Regular, pkg/appfont-bold.ttf = Poppins SemiBold (cut by
   tools/cut-poppins.py, digits frozen tabular); Inter lives on as pkg/appfont-inter*.ttf, the UI
   chain's second link (Cyrillic, Greek) and the subtitle family. Chain: Poppins -> Inter -> CJK.
-- Telemetry is off by construction (telemetry/sender.rs); the consent screen never shows and
-  Privacy & data offers only "Delete all local data"; plex.tv and its discover API are never dialled.
+- Telemetry is removed (`docs/litefin-fork.md`); Privacy & data shows what is stored on the TV and
+  "Delete all local data"; plex.tv and its discover API are never dialled.
 - Polish ships: locales/pl/*.json, SHIPPED has 5 locales, so every new locales/<lang>/<slice>.json
   needs a pl copy too (the catalog compiler refuses a locale with missing keys).
 - Offline screenshots with real artwork: `tools/litefin-shot.sh` + `tests/mock_jf.py --demo`

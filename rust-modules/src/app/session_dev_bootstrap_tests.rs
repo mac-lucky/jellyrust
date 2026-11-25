@@ -93,7 +93,7 @@ fn dev_login_preflights_both_request_slots_and_coalesces_pending_intent() {
 
 #[test]
 fn dev_erase_and_signout_retire_pending_boundaries_without_reinstalling_grants() {
-    use crate::auth::owner::{BootstrapAuthority, CommitAdmission, CommitReply, CoordinatorAction,
+    use crate::auth::owner::{BootstrapAuthority, CommitAdmission, CommitReply,
         SessionEvent, SessionWork};
     use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
     for sign_out in [false, true] {
@@ -123,9 +123,6 @@ fn dev_erase_and_signout_retire_pending_boundaries_without_reinstalling_grants()
                 "cancelled activation cannot execute its registry grant");
             assert_eq!(ran.load(Ordering::Acquire), usize::from(sign_out));
             assert_eq!(state.phase, if sign_out { crate::auth::Phase::Creating } else { crate::auth::Phase::Deleted });
-            let events = &rig.session_adapter.fixture_resources().coordinator_events;
-            assert!(matches!(events.first(), Some(CoordinatorAction::CloseTelemetry)));
-            if sign_out { assert!(events.iter().any(|e| matches!(e, CoordinatorAction::SignInStarted))); }
             let before = rig.session.subhash();
             if boundary != 0 {
                 d.emit(MachineId::Session, Fx::Deliver(MachineId::Session,

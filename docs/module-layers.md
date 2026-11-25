@@ -69,26 +69,26 @@ That component looked like one tangle but came from a short list of misplaced it
 
 ## The target graph
 
-Fourteen layers, each a future crate. Each row lists what the layer may name (its `uses` in the
+Thirteen layers, each a future crate (JellyRust deleted the fourteenth, `telemetry`, with the
+crash reporting and analytics it held). Each row lists what the layer may name (its `uses` in the
 config). The config lists every layer explicitly, because Cargo dependencies are not transitive.
-There are two stacks, graphics (`gfx` → `ui`) and data (`net` → `plex` → `telemetry` → `data`/
-`session` → `media`). They meet in `appkit`, the application widgets several screens share, and
+There are two stacks, graphics (`gfx` → `ui`) and data (`net` → `plex` → `data`/`session` →
+`media`). They meet in `appkit`, the application widgets several screens share, and
 in `screens` above it; `media` also draws through `gfx`.
 
 ```
 app        everything below
-screens    appkit  ui  media  session  data  telemetry  plex  net  gfx    + platform machine base
-appkit         ui  media  session  data  telemetry  plex  net  gfx        + platform machine base
-media          data  telemetry  plex  net  gfx                            + platform machine base
-session        telemetry  plex  net                                       + platform machine base
-data           telemetry  plex  net                                       + platform machine base
-ui             gfx                                                        + platform machine base
-telemetry      plex  net                                                  + platform machine base
-plex           net                                                        + platform machine base
-net                                                                       + platform base
-gfx                                                                       + platform machine base
-platform                                                                             machine base
-machine                                                                                      base
+screens    appkit  ui  media  session  data  plex  net  gfx    + platform machine base
+appkit         ui  media  session  data  plex  net  gfx        + platform machine base
+media          data  plex  net  gfx                            + platform machine base
+session        plex  net                                       + platform machine base
+data           plex  net                                       + platform machine base
+ui             gfx                                             + platform machine base
+plex           net                                             + platform machine base
+net                                                            + platform base
+gfx                                                            + platform machine base
+platform                                                                  machine base
+machine                                                                           base
 base
 ```
 
@@ -100,7 +100,6 @@ base
 | gfx | `gfx egl text img svg gpu_timer hwcnt overdraw` | 15k | 68% |
 | net | `net stream` | 6k | 74% |
 | plex | `plex http` | 26k | 72% |
-| telemetry | `telemetry diag` (the event schema) | 16k | 64% |
 | ui | `ui` (the library) | 51k | 47% |
 | data | `stores browse metadata person collection search viewstate pms` | 27k | 56% |
 | session | `auth` | 11k | 35% |

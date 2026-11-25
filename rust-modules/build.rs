@@ -51,10 +51,9 @@ fn main() {
 /// and `ci/check-package.py` fails the build if they ever disagree: LG accepts nothing else in a
 /// package, so the published number has to stay exactly `X.Y.Z`. But a release commit leaves the
 /// tree AT the version it just published, so every developer build after it reported that number
-/// as its own — to `X-Plex-Version` on the account's authorized-devices list, to Sentry as the
-/// release `nativejelly@X.Y.Z`, to PostHog as `app_version`, and on the diagnostics panel that is
-/// meant to be photographed into a bug report. A crash from somebody's working tree landed on the
-/// shipped release's tally and nothing downstream could separate the two.
+/// as its own — to `X-Plex-Version` on the account's authorized-devices list, in the boot log as
+/// `nativejelly@X.Y.Z`, and on the diagnostics panel that is meant to be photographed into a bug
+/// report. Nothing downstream could separate somebody's working tree from the shipped release.
 ///
 /// So a build that is not a release names the version it is working TOWARDS and says what it is:
 /// `0.5.0` published, `0.6.0-dev` in the tree.
@@ -93,7 +92,7 @@ fn main() {
 /// maintenance line" number the `-dev` suffix would, dated instead of merely suffixed:
 /// `0.7.0-nightly-20260919` rather than `0.7.0-dev`. The date comes from `NJ_NIGHTLY_DATE`
 /// (`YYYYMMDD`, validated by [`is_nightly_date`]) because a bare channel name cannot tell two
-/// nightly cuts of the same commit-less trunk apart — X-Plex-Version, the Sentry release and the
+/// nightly cuts of the same commit-less trunk apart — X-Plex-Version, the boot log and the
 /// diagnostics panel all need that to distinguish "today's nightly" from "yesterday's" the way
 /// `NJ_BUILD_SHA` cannot (trunk moves several times a day; the reported version is what a bug
 /// report actually names).
@@ -118,7 +117,7 @@ fn emit_version() {
     let (major, minor, patch) = triplet(&pkg);
     // Set-but-empty is not "release": the Makefile exports the variable only for a release build,
     // but a caller's shell or a CI step may still hand it over blank, and blank must mean what
-    // unset means — the same shape `telemetry::sender` reads its credentials with. `NJ_CHANNEL`
+    // unset means. `NJ_CHANNEL`
     // follows the identical convention (see the Makefile's `override … := $(if …)` beside
     // `NJ_RELEASE`), so "nightly" is checked the same way rather than a second one.
     let release = std::env::var("NJ_RELEASE").is_ok_and(|v| !v.is_empty());

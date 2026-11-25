@@ -149,7 +149,7 @@ ALL_TRIGGERS = [
     # boot-flow and full-screen route triggers.  The list is documentary (cleanup is glob-based),
     # but keeping the real names here makes a new performance scene grep-discoverable.
     "nativejelly-heroidx", "nativejelly-pickuser", "nativejelly-firstrun",
-    "nativejelly-onboardosc", "nativejelly-consent", "nativejelly-consentosc",
+    "nativejelly-onboardosc",
     "nativejelly-settings", "nativejelly-settingsosc", "nativejelly-acct", "nativejelly-acctosc",
     # itemmenu snaps into the grid and opens the press-and-hold card context menu
     # (route=home overlay=itemmenu: the menu is a ModalStack surface since UI-restructure phase 10)

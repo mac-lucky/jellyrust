@@ -23,7 +23,7 @@
 //! Recorded keys and supplied keys use the same production controlled ingress, retaining the
 //! original event timestamp and source rather than synthesizing a new SDL timestamp.
 //!
-//! AppFrameV4 combines press/route/overlay/focus/tree with cached Session, physical Consent and typed initial-input
+//! AppFrameV5 combines press/route/overlay/focus/tree with cached Session and typed initial-input
 //! digests. Private initial/effect data may contain credentials; shareable probes contain no
 //! raw identity. Only explicit synthetic construction is eligible for fixture import.
 //!
@@ -76,15 +76,12 @@ pub(crate) struct AppInit {
     pub route: &'static str,
     pub session: bool,
     pub servers: u32,
-    pub consent_asked: u32,
-    pub consent_errors: bool,
-    pub consent_usage: bool,
     pub seed: u32,
 }
 
 impl AppInit {
     pub const SHAPE: &'static str =
-        "AppInit{route:str,session:bool,servers:u32,consent_asked:u32,consent_errors:bool,consent_usage:bool,seed:u32}";
+        "AppInit{route:str,session:bool,servers:u32,seed:u32}";
 }
 
 impl LogicalState for AppInit {
@@ -92,20 +89,14 @@ impl LogicalState for AppInit {
         w.str(self.route)
             .bool(self.session)
             .u32(self.servers)
-            .u32(self.consent_asked)
-            .bool(self.consent_errors)
-            .bool(self.consent_usage)
             .u32(self.seed);
     }
     fn probe(&self, out: &mut String) {
         out.push_str(&format!(
-            "route={} session={} servers={} consent={}/{}/{} seed={}",
+            "route={} session={} servers={} seed={}",
             self.route,
             self.session as u8,
             self.servers,
-            self.consent_asked,
-            self.consent_errors as u8,
-            self.consent_usage as u8,
             self.seed
         ));
     }
@@ -150,8 +141,7 @@ const APP_SHAPES: &[&str] = &[
     crate::ui::press::Press::SHAPE,
     crate::ui::input::STATE_SHAPE,
     "TextInputWire{kind:text,text:str,panel:bool,ms:u32,dt_us:u32,source:{Sdl,RemoteFifo,Script,Replay}}",
-    "AppFrameV4{route:str,overlay:str,focus:str,tree:u64,session:u64,consent:u64,initial:u64}",
-    super::bridge::ConsentMachine::SHAPE,
+    "AppFrameV5{route:str,overlay:str,focus:str,tree:u64,session:u64,initial:u64}",
     crate::ui::containers::STATE_SHAPE,
     crate::ui::screen::RETURN_STATE_SHAPE,
     crate::catalog_fetch::record::SHAPE,
@@ -171,8 +161,8 @@ const RESOLUTION_SHAPE: &str = "ProductResolutionV1{fo:Option<(entry:u32,elem:u3
 /// Session joined AppFrameV2 as its cached logical digest. The previous five-term product hash
 /// could not distinguish a Session change with otherwise identical visible/tree state. This
 /// invalidated old recordings. AppFrameV3 additionally bound the complete typed initial-input
-/// digest; AppFrameV4 adds the physical Consent owner's current decision. The controlled Home
-/// boot consumer restores both before work.
+/// digest; AppFrameV4 added the physical Consent owner's decision, and AppFrameV5 removed it with
+/// the consent owner itself. The controlled Home boot consumer restores both before work.
 ///
 /// **`tree:u64` joined it in phase 5b** and the bump was deliberate: the Settings family's state
 /// left the legacy globals the focus fingerprint reads and became instances on the container tree,
@@ -223,7 +213,7 @@ pub(crate) fn state_fp() -> u64 {
 /// surface phases, the engine's focus, queue depth and queued press identities. It is folded in WHOLE rather than
 /// sampled, because that function is already the spec's own definition of "the state of the
 /// machines" (§5.4) and re-deriving a summary here would be a second definition to keep in step.
-/// `session` and `consent` are their owners' cached, side-effect-free subhashes, obtained by
+/// `session` is its owner's cached, side-effect-free subhash, obtained by
 /// the common run tail. Only those u64 values are serialized; this neither adds raw secrets nor
 /// claims all-domain state coverage.
 pub(crate) fn state_hash(
@@ -233,12 +223,11 @@ pub(crate) fn state_hash(
     focus: &str,
     tree: u64,
     session: u64,
-    consent: u64,
     initial: u64,
 ) -> u64 {
     let mut c = Canon::new();
     press.write(&mut c);
-    c.str(route).str(overlay).str(focus).u64(tree).u64(session).u64(consent).u64(initial);
+    c.str(route).str(overlay).str(focus).u64(tree).u64(session).u64(initial);
     c.finish()
 }
 
@@ -648,7 +637,7 @@ pub(crate) fn machine_name(id: nj_machine::machine::MachineId) -> String {
     match id {
         MachineId::Instance(id) => format!("inst:{}", id.0),
         MachineId::Store(id) => format!("store:{}", id.0),
-        MachineId::Session => "Session".into(), MachineId::Consent => "Consent".into(),
+        MachineId::Session => "Session".into(),
         MachineId::Input => "Input".into(), MachineId::Present => "Present".into(),
         MachineId::Nav => "Nav".into(), MachineId::Player => "Player".into(),
         MachineId::Cache => "Cache".into(),
@@ -1736,66 +1725,6 @@ mod tests {
     }
 
     #[test]
-    fn product_recorded_continuations_preserve_cross_group_memory_without_avalanche() {
-        use crate::ui::{dispatch::Dispatcher};
-        use nj_machine::{machine::{Tick,Key}};
-        use super::super::bridge;
-        let _serial=nj_base::testlock::serial();
-        let run=|rec:&mut Recplay,changed:bool| {
-            let mut d=Dispatcher::<Product>::new();
-            let mut rig=bridge::Bridge::for_test(||0);
-            rec.prepare_resources(&mut rig);
-            bridge::show_page(&mut d,crate::screens::registry::AppArg::Settings(
-                crate::screens::family::SettingsPage::ConsentStage(0)));
-            let mut states=Vec::new();
-            let mut focuses=Vec::new();
-            for (f,key) in [None,Some(Key::Right),Some(Key::Right),Some(Key::Left),
-                Some(Key::Right),Some(Key::Left)].into_iter().enumerate() {
-                let tick=Tick {ms:f as u32*100,dt_us:16000};
-                let input=if matches!(rec,Recplay::Replaying(_)) {
-                    rec.replay_inputs().iter().map(|v|decode_input(v).unwrap()).collect()
-                } else {key.map_or_else(Vec::new,|key|bridge::script_key(key,tick))};
-                rec.tick(tick.ms,0.016);
-                let mut tap=ChangedAnswer {rec,focus:changed,hit:false};
-                d.frame_with(&mut rig,tick,input,Vec::new(),&mut tap,false);
-                assert_eq!(rec.failure(),None);
-                focuses.push(d.focus_record());
-                let hash=d.state_hash();
-                states.push(hash);
-                rec.measurements(&rig);
-                rec.present(true);
-                rec.end_frame(&||hash);
-            }
-            (states,focuses,rig.measurement_queries())
-        };
-        let initial=super::super::bootstrap::Initial::synthetic_home(1,32517,Some("root".into())).unwrap();
-        let sink=crate::ui::rec::MemSink::default();
-        let segments=sink.segments.clone();
-        let manifest=Header::new(state_fp(),&initial).to_json().to_string();
-        let mut rec=Recplay::recording_with_sink(&initial,Box::new(sink)).unwrap();
-        let (states,focuses,queries)=run(&mut rec,false);
-        assert_ne!(focuses[1].unwrap().2,focuses[2].unwrap().2,"leave the actual action-band group");
-        assert_eq!(focuses[1],focuses[3],"return must remember the trailing answer");
-        assert_eq!(focuses[3],focuses[5],"second round trip");
-        assert!(!queries.is_empty(),"real consent geometry queries the capability");
-        rec.finish(nj_machine::landgate::fixture_gate());
-        let recording=Recording::parse(&manifest,&segments.borrow().iter().map(Vec::as_slice).collect::<Vec<_>>(),state_fp()).unwrap();
-        for mode in [ReplayMode::Targets,ReplayMode::Resolve] {
-            for changed in [false,true] {
-                let mut replay=replay_for_test(copy_recording(&recording),mode);
-                let (actual,focus,actual_queries)=run(&mut replay,changed);
-                assert_eq!(actual,states,"recorded memory must survive algorithm experiments");
-                assert_eq!(focus,focuses);
-                if mode==ReplayMode::Resolve { assert_eq!(actual_queries,queries,"same query order, including real cross-group geometry"); }
-                let Recplay::Replaying(r)=replay else { unreachable!() };
-                assert_eq!(r.effect_diffs,0);
-                assert_eq!(r.same(),mode==ReplayMode::Targets || !changed);
-            }
-        }
-        nj_machine::landgate::disarm();
-    }
-
-    #[test]
     fn product_targets_and_resolve_grade_pointwise_and_continue_before_effects() {
         let _serial=nj_base::testlock::serial();
         let (recording,expected)=product_settings_recording();
@@ -2042,8 +1971,7 @@ mod tests {
             value
         }).collect();
         let boot = |inputs: Vec<Value>| {
-            let init = AppInit { route:"home",session:false,servers:0,consent_asked:0,
-                consent_errors:false,consent_usage:false,seed:0 };
+            let init = AppInit { route:"home",session:false,servers:0,seed:0 };
             Recplay::Replaying(Replay { resolution:Default::default(), rec:Recording { header:Header::new(state_fp(), &init),
                 frames:vec![crate::ui::rec::Frame { f:0, inputs, st:Some(7), ..Default::default() }],
                 metrics:Default::default(), stopped_at:None }, at:0,graded:0,diverged:0,
@@ -2078,8 +2006,7 @@ mod tests {
         let mut state = crate::catalog_fetch::PmsState::default();
         let adapter = std::sync::Arc::new(crate::catalog_fetch::PmsAdapter::default());
         crate::catalog_fetch::seed_for_test(&mut state, &adapter, 2, crate::catalog_fetch::HubState::Ready);
-        let app = AppInit { route: "home", session: false, servers: 1, consent_asked: 0,
-            consent_errors: false, consent_usage: false, seed: 0 };
+        let app = AppInit { route: "home", session: false, servers: 1, seed: 0 };
         let header = initial_header(&app, &state, &adapter);
         assert_eq!(header.init_data["hubs"]["catalog"]["items"].as_array().unwrap().len(), 2);
         let mut data = header.init_data["hubs"].clone();
@@ -2106,8 +2033,7 @@ mod tests {
         let expected: Vec<_> = results.iter().map(|r| json!({ "f": 0, "t": "async",
             "to": machine_name(addr.to), "req": addr.req.0, "payload": crate::catalog_fetch::record::encode(r) })).collect();
         let boot = |expected: Vec<Value>| {
-            let init = AppInit { route: "home", session: false, servers: 1, consent_asked: 0,
-                consent_errors: false, consent_usage: false, seed: 0 };
+            let init = AppInit { route: "home", session: false, servers: 1, seed: 0 };
             Recplay::Replaying(Replay {
                 resolution:Default::default(),
                 rec: Recording { header: Header::new(state_fp(), &init),
@@ -2194,8 +2120,7 @@ mod tests {
         assert!(!rig.browse_directory().sections().is_empty(),
             "a Bridge Hubs landing fixture requires its retained Browse bootstrap");
         rig.seed_hubs_for_directory_test(own, 1, crate::catalog_fetch::HubState::Ready);
-        let init = AppInit { route: "home", session: false, servers: 1, consent_asked: 0,
-            consent_errors: false, consent_usage: false, seed: 0 };
+        let init = AppInit { route: "home", session: false, servers: 1, seed: 0 };
         let sink = crate::ui::rec::MemSink::default();
         let segments = sink.segments.clone();
         let writer = Writer::open(Box::new(sink), &Header::new(state_fp(), &init), 0).unwrap();
@@ -2253,15 +2178,11 @@ mod tests {
         let init = AppInit {
             route: "home",
             session: true,
-            servers: 1,
-            consent_asked: 3,
-            consent_errors: true,
-            consent_usage: false,
-            seed: 7,
+            servers: 1, seed: 7,
         };
         let mut p = String::new();
         init.probe(&mut p);
-        assert_eq!(p, "route=home session=1 servers=1 consent=3/1/0 seed=7");
+        assert_eq!(p, "route=home session=1 servers=1 seed=7");
         // Phase 7: scoped modal stacks and opaque content identity memory change the shape.
         // Previous pin: 0x8446_64d2_3399_0e72. Old fixtures must be refused and rerecorded;
         // this is a schema transition, not a behavior rebaseline.
@@ -2369,10 +2290,13 @@ mod tests {
         // row carry the hub's `totalSize` (the linked heading's "· N"), in both the hubs record and
         // the hubs initial state.
         //
-        // **The community score and the unplayed count move it to this value.** `PmsMovie` gained
-        // `score:f32` (the Home hero's star) and `unplayed:i64` (the card's unplayed-count badge),
-        // carried by both the hubs record and the hubs initial state.
-        assert_eq!(crate::ui::rec::state_fp(APP_SHAPES), 0x9f54_2ab6_39c7_f06e);
+        // **The community score and the unplayed count moved it to 0x9f54_2ab6_39c7_f06e.**
+        // `PmsMovie` gained `score:f32` (the Home hero's star) and `unplayed:i64` (the card's
+        // unplayed-count badge), carried by both the hubs record and the hubs initial state.
+        //
+        // **Removing the consent owner moves it to this value**: AppFrameV5 drops its subhash,
+        // AppInit its three answers, and ControlledHomeInitV7 its captured decision.
+        assert_eq!(crate::ui::rec::state_fp(APP_SHAPES), 0xb86a_0115_7ccb_5942);
     }
 
     /// The gate at the REAL hubs landing site, through the recording the driver loads: a result
@@ -2453,11 +2377,11 @@ mod tests {
     #[test]
     fn the_state_hash_moves_with_the_focus_line_and_the_press() {
         let mut press = crate::ui::press::Press::new();
-        let a = state_hash(&press, "home", "", "focus route=home sel=0", 0, 0, 0, 0);
-        let b = state_hash(&press, "home", "", "focus route=home sel=1", 0, 0, 0, 0);
+        let a = state_hash(&press, "home", "", "focus route=home sel=0", 0, 0, 0);
+        let b = state_hash(&press, "home", "", "focus route=home sel=1", 0, 0, 0);
         assert_ne!(a, b);
         press.begin(10);
-        let c = state_hash(&press, "home", "", "focus route=home sel=0", 0, 0, 0, 0);
+        let c = state_hash(&press, "home", "", "focus route=home sel=0", 0, 0, 0);
         assert_ne!(a, c);
     }
 
@@ -2468,20 +2392,9 @@ mod tests {
     #[test]
     fn the_state_hash_moves_with_the_container_tree() {
         let press = crate::ui::press::Press::new();
-        let a = state_hash(&press, "home", " overlay=settings", "focus route=home", 0x11, 0, 0, 0);
-        let b = state_hash(&press, "home", " overlay=settings", "focus route=home", 0x12, 0, 0, 0);
+        let a = state_hash(&press, "home", " overlay=settings", "focus route=home", 0x11, 0, 0);
+        let b = state_hash(&press, "home", " overlay=settings", "focus route=home", 0x12, 0, 0);
         assert_ne!(a, b, "the same page and focus over a different tree is a different state");
-    }
-
-    #[test]
-    fn the_state_hash_moves_with_the_physical_consent_owner() {
-        let press = crate::ui::press::Press::new();
-        let denied = state_hash(&press, "home", "", "focus route=home", 0, 0, 0x11, 0);
-        let allowed = state_hash(&press, "home", "", "focus route=home", 0, 0, 0x12, 0);
-        assert_ne!(
-            denied, allowed,
-            "a consent decision changed without moving the canonical application state"
-        );
     }
 
     fn record_session_frame(bridge: &super::super::bridge::Bridge) -> Recording {
@@ -2498,8 +2411,7 @@ mod tests {
                 Ok(())
             }
         }
-        let init = AppInit { route: "home", session: false, servers: 0, consent_asked: 0,
-            consent_errors: false, consent_usage: false, seed: 0 };
+        let init = AppInit { route: "home", session: false, servers: 0, seed: 0 };
         let header = Header::new(state_fp(), &init);
         let manifest = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
         let sink = crate::ui::rec::MemSink::default();
@@ -2585,13 +2497,21 @@ mod tests {
         // `child_count`; they are history, so they keep the record they were computed with.
         const PRE_CHILD_COUNT_RECORD_SHAPE: &str = "HubsResultV1{gen:u32,seq:u32,sid:u16,client:Option<u32>,token_gen:u32,build:Option<{cw:[{last_viewed_at:i64,m:PmsMovie}],shelves:[{title:str,hub_id:str,key:str,items:[PmsMovie]}]}>};PmsMovie{sid:u16,sec:i64,title:str,year:i32,rating:str,dur_ns:i64,part:str,thumb:str,still:str,art:str,summary:str,rk:str,vcodec:str,acodec:str,blur:[[f32bits;3];4],has_blur:bool,kind:i32,resume_ms:i64,show_rk:str,season_index:i32,show_title:str,ep_index:i32,unwatched:bool,watched:bool,aired:str}";
         let mut pre_settings = APP_SHAPES.to_vec();
+        // The consent owner's era: its own shape after the frame line, the frame line that hashed
+        // it, and the init probe that carried its three answers.
+        let frame = pre_settings.iter().position(|shape| shape.starts_with("AppFrameV5")).unwrap();
+        pre_settings[frame] = "AppFrameV4{route:str,overlay:str,focus:str,tree:u64,session:u64,consent:u64,initial:u64}";
+        pre_settings.insert(frame + 1, "Consent{asked_version:u32,errors:bool,usage:bool,install_id:option<string>,errors_id:option<string>}");
+        let app_init = pre_settings.iter().position(|shape| *shape == AppInit::SHAPE).unwrap();
+        pre_settings[app_init] = "AppInit{route:str,session:bool,servers:u32,consent_asked:u32,consent_errors:bool,consent_usage:bool,seed:u32}";
         let record = pre_settings.iter().position(|shape| *shape == crate::catalog_fetch::record::SHAPE).unwrap();
         pre_settings[record] = PRE_CHILD_COUNT_RECORD_SHAPE;
         // ...and under the hubs initial state before a hub row carried its total.
         const PRE_TOTAL_INITIAL_SHAPE: &str = "HubsInitialV1{version:u32,generation:u32,next_request:u32,seen:u64,seen_facts:u32,sections_generation:u32,catalog_generation:u32,sources:[{sid:u16,client:Option<u32>,token_gen:u32,handle:str,state:u32,fetching:bool,seq:u32,retry_bits:u32,retry_n:u32,last:Option<SourceBuild>}],catalog:{items:[PmsMovie],hubs:[{title:str,hub_id:str,key:str,source:str,start:u64,len:u64}],heroes:[{idx:u64,source:str}]}}";
         let initial = pre_settings.iter().position(|shape| *shape == crate::catalog_fetch::initial::SHAPE).unwrap();
         pre_settings[initial] = PRE_TOTAL_INITIAL_SHAPE;
-        pre_settings[APP_SHAPES.len() - 2] = super::super::bootstrap::PRE_SETTINGS_SHAPE;
+        let bootstrap = pre_settings.iter().position(|shape| *shape == super::super::bootstrap::SHAPE).unwrap();
+        pre_settings[bootstrap] = super::super::bootstrap::PRE_SETTINGS_SHAPE;
         assert_eq!(crate::ui::rec::state_fp(&pre_settings), 0x9f03_9e4f_2ff6_4d19,
             "retain the pre-typed-Settings census");
         let mut pre_consent = pre_settings;
@@ -2639,8 +2559,7 @@ mod tests {
     fn unsupported_codec_stops_the_actual_writer() {
         use crate::ui::dispatch::Tap;
         use nj_machine::machine::{Fx, MachineId, NavOp, Stamped};
-        let init = AppInit { route:"home",session:false,servers:0,consent_asked:0,
-            consent_errors:false,consent_usage:false,seed:0 };
+        let init = AppInit { route:"home",session:false,servers:0,seed:0 };
         let sink = crate::ui::rec::MemSink::default();
         let segments = sink.segments.clone();
         let writer = Writer::open(Box::new(sink), &Header::new(state_fp(), &init), 0).unwrap();

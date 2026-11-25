@@ -252,9 +252,7 @@ static void crash_handler(int sig, siginfo_t *si, void *uc) {
      * measurement. What IS measured is that we get no report.)
      *
      * So the honest summary of the always-local/system evidence is this app's OWN fault event plus
-     * SAM's status. With consent and a configured endpoint, Sentry Native may additionally preserve
-     * a bounded multi-thread report for every successfully captured thread. That is an argument
-     * for the tracer being good, not for turning cores back on.
+     * SAM's status. That is an argument for the tracer being good, not for turning cores back on.
      *
      * # THE UNBLOCK IS THE WHOLE THING, and without it none of the paragraph above was true
      *

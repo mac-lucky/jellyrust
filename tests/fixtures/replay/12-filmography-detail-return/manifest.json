@@ -14,15 +14,6 @@
   "data": {
    "automated": true,
    "clock_start": 0,
-   "consent": {
-    "asked_version": 0,
-    "errors": false,
-    "errors_declined_scope": 0,
-    "errors_scope": 0,
-    "usage": false,
-    "usage_declined_scope": 0,
-    "usage_scope": 0
-   },
    "content": {
     "detail": "1001",
     "detailok": true,
@@ -108,10 +99,7 @@
     "error": "",
     "held_handoff": null,
     "inbox": [],
-    "incident": null,
-    "incidents_seen": [],
     "link_trouble": false,
-    "next_incident": 0,
     "next_qr": 0,
     "next_req": 0,
     "pending": {},
@@ -182,7 +170,7 @@
    ],
    "version": 1
   },
-  "hash": 11034485498063704586,
+  "hash": 16843815115760167179,
   "probe": "controlled=home version=1"
  },
  "schema": 3,

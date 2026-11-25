@@ -376,7 +376,7 @@ pub(super) mod address {
     use nj_machine::machine::{Addr, InstanceId, MachineId, RequestId, StoreOrd};
     pub fn serialize<S: serde::Serializer>(value: &Addr, serializer: S) -> Result<S::Ok, S::Error> {
         let (tag, id): (u8, u32) = match value.to {
-            MachineId::Session => (0, 0), MachineId::Consent => (1, 0),
+            MachineId::Session => (0, 0),
             MachineId::Input => (2, 0), MachineId::Present => (3, 0), MachineId::Nav => (4, 0),
             MachineId::Player => (5, 0), MachineId::Store(id) => (6, id.0),
             MachineId::Instance(id) => (7, id.0), MachineId::Cache => (8, 0),
@@ -386,7 +386,7 @@ pub(super) mod address {
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Addr, D::Error> {
         let (tag, id, req) = <(u8, u32, u32)>::deserialize(deserializer)?;
         let to = match (tag, id) {
-            (0, 0) => MachineId::Session, (1, 0) => MachineId::Consent,
+            (0, 0) => MachineId::Session,
             (2, 0) => MachineId::Input, (3, 0) => MachineId::Present,
             (4, 0) => MachineId::Nav, (5, 0) => MachineId::Player,
             (6, id) => MachineId::Store(StoreOrd(id)), (7, id) => MachineId::Instance(InstanceId(id)),

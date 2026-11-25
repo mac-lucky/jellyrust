@@ -31,7 +31,7 @@ objects with a `reason` are looked at; `cargo test` also prints harness text on 
   environment `make -s print-cargo-env` reports: every `NJ_*` variable a cargo recipe would see)
   and the way a bare `cargo` does (none), in both orders, and demands the second recompiles
   nothing. Cargo fingerprints an environment variable as an Option, so a variable make exports
-  SET-BUT-EMPTY (`NJ_RELEASE=`, `NJ_CHANNEL=`, `NJ_SENTRY_DSN=''`) is a different input from one
+  SET-BUT-EMPTY (`NJ_RELEASE=`, `NJ_CHANNEL=`) is a different input from one
   that is unset, and every bare `cargo` (a CI step, rust-analyzer, an agent's `cargo test`) after a
   `make`, and vice versa, recompiled the whole app crate.
 
@@ -227,12 +227,11 @@ def hermetic_env():
 def make_cargo_env():
     """The `NJ_*` environment `make` hands a cargo recipe, as `{name: value}`.
 
-    Asked of the Makefile itself (`print-cargo-env`: its exported variables plus the telemetry words
-    the recipes put in front of `cargo`) rather than restated here, so this follows the recipes.
-    Run from a `NJ_*`-free environment, and with the telemetry file pointed at nothing, so what
-    comes back is the Makefile's own construction and not this machine's credentials.
+    Asked of the Makefile itself (`print-cargo-env`: its exported variables) rather than restated
+    here, so this follows the recipes. Run from a `NJ_*`-free environment, so what comes back is
+    the Makefile's own construction and not this shell's.
     """
-    proc = subprocess.run(["make", "-s", "print-cargo-env", "TELEMETRY_JSON=/dev/null"], cwd=ROOT,
+    proc = subprocess.run(["make", "-s", "print-cargo-env"], cwd=ROOT,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                           env=hermetic_env())
     if proc.returncode != 0:

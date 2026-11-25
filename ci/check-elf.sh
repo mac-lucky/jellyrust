@@ -66,27 +66,23 @@ fi
 ok "exact hook exported GLOBAL/DEFAULT; Load-with-context has no loader dependency"
 
 echo "== crash-report identity =="
-# Two facts a Sentry crash report is built out of, and BOTH fail silently when wrong: a frame comes
-# back `symbolicatorStatus: "missing_symbol"` with no error attached, which is indistinguishable
-# from never having uploaded symbols at all. There is no way to notice from the dashboard, so they
-# are asserted here, on the artifact.
+# Two facts a local crash report is read with, and BOTH fail silently when wrong.
 #
-# (1) The IMAGE BASE. Symbolicator computes `rva = instruction_addr - image_addr`, and for this
-# non-PIE executable that base is the lowest PT_LOAD vaddr rather than 0. The app derives it from
-# its own program headers at runtime (`telemetry::sentry::image_addr`), so this is not what the
-# report USES — it is the check that the fallback constant, and the value measured against the live
-# project on 2026-08-29, still describe the link.
-grep -q 'Type: *EXEC' <<<"$H" || fail "no longer ET_EXEC — the image base is now a load bias (telemetry::sentry::image_addr returns None for ET_DYN and would fall back to a WRONG constant)"
+# (1) The IMAGE BASE. `src/crashtrace.c` logs raw PCs and `tools/crash-report.sh` symbolizes them
+# against pkg/nativejelly as link-time addresses, which holds only while the executable is ET_EXEC
+# with its lowest PT_LOAD at the base below; it subtracts the mapping base only to check that a PC
+# falls inside our own text.
+grep -q 'Type: *EXEC' <<<"$H" || fail "no longer ET_EXEC — the image base is now a load bias, and crash-log PCs no longer symbolize as link-time addresses"
 # One variable for the expectation, named once: written twice, a change to the comparison and a
 # change to the message drift apart, and the failure then reports "is X, not X".
 WANT_BASE=0x00010000
 PHEADERS=$("$READELF" -l "$BIN") || fail "readelf -l failed"
 LOAD_BASE=$(awk '/^  LOAD/{print $3}' <<<"$PHEADERS" | LC_ALL=C sort | sed -n '1p')
 [ "$LOAD_BASE" = "$WANT_BASE" ] \
-  || fail "lowest PT_LOAD is $LOAD_BASE, not $WANT_BASE — update telemetry::sentry::IMAGE_ADDR and re-verify that a real crash still symbolicates"
+  || fail "lowest PT_LOAD is $LOAD_BASE, not $WANT_BASE — re-verify that tools/crash-report.sh still symbolizes a real crash"
 
 # (2) The BUILD ID. It is the only thing that pairs a stripped binary a stranger's television
-# faulted in with the pkg/nativejelly.debug a release uploaded. `-Wl,--build-id=sha1` is
+# faulted in with the matching pkg/nativejelly.debug. `-Wl,--build-id=sha1` is
 # unconditional on every link and `strip` preserves it, so an absent one means the flag was lost.
 NOTES=$("$READELF" -n "$BIN") || fail "readelf -n failed"
 grep -qi 'Build ID: *[0-9a-f]\{40\}' <<<"$NOTES" \

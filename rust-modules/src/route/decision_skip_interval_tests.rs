@@ -1,6 +1,5 @@
-//! The Skip interval persistence seam: durable-first, one `feature.used` per durable pick.
+//! The Skip interval persistence seam: durable-first.
 use super::*;
-use crate::diag::schema::{DiagEvent, Feature};
 use crate::catalog::session::SkipInterval;
 
 struct Restore(SkipInterval);
@@ -10,33 +9,28 @@ impl Drop for Restore {
     }
 }
 
-/// **A durable pick is live, read back by the next load, and reported once** (as the length alone).
+/// **A durable pick is live, read back by the next load.**
 #[test]
-fn a_durable_pick_is_live_persisted_and_reported_once() {
+fn a_durable_pick_is_live_and_persisted() {
     let _g = nj_base::testlock::serial();
     let _session = crate::catalog::session::TempSession::new("skip-interval-set");
     let _restore = Restore(skip_interval());
     restore_skip_interval(SkipInterval::Seconds10);
 
-    let (saved, events) = crate::diag::test_events::capture(|| set_skip_interval(SkipInterval::Seconds30));
+    let saved = set_skip_interval(SkipInterval::Seconds30);
     assert!(saved);
     assert_eq!(skip_interval(), SkipInterval::Seconds30);
     assert_eq!(crate::catalog::session::load().skip_interval(), SkipInterval::Seconds30);
-    assert_eq!(
-        events,
-        [DiagEvent::FeatureUsed { feature: Feature::SkipInterval(SkipInterval::Seconds30) }]
-    );
 
-    // choosing the default again removes the key from the file, and is still a (reported) pick
-    let (saved, events) = crate::diag::test_events::capture(|| set_skip_interval(SkipInterval::Seconds10));
+    // choosing the default again removes the key from the file, and is still a pick
+    let saved = set_skip_interval(SkipInterval::Seconds10);
     assert!(saved);
     assert_eq!(crate::catalog::session::load().skip_interval(), SkipInterval::Seconds10);
-    assert_eq!(events.len(), 1);
 }
 
-/// **A failed write claims nothing**: the live value stays and nothing is reported.
+/// **A failed write claims nothing**: the live value stays.
 #[test]
-fn a_failed_write_changes_and_reports_nothing() {
+fn a_failed_write_changes_nothing() {
     let _g = nj_base::testlock::serial();
     let _session = crate::catalog::session::TempSession::new("skip-interval-failed");
     let _restore = Restore(skip_interval());
@@ -48,10 +42,9 @@ fn a_failed_write_changes_and_reports_nothing() {
     std::fs::write(dir.join("blocker"), b"x").unwrap();
     crate::catalog::session::redirect_for_test(Some(dir.join("blocker").join("auth.json")));
 
-    let (saved, events) = crate::diag::test_events::capture(|| set_skip_interval(SkipInterval::Seconds60));
+    let saved = set_skip_interval(SkipInterval::Seconds60);
     crate::catalog::session::redirect_for_test(None);
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!saved);
     assert_eq!(skip_interval(), SkipInterval::Seconds10);
-    assert!(events.is_empty(), "{events:?}");
 }

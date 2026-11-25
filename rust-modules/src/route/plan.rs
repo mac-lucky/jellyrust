@@ -280,21 +280,6 @@ impl AutoOriginalCandidate {
 }
 
 
-pub(super) fn source_probe_sample_outcome(
-    sample: crate::curlio::ThroughputSample,
-) -> crate::player::report::TraceOutcome {
-    if sample.target_reached {
-        crate::player::report::TraceOutcome::Succeeded
-    } else {
-        // A non-empty prefix is useful only as a right-censored observation. `curlio` currently
-        // collapses the terminal deadline/read reason once bytes exist, so naming it successful
-        // would be stronger than the evidence. Keep the trace honest until that result type grows
-        // a terminal-cause field.
-        crate::player::report::TraceOutcome::Inconclusive
-    }
-}
-
-
 /// **Why [`HlsAbrControl::prime`] would not register a candidate encoder**, in the one distinction
 /// the caller's backoff turns on. It maps straight onto `crate::abr::RejectCause` and is a
 /// separate type only because `route` must not decide an ABR policy question — it reports which
@@ -655,15 +640,11 @@ pub(super) fn desired_audio(
     }
 }
 
-/// Log + diag the server's refusal of an enhanced ask, from whichever call site first learns of
-/// it. `context` is the site-specific tail after the shared "enhancement: refused/ignored by
-/// server" opening, so every site keeps the exact log sentence it always had.
-pub(super) fn note_enhancement_refused(context: &str, audio: crate::catalog::AudioEnhancements) {
+/// Log the server's refusal of an enhanced ask, from whichever call site first learns of it.
+/// `context` is the site-specific tail after the shared "enhancement: refused/ignored by server"
+/// opening, so every site keeps the exact log sentence it always had.
+pub(super) fn note_enhancement_refused(context: &str) {
     crate::player::log(&format!("enhancement: refused/ignored by server{context}"));
-    crate::diag::event(crate::diag::schema::DiagEvent::EnhancementRefused {
-        boost_dialog: audio.boost_dialog,
-        normalize_loudness: audio.normalize_loudness,
-    });
 }
 
 /// **Why a plan leaves without a URL on purpose**, as a typed verdict rather than a sentence.

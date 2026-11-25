@@ -36,7 +36,7 @@ install, `com.macluckylab.jellyrust.debug`, can sit beside it on the same set (`
 
 The `Makefile` is the entire dev loop. Requires the **webOS NDK** (install with `make
 setup-env`), a **Rust nightly toolchain + `rust-src`** (for `-Z build-std`), CMake (Homebrew, for
-the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use your ssh key first and need it only when the TV refuses the key). See the
+the pinned libass/font-stack cross-build), and `sshpass` (Homebrew; deploy/run use your ssh key first and need it only when the TV refuses the key). See the
 **`setup-environment` skill** (`.agents/skills/`) for the full one-time setup + troubleshooting.
 
 - `make setup-env` — download + extract + `relocate-sdk.sh` the webOS NDK into `$(WEBOS_SDK)`
@@ -53,10 +53,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   (`ci/build-ffmpeg.sh`; ~2 minutes on the first checkout to want that configuration, **3 seconds
   in every checkout after** — the source and object tree is machine-wide under `$NJ_BUILD_CACHE`,
   default `~/.cache/nativejelly`, keyed by the configure flags so a dev tree and a RELEASE tree
-  cannot be confused for one another; only the 3.8 MB prefix is per-checkout) plus the
-  checksum-pinned Sentry Native
-  static libraries and out-of-process handler (`ci/build-sentry-native.sh`; CMake, patched for the
-  webOS glibc-2.12/ARM32 ABI). Also compiles `ci/ffabi-assert.c` against
+  cannot be confused for one another; only the 3.8 MB prefix is per-checkout). Also compiles `ci/ffabi-assert.c` against
   `vendor/ffmpeg-prefix/include` — **the headers the shipped libraries were built from**, installed
   by the same invocation that produced them — which is what proves `ff.rs`'s ABI table. **One**
   header tree per target, **one** FFmpeg. This line long said BOTH vendored trees (n3.3 and n4.0)
@@ -130,7 +127,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   SDL event loop where no host test can see it. Needs the **clippy component on nightly** (rustup's
   default profile ships it; a `--profile minimal` nightly does not).
 - `make test-fast [T=filter]` — **opt-in** incremental inner loop: the same default-feature
-  `cargo test --lib -p nativejelly-modules -p nj_base -p nj_machine -p nj_platform -p nj_gfx -p nj_net` as `check-cargo-unit-default` (throwaway runtime root, telemetry env), but
+  `cargo test --lib -p nativejelly-modules -p nj_base -p nj_machine -p nj_platform -p nj_gfx -p nj_net` as `check-cargo-unit-default` (throwaway runtime root), but
   with `CARGO_INCREMENTAL=1` in its own `rust-modules/target-fast` (gitignored). `T=route::`
   forwards a test-name filter; the `test result:` line is cargo's own. Use it for a long series of
   small edits in one lane: an edit-rebuild is ~10 s against 31-32 s non-incremental, flat across
@@ -278,10 +275,6 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   deliberate SIGSEGV on the set resolved through `pkg/nativejelly.debug` to
   `dev::crash_on_purpose at rust-modules/src/dev.rs:218` — file and line, from a binary the
   television runs, matched by build id alone.
-  `make SYMBOLS=1 sentry-symbols` additionally runs Sentry CLI's local DIF check and uploads that
-  exact binary/debug pair with source context; it requires `SENTRY_AUTH_TOKEN`. The release
-  workflow treats a missing token, unusable DIF or failed upload as a release failure, because an
-  accepted native event with no matching DIF is not a working crash report.
 - `make ipk` — repackage the installable `pkg/<app id>_<version>_arm.ipk`. The version
   comes from `pkg/appinfo.json` (the single source; `ci/check-package.py` asserts the control
   file agrees), and the archive is **reproducible** — `ci/mkipk.py` normalises tar identity and
@@ -369,8 +362,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   `Cargo.toml` plus a present `RELEASE_LINE` reports `0.6.1-dev` rather than `0.7.0-dev`. The file's
   absence is unconditionally the trunk behaviour above — nothing about a `main` checkout changes.
   It also makes the semver ordering mean something — `0.7.0-dev` precedes `0.7.0`. That is the string every
-  surface reports (X-Plex-Version, the Sentry release, PostHog's `app_version`, the lab snapshot, the
-  photographed diagnostics panel); before it, a release commit left the whole tree claiming to BE the
+  surface reports (X-Plex-Version, the lab snapshot, the photographed diagnostics panel); before it, a release commit left the whole tree claiming to BE the
   release it had just cut, and nothing downstream could separate a working tree from the shipped
   artifact. The suffix never reaches `pkg/appinfo.json` or the control file — LG takes three integers
   and nothing else — so a developer flavour's package is labelled `0.6.0` while its binary says
@@ -522,8 +514,8 @@ tools/fwcompat.py --lib libSDL2-2.0.so.0 --grep webOS
 **It grades whether the app STARTS, and nothing else.** A firmware can export every ACB entry point
 and still refuse to put a picture on the video plane. Today: OK on releases 4.4.2 through 11.2.0;
 playback is device-verified on 4.10.0 (the dev set) and 6.5.2 (the webosbrew reviewer's set,
-issue #22 — the `VP_EXPORTED` path works); opt-in PostHog `playback.started` events (2026-09)
-additionally show direct and transcoded starts on field sets from 4.4.2 to 11.2.0, including
+issue #22 — the `VP_EXPORTED` path works); upstream Native Jelly's opt-in playback events
+(2026-09, before JellyRust removed reporting) additionally showed direct and transcoded starts on field sets from 4.4.2 to 11.2.0, including
 10.3.1 transcodes, while 3.9.3 sets have requests and no outcome (#249); and `docs/webos5-port.md` §4 is the list of what
 webOS 5+ still needs a human with a television to settle.
 
@@ -633,8 +625,7 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   (+ `crashtrace.h`) — the **fatal-signal tracer**, its own TU so the signal path can be tested; `src/crashfmt.h` is its pure half. **Both halves are host-tested in
   `make check`** — `ci/crashfmt-test.c` grades the parsing, `ci/crashtrace-test.c` crashes seven
   processes on purpose and checks the record AND the exit status. `src/starfish.c` — the
-  StarfishMediaAPIs C++/ACB seam. `src/svg.c` — nanosvg rasterizer. `src/sentry_context.c` — the
-  narrow C wrapper that keeps Sentry's opaque by-value object ABI out of Rust. These five are the
+  StarfishMediaAPIs C++/ACB seam. `src/svg.c` — nanosvg rasterizer. These four are the
   entire normal C side (`gpdebug.c` is an opt-in allocator instrument). Reach for
   `/tmp/nativejelly-crashtest=<segv|abrt|bus|ill|trap|panic|unwind>` to fault the app deliberately
   ON the television — `segv` is a real null write, `abrt`/`bus`/`ill`/`trap` are `raise`, `panic`
@@ -1041,64 +1032,18 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   power-on is a cold launch that lands on Home and this rule never fires. In-app
   Home/Settings are *overlays* and do **not** fire these — only a real OS app-switch does. Preserve
   the suspend/reload pairing if you touch playback or routing.
-- **Crash forensics has two layers.** With error-report consent and a compiled Sentry endpoint,
-  Sentry Native's patched ARM32 backend replaces the signal disposition and wakes the shipped
-  `sentry-crash` daemon. The dying process stays stopped while the daemon copies its `ucontext`
-  and walks the crashed thread's APCS frame chain out of a copy of its stack; for every other
-  Linux LWP in `/proc/<pid>/task` it `PTRACE_ATTACH`es, unwinds **remotely through libunwind's
-  ptrace accessors** (DWARF, with `function` names from the ELF symbol tables), and detaches — that
-  is upstream sentry-native's own machinery since 0.16 (#1747), and it replaced a hand-written
-  suspend/`PTRACE_GETREGS`/frame-walk block this repo carried against 0.13.9 until 2026-09-02. The
-  crashed thread keeps up to 128 frames and each other thread up to 32 to reduce pressure on the
-  256 KiB durable-record ceiling; the importer still rejects an oversized envelope rather than
-  claiming a bound for an arbitrary 256-LWP process. The JSON therefore carries ARM registers and
-  real multi-frame stacks for all successfully captured threads, plus modules and both Linux-kernel
-  and webOS firmware context. The pin is **0.16.6** (`ci/build-sentry-native.sh`). The ARM32
-  registers-in-the-event and dual-frame-record walk (GCC leaves `fp` on the LR slot
-  (`[fp-4]`/`[fp]`), rustc/LLVM on the saved-fp slot (`[fp]`/`[fp+4]`), and one process here holds
-  both) and the pointer-width stack reads that make the walk safe on a 32-bit target are now
-  **upstream** (getsentry/sentry-native#2052 and #2053, contributed from this repo, merged
-  2026-09-03/04, released in 0.16.6) — the patch beside the pin
-  (`vendor/sentry-native/webos-arm32.patch`) carries neither any more and is down to what upstream
-  still does not do: a `process_vm_readv` wrapper for glibc 2.12, the 32-frame cap for non-crashed
-  threads, the 30 s handler budget, and two webOS-only escapes in the signal handler (no in-process
-  libunwind, no SDK hooks — both reproduced a recursive SIGSEGV through `getenv`).
-  The SDK has **no HTTP transport and writes no minidump**: it launches the
-  same `nativejelly` binary in spool-only mode, which moves the bounded envelope into the install's
-  runtime root. A healthy launch strips path prefixes, rejects request scope and every `user`
-  field but `id` — which it keeps ONLY when it has the 32-hex shape of the app's own crash-report
-  identifier, the `errors_id` that `sdk::start` puts on the SDK scope as `user.id` right after
-  init so the daemon's base event carries it — and queues the event through the existing
-  consent-aware sender. That id is what makes Sentry's "users affected" a count of Crash report
-  IDs — one per uninterrupted opt-in — rather than of events; it is minted on crash-report opt-in, destroyed on withdrawal
-  and on sign-out (the decision belongs to the account that gave it, so the next account is asked
-  afresh),
-  and never the PostHog analytics id (`docs/../PRIVACY.md`, and the two-identifier note in
-  `telemetry/consent.rs`). `-fno-omit-frame-pointer` / Rust
-  `force-frame-pointers=yes` are therefore crash-reporting ABI, not optional debug flags.
-
-  The patched ARM handler waits up to 30 seconds for that walk. The upstream 10-second budget was
-  too short for the first cold crash on this Cortex-A9: the parent died while the daemon was still
-  opening `/proc/<pid>/maps`, producing an accepted envelope with no modules and therefore no
-  symbolication. Warm crashes usually finish within the original budget; the longer ceiling is a
-  failure bound, not an added delay after a completed report.
-
-  The always-armed fallback is still the C tracer (`main.c`). It writes a startup `img:` marker
-  (build id, load address, mapped size), then on a fault logs PC/LR, **the ARM registers around
-  them** and the `/proc/self/maps` line(s) containing either. Native always chains this saved
-  handler after the daemon's attempt (and immediately when the daemon is unavailable), so the
-  bounded local record survives even a daemon that reaches `DONE` after failing to write its
-  envelope. On the next healthy boot the native envelope is imported first; a matching local
-  record is consumed by build id + signal, so one process death still becomes one Sentry event.
-  Closing or withdrawing consent restores the tracer as the primary handler. It **re-raises to
+- **Crash forensics is the C tracer** (`main.c`, `src/crashtrace.c`); JellyRust has no crash
+  reporting beyond it. It writes a startup `img:` marker (build id, load address, mapped size),
+  then on a fault logs PC/LR, **the ARM registers around them** and the `/proc/self/maps` line(s)
+  containing either, into the local crash log `tools/crash-report.sh` reads. It **re-raises to
   `SIG_DFL`** so
   SAM sees a real signal death (`exit_status: 11` for a SIGSEGV — device-verified 2026-08-29).
-  **This fallback does NOT also get a system crashd backtrace, and this line used to say it did**:
+  **The tracer does NOT also get a system crashd backtrace, and this line used to say it did**:
   `core_pattern` on this firmware is the bare string `core`, so the report chain starts from
   a core FILE, and `setrlimit(RLIMIT_CORE, 0)` means none is written. Two deliberate SIGSEGVs
   produced the signal status and no `/var/log/reports/librdx/` entry. Suppressing cores stays right
   — 615.6 MB shared partition, 125.9 MB free, ~200 MB core — so the two are simply exclusive, and
-  the fallback evidence is its own fault event plus SAM's status. Call that local C record a
+  the evidence is the tracer's own fault event plus SAM's status. Call that local C record a
   **fault event, not a backtrace** — `backtrace()` is not async-signal-safe and ARM unwinding in the
   crashing process commonly stops at `gsignal()`, so two frames plus registers plus the faulting
   module is the honest ceiling.
@@ -1140,7 +1085,7 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   authoritative.
   Probe files are hidden, exclusive creates, one byte, immediately removed; session files are
   never opened by diagnostics. No paths, helper payloads, account data or raw error text enter
-  this file or telemetry. A dedicated worker retains boot evidence and suppresses semantically
+  this file. A dedicated worker retains boot evidence and suppresses semantically
   duplicate outcomes. `truncated value=true` marks a size cap; `history_truncated=true` marks a
   bounded helper-outcome history. A failed publication leaves the previous snapshot in place, so
   check the build identity and sequence when interpreting a file after a relaunch. The group-read
@@ -1750,8 +1695,7 @@ path. Never run only this one before a release. `tests/README.md` has the tier t
   one unarmed pacing leg, samples global Mali IRQ activity with the selected install closed, then runs
   HWCNT separately and labels that leg's FPS invalid. `tools/profile-graphics` attaches active
   present/IRQ observation to an already-running app, with no baseline; it checks profiler triggers
-  and labels pacing invalid when one is armed. For a live freeze use `tools/nativejelly-sample`; unlike the
-  shipped crash path its `watch` mode is a foreground developer command and sends nothing.
+  and labels pacing invalid when one is armed.
 - **Poster-upload pacing:** a scene can set `upload_per_frame_min`, `upload_late_share_max`
   and `upload_frames_min` (default 15). The armed heartbeat adds `pupf=<frames>` (frames
   containing poster-sized uploads), `pupf_ge22=<late>` (present intervals at least 22 ms)
@@ -1814,7 +1758,7 @@ path. Never run only this one before a release. `tests/README.md` has the tier t
   supported effects as well as state; malformed/unsupported input fails closed before resource
   activation. Page-capture GPU readiness is sampled before dispatch and replayed as an input;
   final present decisions are still computed and graded, with live physical-window protection.
-  `AppFrameV4` includes physical Consent and the initial-input digest. Private recordings can contain
+  `AppFrameV5` includes the initial-input digest. Private recordings can contain
   credentials in typed initialization/effects: only explicitly synthetic inputs may become
   fixtures. `tests/controlled_bootstrap.py` exercises this representative production path with
   fresh/contrasting roots and outbound IO denied. Blobs, cross-target operation and unsupported
@@ -2000,20 +1944,8 @@ path. Never run only this one before a release. `tests/README.md` has the tier t
   `/tmp/nativejelly-token` beats the stored session entirely — so headless runs always land on a
   deterministic Home.
   `/tmp/nativejelly-pickuser=<index>` forces the picker anyway and auto-picks that roster tile.
-- **`/tmp/nativejelly-consent` is the same escape hatch for the CONSENT question**, and it exists
-  because that screen is suppressed BY the presence of any trigger — so without an override it is
-  the one screen in the app that cannot be reached headlessly at all: arming anything to reach it
-  is what hides it. It forces the question regardless of a stored decision, so it is also how the
-  screen is re-examined after answering once.
-- **The binary carries no credential that grants access to anything of YOURS** — no compiled PMS
-  token, no demo URL, and never the Sentry auth token, which can read and delete the project and
-  lives only as a GitHub secret. A RELEASE build does carry two **write-only ingest credentials**
-  (`NJ_SENTRY_DSN`, `NJ_POSTHOG_KEY`, compiled in via `option_env!`): they permit sending to a
-  project and reading nothing from it, `strings` finds them, `ci/gen-release-audit.py` prints them
-  into the audit on purpose, and `release.yml` REFUSES to publish without them. The distinction is
-  the point, and this line read "NO credentials" flatly — which stops a reader before they reach
-  it. A build with no credential compiled in cannot report at all, which is the guarantee that
-  replaced the cargo feature that used to claim it. PMS access comes
+- **The binary carries no credential** — no compiled PMS token, no demo URL, no reporting
+  endpoint (JellyRust has no crash reporting or analytics code). PMS access comes
   from the signed-in session (QR login) or, for automated runs only, `/tmp/nativejelly-token` — which
   `tests/run.py` always injects (it reads the owner token from the gitignored
   `src/config.local.h` on the HOST; that macro is never compiled in). An interactive boot with
@@ -2028,18 +1960,7 @@ path. Never run only this one before a release. `tests/README.md` has the tier t
   platform itself does at an app's entry page on this firmware, and what LG's submission rules
   require. **The same rule covers three roots** — Home, the who's-watching picker and the QR
   sign-in — which is what issues #16–#18 were: the latter two used to DROP a root BACK, because
-  both handed it to `auth::cancel` and ignored its `false`. **The first-run consent question was a
-  fourth root and was NOT covered until phase 5b (2026-09-07), and the fix confirms what this
-  section used to say about the shape of the gap: it needed a screen change, not a BACK-arm one.**
-  While the question was a `Popover` (`ui/consent.rs`), `on_back` was a bare `bool` that could not
-  distinguish "stepped back a stage" from "the platform took the screen" — so the loop's BACK arm
-  had nothing to key the root press on. The owned replacement (`screens::consent.rs`) answers with
-  a request instead of a bool: BACK at the first stage asks the loop for `LoopReq::BackAtRoot`
-  (`app::input::back_at_root` → `tv::home::go_home`, the same call the other three roots use) rather
-  than stepping or dismissing, and doing so does NOT answer or dismiss the question — selecting the
-  app's tile again lands straight back on it, exactly as Home, the picker and QR sign-in do at
-  theirs (`app/bridge.rs`'s `back_at_the_first_consent_stage_is_the_root_press_and_leaves_the_question_up`
-  pins both halves). A default BACK is no longer a quit anywhere — the remote's EXIT key
+  both handed it to `auth::cancel` and ignored its `false`. A default BACK is no longer a quit anywhere — the remote's EXIT key
   still is, and `closeByAppId` is still how `make kill`, `tests/run.py` and `tools/tv-session.sh`
   close the app — so the `/tmp/nativejelly-noexitconfirm` bypass went with the "Exit PlxNative?"
   alert it existed for (both retired 2026-09-03). Text

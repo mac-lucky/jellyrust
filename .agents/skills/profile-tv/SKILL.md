@@ -27,12 +27,10 @@ tools also wrap themselves in `tv-lock.sh with` when invoked alone.
 
 ## Live stacks
 
-```bash
-tools/nativejelly-sample snapshot                         # all LWPs once
-tools/nativejelly-sample profile --seconds 5 --hz 10      # render/main statistical sample
-tools/nativejelly-sample profile --all-threads            # invasive, when ownership is unclear
-tools/nativejelly-sample watch --stall-ms 2500             # foreground opt-in watchdog
-```
+JellyRust has no live stack sampler: upstream's `tools/nativejelly-sample` and its ARM ptrace
+helper `nativejelly-stackwalk` were built on the Sentry Native tree's remote libunwind, and were
+removed with it. A hang that needs stacks needs that helper rebuilt against a standalone libunwind
+first; until then use the heartbeat, the event log and the local crash log (`crash-triage`).
 
 `watch` captures three all-thread snapshots for each heartbeat-stall episode and rearms only after
 two consecutive heartbeats return. It never kills, restarts or uploads. Hand back the generated local bundle:

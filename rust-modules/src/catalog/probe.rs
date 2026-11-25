@@ -467,8 +467,8 @@ impl Candidate {
 /// `Timeout` and `TransportOther` carry the exact `CURLcode` (`IncidentContext::curl_rc`).
 /// `Unknown` is "no call yet" and "refused before libcurl ran" alike — neither has a code to name.
 ///
-/// It is defined here, beneath the telemetry layer that reports it, because [`RouteOutcome`] grades
-/// a probe's transport failure in this same vocabulary (`telemetry::incident` re-exports it).
+/// It is defined here, beneath `auth`, because [`RouteOutcome`] grades
+/// a probe's transport failure in this same vocabulary (`auth::incident` re-exports it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum LinkClass {
     Answered2xx,
@@ -594,8 +594,7 @@ impl RouteOutcome {
 
     /// A transport failure, through [`classify`] — the one classifier the incident report uses too,
     /// so the two vocabularies cannot drift: `None` is a failure no layer could attach evidence to. Connection refused is
-    /// split out of `transport_other` here only — the report's top-level `link` keeps its class,
-    /// because Sentry fingerprints on it.
+    /// split out of `transport_other` here only — the top-level `link` keeps its class.
     pub(crate) fn of_failure(failure: Option<RequestFailure>) -> Self {
         let Some(failure) = failure else { return Self::Unknown };
         match classify(Some(Err(failure))) {
@@ -1720,7 +1719,7 @@ mod tests {
         assert_eq!(same_network.plaintext_eligibility(), PlaintextEligibility::NotPrivateAddress);
     }
 
-    // The link classifier (`LinkClass`, `classify`) lived in `telemetry::incident` until `plex`
+    // The link classifier (`LinkClass`, `classify`) lived in `auth::incident` until `plex`
     // had to grade a probe's transport failure with it; its tests came down with it.
 
     fn failure(cause: RequestError, status: Option<u16>, curl_rc: Option<i32>) -> RequestFailure {

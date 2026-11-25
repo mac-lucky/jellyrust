@@ -244,7 +244,6 @@ pub(super) fn reauth_user(pages: &mut crate::ui::dispatch::Dispatcher<super::bri
 fn enter_signed_in(pages: &mut crate::ui::dispatch::Dispatcher<super::bridge::AppHost>,
     bridge: &mut super::bridge::Bridge) {
     use crate::screens::registry::AppArg;
-    super::input::maybe_ask_consent(pages);
     bridge.refresh_browse_directory();
     let to = if crate::stores::browse::onboard::asks(bridge.browse_directory()) { AppArg::Onboard } else { AppArg::Home };
     super::bridge::nav_root(pages, to);

@@ -7,8 +7,7 @@
 //!
 //! nativejelly-modules — the Rust app core, built as a staticlib and linked into the C
 //! boot shim. The crate's C surface is tiny: C calls `nj_run` (port.rs), writes the fallback
-//! image marker through `nj_crash_write_image_marker`, re-enters the native-crash spool through
-//! `nj_sentry_spool_external`, and forwards the two Starfish callbacks (`sf_on_event`/
+//! image marker through `nj_crash_write_image_marker`, and forwards the two Starfish callbacks (`sf_on_event`/
 //! `acb_on_event`, player/mod.rs). Everything else is Rust-internal (the per-module `repr(C)`
 //! shapes are migration legacy, not ABI).
 mod abr; // client-managed fixed-session HLS controller: estimate, propose, prime, then commit
@@ -18,11 +17,10 @@ mod aq;
 mod auth; // leftover session-machine helpers; product sign-in is `screens/jf_login.rs`
 mod browse; // Library browse: per-section paged catalog (sparse store + off-thread page fetches)
 mod capture; // dev live UI capture stream: own-GLES-frame grab → MPEG1/TS or JPEG → TCP (UI plane only)
+mod crashlog; // the local crash log's image marker (`nj_crash_write_image_marker`, called from main.c)
 mod coldstart; // retires old last-page bookmarks; authenticated cold boots now stay on Home
 mod curlio; // the HTTPS media plane: a remote file pulled by byte range over libcurl-multi (stream.rs is the plaintext-socket twin)
 mod dev; // the /tmp/nativejelly-* trigger surface, behind one `devtriggers` feature — read it before adding a trigger
-#[macro_use]
-mod diag; // typed usage schema plus log/lab scrub, ring and zlib; native crashes have a separate allowlist
 mod ff; // THE demuxer — the FFmpeg 9.0 this app BUNDLES and pins (majors 63/63/61), dlopen'd by absolute path beside the binary, never the television's
 mod focusprobe; // dev: one diffable line naming everything app.rs's key ladder can move, logged when it changes
 mod hls; // strict parser/auth/timeline for the measured PMS and Jellyfin HLS shapes
@@ -51,7 +49,6 @@ mod search; // Search data layer: /hubs/search fanned out across every source, m
 mod shot; // simulator screenshots: read the frame back and write a PNG (see the module doc)
 mod stores; // stores as machines (restructure phase 4): one command vocabulary + one step per data store
 mod system;
-mod telemetry; // the opt-in crash + usage channels: consent, the spool, the worker, the two wire formats
 mod viewstate; // watched / unwatched / remove-from-deck: the PMS view-state WRITES, off the SDL thread
 
 mod textinput; // the TV's own on-screen keyboard, via plain SDL_StartTextInput (see the module doc)

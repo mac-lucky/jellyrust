@@ -1,9 +1,71 @@
-//! Tests for the "Delete all local data" alert: opening it, confirming/cancelling it, and
-//! its stray-input and dismissal-fade guards.
+//! Tests for Privacy & data: every row fits in every shipped language, and the "Delete all local
+//! data" alert opens, confirms, cancels and traps stray input through its dismissal fade.
 
 use super::*;
-#[allow(unused_imports)]
-use super::test_support::*;
+use crate::ui::fixture::FixtureMeasure;
+use nj_machine::machine::{Edge, FocusRead, InputOwner, InstanceId, PressId, PressRead, PresentHandle, Source, Stamped, Tick};
+use nj_machine::present::Present;
+use nj_platform::i18n::{language_on_this_thread_for_test, SHIPPED};
+
+fn test_cx(m: &FixtureMeasure) -> Cx<'_, InnerHost> {
+    Cx {
+        views: crate::stores::browse::DirectoryView::empty_for_test(),
+        tick: Tick::default(),
+        measure: m,
+        press: PressRead::default(),
+        focus: FocusRead::default(),
+        owner: InputOwner::Entry(EntryId(0)),
+    }
+}
+
+
+fn sink() -> (Vec<Stamped<InnerHost>>, Present) {
+    (Vec::new(), Present::new())
+}
+
+fn mk_fx<'a>(out: &'a mut Vec<Stamped<InnerHost>>, present: &'a mut Present) -> Effects<'a, InnerHost> {
+    Effects::from_handle(out, MachineId::Instance(InstanceId(0)), PresentHandle::of(present))
+}
+
+
+fn key_down(key: Key) -> ScreenEvent<InnerHost> {
+    ScreenEvent::Input(InputEvent {
+        at: Tick::default(),
+        source: Source::Script,
+        kind: InputKind::Key { key, sym: 0, wcode: 0, edge: Edge::Down, at_edge: false },
+    })
+}
+
+
+fn requests_group(out: &[Stamped<InnerHost>], g: GroupId) -> bool {
+    out.iter().any(|s| {
+        matches!(
+            &s.fx,
+            Fx::Deliver(
+                _,
+                Delivery::Screen(ScreenEvent::Enter(Enter::Fresh {
+                    focus: FocusTarget::ContainerGroup(got),
+                })),
+            ) if *got == g
+        )
+    })
+}
+
+/// Every privacy row, built by the real `PrivacyPage::new`, through `TableView::fit_report`.
+#[test]
+fn every_privacy_row_fits_its_column_in_every_language() {
+    let frame_w = RouteLayout::panel().sectioned_table().w;
+    let m = FixtureMeasure;
+    let mut out = Vec::new();
+    for language in SHIPPED {
+        let _guard = language_on_this_thread_for_test(language);
+        let cx = test_cx(&m);
+        let (mut sink_out, mut present) = sink();
+        let page = PrivacyPage::new(EntryId(0), &cx, &mut mk_fx(&mut sink_out, &mut present));
+        out.extend(page.form.table.app_fit_failures(frame_w, language.tag()));
+    }
+    crate::ui::table::assert_no_fit_failures(&out);
+}
 
 #[test]
 fn no_draw_delete_disclosure_scroll_replays_from_recorded_measurements_without_answering() {
@@ -27,7 +89,7 @@ fn no_draw_delete_disclosure_scroll_replays_from_recorded_measurements_without_a
         let mut cx = test_cx(&fixture);
         cx.measure = measure;
         let (mut out, mut present) = sink();
-        let mut page = ConsentPage::settings(EntryId(1), &cx, &mut mk_fx(&mut out, &mut present));
+        let mut page = PrivacyPage::new(EntryId(1), &cx, &mut mk_fx(&mut out, &mut present));
         let delete_row = page.key_of(RowId::Delete);
         page.row_commit(delete_row, &mut mk_fx(&mut out, &mut present));
         cx.focus.current = Some(FocusKey { entry: EntryId(1), elem: ALERT });
@@ -56,15 +118,14 @@ fn no_draw_delete_disclosure_scroll_replays_from_recorded_measurements_without_a
 
 // ---- the delete alert traps focus, and only the loop ever deletes ---------------------
 
-/// Opening the alert traps focus on it — the same mechanism `first_run`'s own mount fix uses,
-/// pointed at the alert's group instead of the band.
+/// Opening the alert traps focus on it.
 #[test]
 fn the_delete_row_opens_the_alert_and_asks_to_be_reseated_on_it() {
     let _g = nj_base::testlock::serial();
     let m = FixtureMeasure;
     let c = test_cx(&m);
     let (mut out, mut present) = sink();
-    let mut page = ConsentPage::settings(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
+    let mut page = PrivacyPage::new(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
     let delete_row = page.key_of(RowId::Delete);
     out.clear();
     page.row_commit(delete_row, &mut mk_fx(&mut out, &mut present));
@@ -80,7 +141,7 @@ fn confirming_the_alert_asks_the_loop_to_delete_and_reseats_the_table() {
     let m = FixtureMeasure;
     let c = test_cx(&m);
     let (mut out, mut present) = sink();
-    let mut page = ConsentPage::settings(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
+    let mut page = PrivacyPage::new(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
     page.alert.open_with_body(nj_platform::i18n::msg::settings_consent_delete_question_c(), nj_platform::i18n::msg::settings_consent_delete_scope());
     page.alert.set_choice(AlertChoice::Destructive);
     out.clear();
@@ -97,7 +158,7 @@ fn cancelling_the_alert_never_asks_the_loop_to_delete_anything() {
     let m = FixtureMeasure;
     let c = test_cx(&m);
     let (mut out, mut present) = sink();
-    let mut page = ConsentPage::settings(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
+    let mut page = PrivacyPage::new(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
     page.alert.open_with_body(nj_platform::i18n::msg::settings_consent_delete_question_c(), nj_platform::i18n::msg::settings_consent_delete_scope());
     page.alert.set_choice(AlertChoice::Cancel);
     out.clear();
@@ -106,46 +167,24 @@ fn cancelling_the_alert_never_asks_the_loop_to_delete_anything() {
     assert!(!out.iter().any(|s| matches!(&s.fx, Fx::App(AppFx::Loop(LoopReq::DeleteAllLocalData)))));
 }
 
-/// **The blocker this audit exists to fix.** A click that lands on the table or the band
-/// underneath the "Delete all local data?" scrim resolves to the SAME `Activate`/`PressCommit`
-/// events a legitimate press sends — the engine's hit map has no notion of a modal scrim, and
-/// `ui/focus.rs`'s `set()` will already have written the clicked key as `cx.focus.current` by
-/// the time either arrives — so the guard has to live in the events themselves. This is the
-/// regression test for the two guards added to `Machine::step`'s `Activate` and `PressCommit`
-/// arms: before them, this test's two assertions on `draft`/`out` would have failed.
+/// **A click under the scrim is refused.** A click on the table underneath "Delete all local
+/// data?" resolves to the same `Activate` a real press sends (the hit map has no notion of a modal
+/// scrim), so the guard lives in the event itself: it must neither reopen nor close the alert.
 #[test]
-fn the_open_alert_refuses_a_stray_activate_or_presscommit_on_the_table_or_band() {
-    let _reporting = super::offer_reporting_for_test(); // litefin: the upstream rows
+fn the_open_alert_refuses_a_stray_activate_on_the_table() {
     let _g = nj_base::testlock::serial();
     let m = FixtureMeasure;
     let c = test_cx(&m);
     let (mut out, mut present) = sink();
-    let mut page = ConsentPage::settings(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
+    let mut page = PrivacyPage::new(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
     let delete_row = page.key_of(RowId::Delete);
     page.row_commit(delete_row, &mut mk_fx(&mut out, &mut present));
     assert!(page.alert.is_open());
-    let errors_row = page.key_of(RowId::Errors);
-    let draft_before = page.draft;
-
-    // A click landing on the "Crash reports" row underneath the scrim: the same event a real
-    // pointer press on that row sends (`ui/dispatch.rs`'s `Activate::Direct` -> `Activate`).
     out.clear();
-    let handled = page.step(&ScreenEvent::Activate(errors_row), &c, &mut mk_fx(&mut out, &mut present));
-    assert_eq!(handled, Handled::Yes, "the event is consumed rather than left to fall through anywhere else");
-    assert_eq!(draft_before, page.draft, "…but it must not toggle the switch underneath the scrim");
-    assert!(page.alert.is_open(), "…nor must it close the alert");
-
-    // A click landing on the band's leading control underneath the scrim: the same event a
-    // real OK press or pointer release on it sends (`Activate::Press` -> `PressCommit`).
-    out.clear();
-    let mut cx_band = test_cx(&m);
-    cx_band.focus.current = Some(FocusKey { entry: EntryId(1), elem: BAND });
-    page.step(&ScreenEvent::PressCommit(PressId(0)), &cx_band, &mut mk_fx(&mut out, &mut present));
-    assert!(
-        !out.iter().any(|s| matches!(&s.fx, Fx::Nav(NavOp::Pop))),
-        "a stray PressCommit on a band element must not pop the surface while the alert is open"
-    );
-    assert!(page.alert.is_open(), "…nor must it close the alert");
+    let handled = page.step(&ScreenEvent::Activate(delete_row), &c, &mut mk_fx(&mut out, &mut present));
+    assert_eq!(handled, Handled::Yes, "the event is consumed rather than left to fall through");
+    assert!(page.alert.is_open(), "...and it must not close the alert");
+    assert!(!requests_group(&out, ALERT_GROUP), "...nor open it a second time");
 }
 
 /// **Pins the alert's index mapping through the REAL dispatch path** —
@@ -162,7 +201,7 @@ fn the_alert_index_mapping_is_pinned_through_a_real_press_commit() {
     let m = FixtureMeasure;
     let c = test_cx(&m);
     let (mut out, mut present) = sink();
-    let mut page = ConsentPage::settings(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
+    let mut page = PrivacyPage::new(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
     let delete_row = page.key_of(RowId::Delete);
 
     // A freshly opened alert seats on Cancel (element 0) — `open_inner` resets `choice` to
@@ -225,7 +264,7 @@ fn a_stale_presscommit_after_the_alert_was_already_dismissed_deletes_nothing() {
     let m = FixtureMeasure;
     let c = test_cx(&m);
     let (mut out, mut present) = sink();
-    let mut page = ConsentPage::settings(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
+    let mut page = PrivacyPage::new(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
     let delete_row = page.key_of(RowId::Delete);
     page.row_commit(delete_row, &mut mk_fx(&mut out, &mut present));
     assert!(page.alert.is_open());
@@ -254,57 +293,35 @@ fn a_stale_presscommit_after_the_alert_was_already_dismissed_deletes_nothing() {
     );
 }
 
-/// **The dismissal fade is trapped exactly like the open alert, not only up to the frame
-/// `is_open()` flips false.** `Popover::dismiss` ends input modality on the SAME frame an
-/// answer commits but leaves the panel and its scrim drawing at falling alpha for roughly
-/// half a second more (`visible()`'s doc). This drives a real Cancel and then, with the
-/// alert still `visible()` (fading, never ticked forward), the three concrete things a
-/// stray press could have reached: a switch's `Activate`, the band's `PressCommit` (Done),
-/// and a `Key::Right` at a row's trailing edge — which, aimed at the Delete row itself,
-/// would silently RE-OPEN the very alert that is still dissolving on screen.
+/// **The dismissal fade is trapped exactly like the open alert.** `Popover::dismiss` ends input
+/// modality on the frame an answer commits but leaves the panel drawing for about half a second
+/// more (`visible()`). A click on the Delete row, or a RIGHT at its trailing edge, during that fade
+/// must not re-open the alert that is still dissolving on screen.
 #[test]
-fn the_dismissal_fade_traps_activate_presscommit_and_keys_the_same_as_the_open_alert() {
-    let _reporting = super::offer_reporting_for_test(); // litefin: the upstream rows
+fn the_dismissal_fade_traps_activate_and_keys_the_same_as_the_open_alert() {
     let _g = nj_base::testlock::serial();
     let m = FixtureMeasure;
     let c = test_cx(&m);
     let (mut out, mut present) = sink();
-    let mut page = ConsentPage::settings(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
+    let mut page = PrivacyPage::new(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
     let delete_row = page.key_of(RowId::Delete);
     page.row_commit(delete_row, &mut mk_fx(&mut out, &mut present));
 
-    // Cancel: the alert dismisses (a fade begins) but stays `visible()` until that fade
-    // lands — nothing here ever calls `alert.update`, so it never will during this test.
+    // Cancel: the alert dismisses (a fade begins) but stays `visible()` until that fade lands;
+    // nothing here calls `alert.update`, so it never will during this test.
     out.clear();
     page.alert.set_choice(AlertChoice::Cancel);
     page.alert_answer(false, &mut mk_fx(&mut out, &mut present));
     assert!(!page.alert.is_open(), "Cancel closes the alert logically");
-    assert!(page.alert.visible(), "…but it is still fading — the test is vacuous otherwise");
+    assert!(page.alert.visible(), "...but it is still fading; the test is vacuous otherwise");
 
-    // A click on a switch during the fade must not toggle it.
-    let errors_row = page.key_of(RowId::Errors);
-    let draft_before = page.draft;
     out.clear();
-    page.step(&ScreenEvent::Activate(errors_row), &c, &mut mk_fx(&mut out, &mut present));
-    assert_eq!(draft_before, page.draft, "a click during the fade must not toggle the switch underneath it");
+    page.step(&ScreenEvent::Activate(delete_row), &c, &mut mk_fx(&mut out, &mut present));
+    assert!(!page.alert.is_open(), "a click during the fade must not re-open the alert");
 
-    // A stray band commit during the fade must not run Done, even with a real uncommitted
-    // draft sitting behind it (fabricated here so there is a live Done to press at all).
-    page.draft = (true, true);
-    out.clear();
-    let mut cx_band = test_cx(&m);
-    cx_band.focus.current = Some(FocusKey { entry: EntryId(1), elem: BAND });
-    page.step(&ScreenEvent::PressCommit(PressId(0)), &cx_band, &mut mk_fx(&mut out, &mut present));
-    assert!(
-        !out.iter().any(|s| matches!(&s.fx, Fx::Nav(NavOp::Pop))),
-        "a stray band commit during the fade must not pop the surface (Done)"
-    );
-
-    // A RIGHT press at the Delete row's own trailing edge during the fade must not run
-    // `row_commit` and re-open the very alert that is still fading out.
     out.clear();
     let mut cx_right = test_cx(&m);
-    cx_right.focus.current = Some(FocusKey { entry: EntryId(1), elem: delete_row as u32 });
+    cx_right.focus.current = Some(FocusKey { entry: EntryId(1), elem: delete_row });
     page.step(
         &ScreenEvent::Input(InputEvent {
             at: Tick::default(),
@@ -323,7 +340,7 @@ fn the_dismissal_fade_traps_activate_presscommit_and_keys_the_same_as_the_open_a
 /// hovering the table underneath the alert's scrim still resolves against that table's own
 /// hit stops (the `Activate` arm's own doc explains why those keep registering). The
 /// dispatcher then asks this page's `reconcile` what to do with that stray key every frame,
-/// and `ConsentView::reconcile` correctly refuses to let focus actually land outside the
+/// and `PrivacyView::reconcile` correctly refuses to let focus actually land outside the
 /// alert while it is open — but before this fix it fell back to element 0 (Cancel)
 /// UNCONDITIONALLY whenever the stray key was not itself an alert key, silently overwriting
 /// whatever the person had chosen with the arrow keys. A keyboard user who had navigated
@@ -336,7 +353,7 @@ fn reconcile_keeps_the_alerts_own_choice_when_a_stray_key_names_something_outsid
     let m = FixtureMeasure;
     let c = test_cx(&m);
     let (mut out, mut present) = sink();
-    let mut page = ConsentPage::settings(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
+    let mut page = PrivacyPage::new(EntryId(1), &c, &mut mk_fx(&mut out, &mut present));
     let delete_row = page.key_of(RowId::Delete);
     page.row_commit(delete_row, &mut mk_fx(&mut out, &mut present));
     assert!(page.alert.is_open());

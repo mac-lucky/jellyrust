@@ -591,7 +591,6 @@ pub(crate) fn ended() -> bool {
     SHARED.ended.load(Relaxed)
 }
 pub(crate) fn request_seek(ns: i64) {
-    report::note_seek_for(crate::route::playback_trace_generation());
     crate::route::note_user_seek_intent(ns);
     SHARED.ended.store(false, Relaxed); // seeking back from the end un-ends the stream
     SHARED.pipeline_eos.store(false, Relaxed);
@@ -693,7 +692,7 @@ pub(crate) fn state(ps: &crate::route::PlaybackSession) -> shared::PlaybackState
 /// Pure. Every part is a product identity or a closed vocabulary: the version every surface shares
 /// (`plex::identity`), the firmware release, the set (model · board · hw — the rule
 /// `app::diagnostics::device_rows` states: shared by every unit LG built, saying nothing about a
-/// household) and [`FailureKind::code`], the same string the telemetry channel sends. It never
+/// household) and [`FailureKind::code`]. It never
 /// carries `ErrorShape::detail`, the server's free text, which is the one thing here that could
 /// name a file.
 pub(crate) fn support_line(kind: FailureKind) -> String {
@@ -744,13 +743,10 @@ fn support_line_of(i: &nj_platform::tv::device::Info, hw: &nj_platform::tv::devi
 /// they can never disagree about what happened. `no_pass` is the read-out's cue to draw the
 /// filled PLEX PASS capsule: a support FACT beside the reason, never the cause (see the arm
 /// comment above).
-/// **Why a playback failed, as a closed set.** Drives the wording below AND the telemetry code, so
+/// **Why a playback failed, as a closed set.** Drives the wording below AND the stable code, so
 /// the two are one decision.
 ///
-/// Current variants are outcomes `error_shape` can tell apart. The retired `original_rollback`
-/// wire code (the destructive probe transaction was removed) has no cause here any more and lives
-/// on only as `telemetry::classes::FailureClass::OriginalRollback`, so old telemetry fixtures and
-/// dashboards retain their meaning. Runtime source, interrupted-playback and `Load` failures became
+/// Current variants are outcomes `error_shape` can tell apart. Runtime source, interrupted-playback and `Load` failures became
 /// distinct only when their worker signals existed. A video-plane bind or stalled feed still
 /// reaches [`Unspecified`](FailureKind::Unspecified) until an equally concrete signal exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -792,30 +788,22 @@ pub(crate) enum FailureKind {
 }
 
 impl FailureKind {
-    /// The telemetry wire class of this cause. The wire schema is telemetry's
-    /// (`telemetry::classes::FailureClass`), so this match is the ONE place the player's own enum
-    /// is turned into it, and a new variant cannot compile without choosing its class.
-    pub(crate) fn class(self) -> crate::telemetry::classes::FailureClass {
-        use crate::telemetry::classes::FailureClass as C;
-        match self {
-            FailureKind::DecisionRefused => C::DecisionRefused,
-            FailureKind::PlaybackPolicy => C::PlaybackPolicy,
-            FailureKind::NoVideoTranscodeTarget => C::NoVideoTranscodeTarget,
-            FailureKind::NoVideoTrack => C::NoVideoTrack,
-            FailureKind::MediaSource => C::MediaSource,
-            FailureKind::PlaybackInterrupted => C::PlaybackInterrupted,
-            FailureKind::TvPipeline => C::TvPipeline,
-            FailureKind::JailMissingRtkmem => C::JailMissingRtkmem,
-            FailureKind::LoadTimeout => C::LoadTimeout,
-            FailureKind::ReleaseTimeout => C::ReleaseTimeout,
-            FailureKind::Unspecified => C::Unspecified,
-        }
-    }
-
-    /// The stable wire code, which is its class's: the read-out's support line and the telemetry
-    /// channel quote one string because they read one table.
+    /// The stable code the read-out's support line quotes, so a photographed read-out names the
+    /// cause in a form that does not change with the wording.
     pub(crate) fn code(self) -> &'static str {
-        self.class().code()
+        match self {
+            FailureKind::DecisionRefused => "decision_refused",
+            FailureKind::PlaybackPolicy => "playback_policy",
+            FailureKind::NoVideoTranscodeTarget => "no_video_transcode_target",
+            FailureKind::NoVideoTrack => "no_video_track",
+            FailureKind::MediaSource => "media_source",
+            FailureKind::PlaybackInterrupted => "playback_interrupted",
+            FailureKind::TvPipeline => "tv_pipeline",
+            FailureKind::JailMissingRtkmem => "jail_missing_rtkmem",
+            FailureKind::LoadTimeout => "load_timeout",
+            FailureKind::ReleaseTimeout => "release_timeout",
+            FailureKind::Unspecified => "unspecified",
+        }
     }
 }
 
@@ -2519,12 +2507,10 @@ mod tests {
         assert!(server.readout.contains("server"));
     }
 
-    /// **Each cause converts to its own telemetry class, under the code it always had.** The class
-    /// enum is telemetry's and the match that fills it is this layer's, so a copy-paste that sent
-    /// two causes to one class would merge two dashboard series without any compile error. (The
-    /// retired `original_rollback` code has no cause here; its class is exercised by telemetry.)
+    /// **Each cause keeps its own stable code.** Two causes sharing one code would make two
+    /// different failures read the same on a photographed read-out.
     #[test]
-    fn every_failure_kind_converts_to_its_own_stable_wire_class() {
+    fn every_failure_kind_has_its_own_stable_code() {
         use FailureKind as K;
         let table = [
             (K::DecisionRefused, "decision_refused"),
@@ -2541,12 +2527,7 @@ mod tests {
         ];
         for (kind, code) in table {
             assert_eq!(kind.code(), code, "{kind:?}");
-            assert_eq!(kind.class().code(), code, "{kind:?}");
         }
-        let mut classes: Vec<_> = table.iter().map(|(kind, _)| kind.class().code()).collect();
-        classes.sort_unstable();
-        classes.dedup();
-        assert_eq!(classes.len(), table.len(), "two causes share one wire class");
     }
 
     /// **The owner's bug**: under Force Direct Play the read-out offered the Quality ladder, whose
@@ -3254,7 +3235,7 @@ mod tests {
             );
             let e = error_shape(false, false, Sub::Unknown, None, cause);
             assert_eq!(e.kind, kind);
-            assert_eq!(e.kind.code(), code, "the Sentry/usage wire code is stable");
+            assert_eq!(e.kind.code(), code, "the failure code is stable");
             assert!(
                 !e.readout.is_empty(),
                 "a terminal runtime failure must explain what stopped"

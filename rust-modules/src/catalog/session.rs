@@ -4253,22 +4253,6 @@ fn auto_quality_ready() -> bool {
     AUTO_QUALITY_READY.get().is_none_or(|ready| ready())
 }
 
-/// **The telemetry/consent legacy-file sweep that follows a durable canonical clear**
-/// ([`clear_for_erase`]'s ARM arm): `telemetry` owns the files and sits above `plex`, so the app
-/// installs its `cleanup_after_account_clear` as a hook ([`install_account_clear_cleanup`];
-/// `app::boot::install_plex_seams`). It answers whether every candidate was retired. Unset there is
-/// nothing registered to retire, which reads as retired, so the "could not be retired" branch is
-/// never taken without a sweep that failed. Compiled where the sweep is: ARM, not the simulator,
-/// not a test build.
-#[cfg(all(target_os = "linux", target_arch = "arm", not(feature = "hostsim"), not(test)))]
-static ACCOUNT_CLEAR_CLEANUP: std::sync::OnceLock<fn() -> bool> = std::sync::OnceLock::new();
-
-/// Install the sweep [`ACCOUNT_CLEAR_CLEANUP`] runs. Once; later calls are ignored.
-#[cfg(all(target_os = "linux", target_arch = "arm", not(feature = "hostsim"), not(test)))]
-pub(crate) fn install_account_clear_cleanup(sweep: fn() -> bool) {
-    let _ = ACCOUNT_CLEAR_CLEANUP.set(sweep);
-}
-
 /// **Hand the scrubber this household's names**, so `nj_base::eventlog::log` can redact them without ever
 /// touching this module.
 ///
@@ -4920,13 +4904,13 @@ fn has_protected_authority() -> bool {
 ///
 /// The 0600 mode is [`save`]'s rule applied one file earlier: the secret must never *exist* in a
 /// permissive mode, and the tmp file is where it exists first.
-/// `pub(crate)` since 2026-08-29 so `crate::telemetry` writes its file the same way rather than
-/// growing a second implementation of this. It is a generic 0600 atomic write that happens to live
+/// `pub(crate)` so other writers use it rather than growing a second implementation of this.
+/// It is a generic 0600 atomic write that happens to live
 /// beside its first caller; the alternative was two copies of a routine whose whole value is that
 /// its failure modes have already been found once, on the file holding the credentials.
 ///
 /// Returns the [`WriteFailure`] the OS actually gave, rather than a bare no: a caller trying
-/// several candidates (session save's own fallback, the crash watermark, the telemetry spool) used
+/// several candidates (session save's own fallback, for one) used
 /// to be left with "none of them took it" and nothing that could tell EACCES (a jail whose
 /// permissions changed) from EROFS (a mount gone read-only) from ENOENT (a directory a factory
 /// reset removed) apart — see [`save_legacy_fallback_locked`], the one caller that now reports the
@@ -4965,7 +4949,7 @@ pub(crate) fn write_atomic(path: &std::path::Path, json: &[u8]) -> Result<(), Wr
 /// Why one candidate refused an atomic write. Errno-bearing where the OS actually returned one —
 /// [`Self::errno`] — so a reader (the field log today; the failure read-out's Details card,
 /// `screens::login::support_line`) can tell EACCES from EROFS from ENOENT instead of a bare no.
-/// Never sent over the network: no path, uid, gid or mode belongs in `telemetry::incident`'s closed
+/// Never sent over the network: no path, uid, gid or mode belongs in `auth::incident`'s closed
 /// vocabulary (see that module's doc), so this type stays local to the write path and its callers'
 /// own logging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5009,7 +4993,7 @@ pub(crate) struct ParentStat {
 
 /// One candidate [`write_atomic`] tried: where, what its parent directory looked like, and why it
 /// refused. Built for the field log ([`save_legacy_fallback_locked`]) — local diagnostic evidence
-/// only, never folded into `telemetry::incident::IncidentContext`.
+/// only, never folded into `auth::incident::IncidentContext`.
 #[derive(Debug, Clone)]
 pub(crate) struct CandidateDiagnostic {
     pub path: std::path::PathBuf,
@@ -5329,27 +5313,7 @@ pub(crate) fn clear_for_erase(all_local: bool, retry_language: Option<nj_platfor
             // clean. `cleanup_after_confirmed_clear` re-reads the authority to confirm it really is
             // Cleared before retiring anything, so this can only ever remove residue, never data a
             // concurrent re-login just wrote.
-            #[allow(unused_mut)] // only mutated on the ARM cfg arm below
-            let mut outcome = clear_cleanup_outcome(persistence::cleanup_after_confirmed_clear());
-            // Telemetry/consent's own legacy files are a SEPARATE candidate set from the session
-            // auth-token sweep above (`persistence::cleanup_after_confirmed_clear` never touches
-            // them — see `paths::telemetry_candidates` vs `paths::session_migration_candidates`).
-            // On ARM, `telemetry::persistence::forget_at` defers their removal to exactly this
-            // moment, once this canonical commit is confirmed durable (Copilot review on PR #105,
-            // finding 7; ported from `release/v0.6`'s `telemetry::cleanup_after_account_clear`,
-            // called here in that release).
-            #[cfg(all(target_os = "linux", target_arch = "arm", not(feature = "hostsim"), not(test)))]
-            if !ACCOUNT_CLEAR_CLEANUP.get().is_none_or(|sweep| sweep()) {
-                nj_base::eventlog::log(
-                    "session: canonical clear is durable but a telemetry/consent legacy \
-                     candidate could not be retired — it remains on disk and will be swept \
-                     again on the next sign-out",
-                );
-                if let ClearOutcome::Durable { legacy_swept } = &mut outcome {
-                    *legacy_swept = false;
-                }
-            }
-            outcome
+            clear_cleanup_outcome(persistence::cleanup_after_confirmed_clear())
         }
         persistence::CanonicalCommit::Uncertain { stage, errno, helper } => {
             nj_base::eventlog::log(&format!(

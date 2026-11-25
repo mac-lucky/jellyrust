@@ -56,23 +56,6 @@ fn a_restart_acts_only_on_the_wait_that_earned_it() {
     );
 }
 
-/// **One `SignInStarted` per attempt**, which `diag::schema` states as a contract: a start is
-/// bracketed by exactly one completed/failed/cancelled. Both of the sign-in screen's timed
-/// escapes restart a wait that is still UNSETTLED, so reporting a second start against the one
-/// settle that eventually follows would leave every stalled sign-in over-counted.
-#[test]
-fn restarting_a_live_wait_is_the_same_attempt_carrying_on() {
-    assert!(
-        !restart_is_a_new_attempt(true),
-        "a stalled spinner or an unscanned code is already being counted"
-    );
-    assert!(
-        restart_is_a_new_attempt(false),
-        "…while an error read-out has reported its failure and the next press opens a new \
-         bracket"
-    );
-}
-
 /// A scripted pin: answers from a list, and a clock that moves only when the loop waits or
 /// polls. A fifteen-minute pin therefore runs to its death in microseconds.
 struct ScriptedPin {
@@ -444,7 +427,7 @@ fn a_single_miss_reports_no_link_trouble() {
 /// and the PinExpired report used to carry neither the answer nor the run of misses.
 #[test]
 fn an_expiry_after_refused_polls_carries_what_they_answered() {
-    use crate::telemetry::incident::{LinkClass, UnansweredBucket};
+    use crate::auth::incident::{LinkClass, UnansweredBucket};
     let mut answers = vec![PinPoll::Pending];
     answers.extend((0..40).map(|_| PinPoll::Unreachable(Ok(429))));
     let mut w = ScriptedPin::new(answers);
@@ -453,10 +436,10 @@ fn an_expiry_after_refused_polls_carries_what_they_answered() {
         panic!("the code must run out");
     };
     let incident = expired_incident(&tail, MAX_PIN_GENERATIONS);
-    assert_eq!(incident.kind, crate::telemetry::incident::IncidentKind::PinExpired);
+    assert_eq!(incident.kind, crate::auth::incident::IncidentKind::PinExpired);
     assert_eq!((incident.link, incident.http_status), (LinkClass::Answered4xx, Some(429)));
     assert_eq!(incident.unanswered, UnansweredBucket::TwoToFive);
-    assert_ne!(incident.failing_for, crate::telemetry::incident::FailingForBucket::None);
+    assert_ne!(incident.failing_for, crate::auth::incident::FailingForBucket::None);
     assert_eq!(incident.code_generation, Some(4));
 
     // A code nobody scanned, on a link that answered every time, says exactly that.

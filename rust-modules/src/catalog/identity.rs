@@ -43,10 +43,14 @@ pub(crate) const PRODUCT: &str = "JellyRust";
 /// **A release reports the package version exactly; anything else reports the next MINOR with a
 /// `-dev` suffix** — `0.5.0` published, `0.6.0-dev` in the tree, because trunk is where features
 /// land and a patch is cut from an existing minor's own line. `rust-modules/build.rs` is where
-/// that rule is written and why. Every other surface that reports a version — the telemetry
-/// release, the lab snapshot, the usage context — reads the same `NJ_VERSION`, so they cannot
-/// drift apart.
+/// that rule is written and why. Every other surface that reports a version — the boot log, the
+/// lab snapshot, the diagnostics panel — reads the same `NJ_VERSION`, so they cannot drift apart.
 pub(crate) const VERSION: &str = env!("NJ_VERSION");
+
+/// The version as one tag, `nativejelly@X.Y.Z`, written to the event log at boot.
+/// `ci/check-package.py` reads it out of the shipped binary to prove the build reports the version
+/// it was packaged as.
+pub(crate) const VERSION_TAG: &str = concat!("nativejelly@", env!("NJ_VERSION"));
 
 pub(crate) const PLATFORM: &str = "webOS";
 
@@ -162,7 +166,7 @@ mod tests {
     ///
     /// A release commit leaves every tracked file at the version it just published, so every
     /// developer build after it reported that exact number: to `X-Plex-Version` on the account's
-    /// authorized-devices list, to Sentry as `nativejelly@X.Y.Z`, and on the diagnostics panel that
+    /// authorized-devices list, in the boot log as `nativejelly@X.Y.Z`, and on the diagnostics panel that
     /// is designed to be photographed into a bug report. Nothing downstream could tell the shipped
     /// binary from a working tree. So a non-release build names the version it is working TOWARDS,
     /// suffixed — `0.5.0` published, `0.6.0-dev` in the tree, the next MINOR because trunk is where

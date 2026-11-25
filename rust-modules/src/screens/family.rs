@@ -5,7 +5,7 @@
 //! engine's focus and naming its element keys.
 //!
 //! Not a screen: `screens/mod.rs`'s rule that a screen never names a sibling is what this module
-//! exists to satisfy — Legal pushes a document, Privacy pushes a preview, the root pushes all of
+//! exists to satisfy — Legal pushes a document, the root pushes all of
 //! them, and each names the destination through this vocabulary rather than through the module
 //! that implements it.
 
@@ -74,7 +74,7 @@ pub(crate) enum SettingsPage {
     AudioSubtitles,
     /// Favorite libraries — the onboard screen in Settings mode.
     Favourites,
-    /// Privacy & data — the consent screen in Settings mode.
+    /// Privacy & data.
     Privacy,
     /// The Legal index.
     Legal,
@@ -82,10 +82,6 @@ pub(crate) enum SettingsPage {
     About,
     /// One Legal document, by index into `screens::legal`'s page list.
     Document(u8),
-    /// One Privacy preview document (`screens::consent::Preview`).
-    Preview(u8),
-    /// The FIRST-RUN consent question: one stage per page, the second pushed over the first.
-    ConsentStage(u8),
     /// One playback / account preference's choice list, pushed from Playback or Audio & Subtitles.
     Picker(PickerKind),
     /// What BACK does at a root (`screens::root_back`).
@@ -122,10 +118,10 @@ impl SettingsPage {
     /// The pages a boot target opens the surface over, root first, so BACK from it lands where an
     /// interactive visit would and the Settings root's category list stands beside it:
     /// `nativejelly-settings=picker-…` is root → Playback → the picker, any other page root → the
-    /// page. The root and a first-run consent stage are booted alone.
+    /// page. The root is booted alone.
     pub(crate) fn boot_trail(self) -> Vec<SettingsPage> {
         match self {
-            SettingsPage::Root | SettingsPage::ConsentStage(_) => vec![self],
+            SettingsPage::Root => vec![self],
             SettingsPage::Picker(kind) => vec![SettingsPage::Root, kind.parent(), self],
             page => vec![SettingsPage::Root, page],
         }
@@ -159,8 +155,6 @@ impl ScreenArg for SettingsPage {
             SettingsPage::Legal => 103,
             SettingsPage::About => 104,
             SettingsPage::Document(_) => 105,
-            SettingsPage::Preview(_) => 106,
-            SettingsPage::ConsentStage(_) => 107,
             SettingsPage::Picker(_) => 112,
             SettingsPage::RootBack => 113,
         })
@@ -200,7 +194,7 @@ impl LogicalState for SettingsPage {
             | SettingsPage::Legal
             | SettingsPage::About
             | SettingsPage::RootBack => 0,
-            SettingsPage::Document(i) | SettingsPage::Preview(i) | SettingsPage::ConsentStage(i) => *i,
+            SettingsPage::Document(i) => *i,
             SettingsPage::Picker(kind) => *kind as u8,
         });
     }
@@ -216,12 +210,10 @@ impl LogicalState for SettingsPage {
             SettingsPage::Legal => "legal",
             SettingsPage::About => "about",
             SettingsPage::Document(_) => "document",
-            SettingsPage::Preview(_) => "preview",
-            SettingsPage::ConsentStage(_) => "stage",
             SettingsPage::Picker(_) => "picker",
             SettingsPage::RootBack => "root-back",
         });
-        if let SettingsPage::Document(i) | SettingsPage::Preview(i) | SettingsPage::ConsentStage(i) = self {
+        if let SettingsPage::Document(i) = self {
             out.push_str(&format!("[{i}]"));
         }
         if let SettingsPage::Picker(kind) = self {
@@ -383,8 +375,6 @@ mod tests {
             SettingsPage::Legal,
             SettingsPage::About,
             SettingsPage::Document(0),
-            SettingsPage::Preview(0),
-            SettingsPage::ConsentStage(0),
             SettingsPage::Picker(PickerKind::Quality),
             SettingsPage::RootBack,
         ];
@@ -394,7 +384,7 @@ mod tests {
         assert_eq!(ids.len(), pages.len(), "two SettingsPage variants must not share a ScreenId");
     }
 
-    /// `Document`/`Preview`/`ConsentStage` carry an index that does not change WHICH kind of page
+    /// `Document` carries an index that does not change WHICH kind of page
     /// they are — the id is the variant's, not the index's — so two different documents still
     /// name the same `ScreenId` (which is exactly right: `NavStack::apply`'s `NavOp::Root` arm
     /// compares `same_instance`, not `id()`, for identity, and `id()` alone is only ever a KIND).
@@ -402,8 +392,6 @@ mod tests {
     fn an_indexed_variant_s_id_does_not_vary_with_its_index() {
         use crate::ui::screen::ScreenArg;
         assert_eq!(SettingsPage::Document(0).id(), SettingsPage::Document(5).id());
-        assert_eq!(SettingsPage::Preview(0).id(), SettingsPage::Preview(3).id());
-        assert_eq!(SettingsPage::ConsentStage(0).id(), SettingsPage::ConsentStage(1).id());
         // …but `same_instance` still tells them apart, since it is bare equality here:
         assert!(!SettingsPage::Document(0).same_instance(&SettingsPage::Document(1)));
     }

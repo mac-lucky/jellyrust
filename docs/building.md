@@ -16,8 +16,8 @@ Windows and needs no webOS NDK; run `tools/sim.ps1 setup` there.
 
 - The **webOS NDK**, fetched by `make setup-env` (a few hundred MB, once).
 - A **Rust nightly** toolchain with `rust-src` (for `-Z build-std`) and `clippy` (the lint gate).
-- **CMake** — the normal build cross-compiles Sentry Native, and `ci/build-sentry-native.sh` stops
-  with an explicit error without it.
+- **CMake** and `pkg-config`, for the cross-compiled libass stack (`ci/build-libass.py` stops with
+  an explicit error without them).
 - `sshpass`, for the deploy/run targets that talk to a television. Optional if your ssh key is
   authorized on it: `tools/tv-ssh` tries the key first and falls back to the password only when the
   key is refused.

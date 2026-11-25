@@ -798,10 +798,6 @@ fn erased_publication_waits_for_carried_resource_completion() {
     assert_eq!(rig.auth_read().0.delete_leftovers, 2);
     assert!(rig.session.snapshot_init().pending_erase.is_none());
     assert!(rig.take_reqs().iter().any(|req| matches!(req, LoopReq::LocalDataErased)));
-    let events = &rig.session_adapter.fixture_resources().coordinator_events;
-    assert!(matches!(events.first(), Some(crate::auth::owner::CoordinatorAction::CloseTelemetry)));
-    assert!(!events.iter().any(|event| matches!(event, crate::auth::owner::CoordinatorAction::SignInStarted)),
-        "a carried start cannot launch before erase completion");
     execute_session_command(&mut d, Command::StartLogin);
     d.emit(MachineId::Session, Fx::Deliver(MachineId::Session, Delivery::Machine(AppMsg::Session(
         crate::auth::owner::SessionEvent::Erased { epoch: erased_epoch, leftovers: 99 }))));

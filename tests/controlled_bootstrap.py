@@ -86,11 +86,7 @@ def main():
             'user': {'uuid': 'UnrelatedSyntheticProfile', 'title': 'UnrelatedSyntheticName'},
             'playback_quality': 'auto',
         }))
-        (root / 'telemetry.json').write_text(json.dumps({
-            'asked_version': 4, 'errors': True, 'usage': True,
-            'install_id': 'UnrelatedSyntheticInstall', 'errors_id': 'UnrelatedSyntheticErrors',
-        }))
-        for name, value in [('settings', 'root'), ('consent', 'product'), ('token', 'UnrelatedSyntheticToken'),
+        for name, value in [('settings', 'root'), ('token', 'UnrelatedSyntheticToken'),
                             ('logintest', ''), ('firstrun', ''), ('playbackquality', 'auto'),
                             ('ffprobe', 'http://203.0.113.10:9')]:
             (root / ('nativejelly-' + name)).write_text(value)
@@ -270,7 +266,7 @@ def main():
             'unsupported-blobs': lambda m, r: m.__setitem__('blobs', True),
             'unsupported-authority': lambda m, r: m['init']['data']['session'].__setitem__('authority', {'Account': {'extras': []}}),
             'missing-state-grade': lambda m, r: r.__setitem__(slice(None), [row for row in r if not (row['t'] == 'st' and row['f'] == 0)]),
-            'changed-hidden-init': lambda m, r: m['init']['data']['consent'].__setitem__('usage', True),
+            'changed-hidden-init': lambda m, r: m['init']['data'].__setitem__('settings', 'legal'),
             'wrong-binding': lambda m, r: next(row for row in r if row['t'] == 'async')['payload'].__setitem__('client', 77),
             'wrong-address': lambda m, r: next(row for row in r if row['t'] == 'async').__setitem__('to', 'store:9'),
             'unsupported-result': lambda m, r: next(row for row in reversed(r) if row['t'] == 'async')['payload'].__setitem__('kind', 'unimplemented'),

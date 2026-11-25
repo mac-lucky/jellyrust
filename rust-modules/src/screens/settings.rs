@@ -59,8 +59,6 @@ use super::registry::{word, AppFx, DirectoryLike};
 pub(crate) enum Family {
     /// Settings, over a live page: scrim + ambient ground sampled off the host.
     Settings,
-    /// The first-run consent question: a route surface of its own on the hero-keyed ground.
-    FirstRunConsent,
 }
 
 /// The `Family::Settings` scrim's ink alpha: the surface's own appear (`local_alpha`, the
@@ -140,7 +138,7 @@ impl RouteSurface {
         id: InstanceId,
         kind: Family,
         root: SettingsPage,
-        hubs: crate::catalog_fetch::HubsView<'_>,
+        _hubs: crate::catalog_fetch::HubsView<'_>, // the first-run consent ground's input, unused since it left
     ) -> Self {
         let mut s = Self {
             entry,
@@ -149,7 +147,7 @@ impl RouteSurface {
             inner: NavStack::new(Box::new(Immediate)),
             ids: Minter::default(),
             push: Push::new(),
-            ground: if kind == Family::FirstRunConsent { super::family::pre_home_ground(hubs) } else { RouteGround::new() },
+            ground: RouteGround::new(),
             ground_ready: false,
             remembered: Vec::new(),
             boot: Vec::new(),
@@ -466,11 +464,7 @@ fn mount_page(
         SettingsPage::Legal => Box::new(super::legal::LegalIndex::new(entry)),
         SettingsPage::About => Box::new(super::legal::DocumentPage::about(entry)),
         SettingsPage::Document(i) => Box::new(super::legal::DocumentPage::legal(entry, i)),
-        SettingsPage::Privacy => Box::new(super::consent::ConsentPage::settings(entry, cx, fx)),
-        SettingsPage::Preview(i) => Box::new(super::consent::PreviewPage::new(entry, i)),
-        SettingsPage::ConsentStage(i) => {
-            Box::new(super::consent::ConsentPage::first_run(entry, i, cx, fx))
-        }
+        SettingsPage::Privacy => Box::new(super::privacy::PrivacyPage::new(entry, cx, fx)),
         SettingsPage::Favourites => Box::new(super::onboard::OnboardScreen::settings(entry, cx.views)),
         SettingsPage::Picker(kind) => Box::new(super::preferences::PickerPage::new(entry, kind)),
         SettingsPage::RootBack => Box::new(super::root_back::RootBackPage::new(entry)),
@@ -512,18 +506,14 @@ fn mount_page(
 ///  * `PickerPage` (one preference's choice list, `SettingsPage::Picker`): which field, the
 ///    selected option's position, the checked option, pending/error presentation and the Force
 ///    acknowledgement state. See `screens::preferences::PICKER_SHAPE`.
-///  * `ConsentPage` (Privacy & data, and each first-run stage) → `ConsentState`: the mode, both
-///    halves of the draft decision, and whether the delete alert is up.
+///  * `PrivacyPage` (Privacy & data) → `PrivacyState`: whether the delete alert is up and its
+///    scroll.
 ///  * `OnboardScreen` (Favorite libraries) → `OnboardState`: whether it is the Settings or the
 ///    first-run instance, whether it currently HAS an action band (the group set the engine is
 ///    reasoning about, cached at `rebuild` for the reason that field's own doc gives), and the
 ///    whole draft pin list.
 ///  * `DocumentPage` (the six Legal documents and About) → `DocState`: WHICH document, and its
 ///    reading position in whole `document_reader::STEP`s.
-///  * `PreviewPage` (the five Privacy previews) → `PreviewState`: which preview. **Its reading
-///    position is NOT in the hash**, so two frames of one preview scrolled to different places
-///    are one word to a replay — the same gap `DocState::pos` closed for the Legal documents.
-///    The fix belongs in `screens::consent`, beside the reader that owns the position, not here.
 ///
 /// That last bullet is why this doc used to be worth distrusting and is worth reading now. It
 /// said the finer half "rides in through each body's own `state().hash()`" and stopped there,
@@ -580,7 +570,6 @@ impl LogicalState for RouteSurface {
     fn probe(&self, out: &mut String) {
         out.push_str(match self.kind {
             Family::Settings => "settings",
-            Family::FirstRunConsent => "consent",
         });
         // one segment per page, bottom of the stack first, so a divergence report reads as the
         // path the surface is standing on rather than as a single opaque word
@@ -867,14 +856,10 @@ impl<H: DirectoryLike> Screen<H> for RouteSurface {
                 // 2.1, 9): no wash keyed off the host
                 root.alpha(a).rect(Rect::FULL, 0.0, theme::SURFACE_APP, theme::SURFACE_APP, 0.0);
             }
-            Family::FirstRunConsent => {
-                self.ground.draw_home(root);
-            }
         }
         self.ground_ready = a >= 0.995;
         let entrance = match self.kind {
             Family::Settings => root.alpha(settings_entrance_alpha(a, f.nav_page_alpha)),
-            Family::FirstRunConsent => root.alpha(a).translate(Rect::FULL.w * (1.0 - a), 0.0),
         };
         self.draw_pages(f, entrance);
     }
@@ -1035,10 +1020,10 @@ fn root_row_for(page: SettingsPage) -> Option<RowKey> {
         SettingsPage::AudioSubtitles => RootId::AudioSubtitles,
         SettingsPage::Language | SettingsPage::Contribute => RootId::Language,
         SettingsPage::RootBack => RootId::RootBack,
-        SettingsPage::Privacy | SettingsPage::Preview(_) => RootId::Privacy,
+        SettingsPage::Privacy => RootId::Privacy,
         SettingsPage::Legal | SettingsPage::Document(_) => RootId::Legal,
         SettingsPage::About => RootId::About,
-        SettingsPage::Root | SettingsPage::ConsentStage(_) => return None,
+        SettingsPage::Root => return None,
     };
     Some(id.key())
 }

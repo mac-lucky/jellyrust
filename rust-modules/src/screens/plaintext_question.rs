@@ -483,7 +483,6 @@ mod tests {
                 msg::settings_cancel_c(),
                 msg::settings_delete_c(),
                 msg::settings_plaintext_not_now_c(),
-                msg::settings_login_send_report_c(),
                 msg::settings_login_close_c(),
                 msg::settings_playback_enable_force_c(),
                 msg::widgets_repair_action_c(),

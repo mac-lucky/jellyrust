@@ -1011,11 +1011,6 @@ class FpsIdentity(unittest.TestCase):
         self.assertEqual(run.parse_fps(lines, "home", "legal"), [58])
 
     def test_first_run_routes_have_the_50_fps_contract(self):
-        lines = [
-            "loop=60 route=home fps=7",
-            "loop=60 route=home overlay=consent fps=60",
-        ]
-        self.assertEqual(run.parse_fps(lines, "home", "consent"), [60])
         scenes = {s["name"]: s for s in _manifest()["fps_scenes"]}
 
         sources = scenes["onboard-sources"]
@@ -1025,16 +1020,6 @@ class FpsIdentity(unittest.TestCase):
         self.assertGreaterEqual(sources["fps_floor"], 50)
         self.assertTrue(sources["triggers"]["nativejelly-firstrun"])
         self.assertTrue(sources["triggers"]["nativejelly-onboardosc"])
-
-        for name, stage in (("consent-crash", "crash"), ("consent-product", "product")):
-            with self.subTest(scene=name):
-                scene = scenes[name]
-                self.assertEqual(scene["route"], "home")
-                self.assertEqual(scene["overlay"], "consent")
-                self.assertGreaterEqual(scene["loop_floor"], 50)
-                self.assertGreaterEqual(scene["fps_floor"], 50)
-                self.assertEqual(scene["triggers"]["nativejelly-consent"], stage)
-                self.assertTrue(scene["triggers"]["nativejelly-consentosc"])
 
     def test_settings_scenes_carry_the_50_fps_contract_and_idle_inverse(self):
         scenes = {s["name"]: s for s in _manifest()["fps_scenes"]}

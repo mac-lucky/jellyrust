@@ -14,15 +14,6 @@
   "data": {
    "automated": true,
    "clock_start": 0,
-   "consent": {
-    "asked_version": 0,
-    "errors": false,
-    "errors_declined_scope": 0,
-    "errors_scope": 0,
-    "usage": false,
-    "usage_declined_scope": 0,
-    "usage_scope": 0
-   },
    "entropy": {
     "Seeded": 1
    },
@@ -100,10 +91,7 @@
     "error": "",
     "held_handoff": null,
     "inbox": [],
-    "incident": null,
-    "incidents_seen": [],
     "link_trouble": false,
-    "next_incident": 0,
     "next_qr": 0,
     "next_req": 0,
     "pending": {},
@@ -169,7 +157,7 @@
    ],
    "version": 1
   },
-  "hash": 18417354958855243554,
+  "hash": 3427804911682488651,
   "probe": "controlled=home version=1"
  },
  "schema": 3,

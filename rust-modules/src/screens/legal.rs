@@ -23,8 +23,9 @@ use super::registry::word;
 
 /// **The one contact the application prints**: the project's issue tracker, with no email
 /// address. `every_document_prints_only_the_one_contact` scans the documents for stray `@`s and
-/// for any other `/issues` link; `screens::consent` imports it.
-pub(crate) const CONTACT_LINK: &str = "github.com/mac-lucky/jellyrust/issues";
+/// for any other `/issues` link.
+#[cfg(test)]
+const CONTACT_LINK: &str = "github.com/mac-lucky/jellyrust/issues";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Page {
@@ -75,12 +76,6 @@ impl Page {
             Self::Contact => &CONTACT,
         }
     }
-}
-
-/// The full privacy policy — the one narrative the consent screen's Privacy policy row also
-/// opens, so the two doors cannot disagree.
-pub(crate) fn privacy_policy() -> &'static str {
-    &PRIVACY
 }
 
 static PRIVACY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| [
@@ -568,7 +563,7 @@ mod tests {
     ///   different artefact.
     /// * `session.rs` persists `recent_searches` — the exact search terms, per Home profile — plus
     ///   per-server tokens and server addresses.
-    /// * This fork compiles no reporting endpoint in (`telemetry/sender.rs`, `docs/litefin-fork.md`):
+    /// * This fork has no reporting code at all (`docs/litefin-fork.md`):
     ///   the Jellyfin server is the only network peer, so the policy names no reporting service,
     ///   no reporting identifier and no optional report.
     /// * The sign-in is stored OUTSIDE the app directory on purpose (`paths.rs`), so it survives a

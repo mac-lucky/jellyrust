@@ -20,8 +20,8 @@ filled by rank) give way where Litefin's look says otherwise.
   published from here.
 - Remotes: `origin` is GitHub `mac-lucky/jellyrust` (public). `upstream` is sostk, fetch only.
   Actions runs upstream's `ci.yml` and `simulators.yml` on every push and PR, and `release.yml`
-  on dispatch (it bumps the version, pushes the bump and tag to `main`, builds with
-  `telemetry: none` and publishes; it needs `docs/release-notes/vX.Y.Z.md` and
+  on dispatch (it bumps the version, pushes the bump and tag to `main`, builds and publishes;
+  it needs `docs/release-notes/vX.Y.Z.md` and
   `docs/release-audits/vX.Y.Z.md` for the new version first). `nightly.yml`, `pages.yml` and
   `ci-metrics.yml` are disabled in the repo settings, not deleted, so upstream merges stay small.
   The simulator job does not replay upstream's recordings in `tests/fixtures/replay/`: they walk
@@ -31,15 +31,22 @@ filled by rank) give way where Litefin's look says otherwise.
   branch is the head of webosbrew/apps-repo#280, beside the IPTV app). Change both together;
   its screenshots are `docs/screenshots/jellyrust/`, pinned to the release tag.
 - Branch `main` carries everything and is public: never rewrite or force-push it. Sync upstream with
-  `git fetch upstream && git merge upstream/main`, then `make check` and fresh sim screenshots. Expect conflicts where upstream touches the id or name.
+  `git fetch upstream && git merge upstream/main`, then `make check` and fresh sim screenshots.
+  Expect conflicts where upstream touches the id or name, and modify/delete conflicts wherever it
+  touches the telemetry code this fork deleted (`rust-modules/src/telemetry/`,
+  `rust-modules/src/diag/`, the consent screens, `src/sentry_context.c`, Sentry Native's build):
+  keep the deletion (`git rm`), and port by hand only a change that also matters outside
+  telemetry. `player/report.rs` stays, cut down to the playback attempt counter.
 - Credits: `CONTRIBUTORS.md` and the About page (`settings.about.body`, all five locales) list the
   maintainer, the upstream authors (from `git shortlog -sn upstream/main`, names only) and the
   Litefin design credit; keep the two in step. The GPL notices of Native Jelly and PlxNative stay.
 - Look spec: `docs/litefin-look.md`. Reference shots: `docs/litefin-ref/`, downscaled to
   1920x1080, so the spec's "halve the coordinates" note no longer applies. UI map and slice
   ownership: `docs/litefin-map.md`.
-- Telemetry is off in this fork: no endpoint can be compiled in (`telemetry/sender.rs` ignores
-  `NJ_SENTRY_DSN`/`NJ_POSTHOG_KEY`), no crash or analytics data is spooled, and plex.tv and Plex's
+- No telemetry: this fork deleted upstream's crash reporting (Sentry, including the Sentry Native
+  `sentry-crash` handler), product analytics (PostHog), the report queue and the consent screens.
+  Never bring any of it back in a merge. The local crash log (`src/crashtrace.c`,
+  `nativejelly-crash.log`, `tools/crash-report.sh`) and the event log stay. plex.tv and Plex's
   metadata provider are never dialled (`catalog/account.rs` loopback guard, `catalog/discover.rs`).
   The only network peer is the household's Jellyfin server.
 - Gate: `make check` (machine-wide lock, ~10 min cold). Inner loop: `make test-fast T=<filter>`.

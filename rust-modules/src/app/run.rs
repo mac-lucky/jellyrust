@@ -51,8 +51,7 @@ pub(super) fn recorder_end_frame(
     rec.measurements(bridge);
     rec.content_end();
     rec.end_frame_with_gate(&|| super::recorder::state_hash(
-        press, route, overlay, focus, tree, bridge.session_subhash(), bridge.consent_subhash(),
-        bridge.initial_subhash(),
+        press, route, overlay, focus, tree, bridge.session_subhash(), bridge.initial_subhash(),
     ), &|id| bridge.store_gen(id), bridge.landgate())
 }
 
@@ -430,9 +429,6 @@ unsafe fn prepare_window(app: &mut App, fr: &mut Frame) {
             nj_machine::idle::should_present(fr.now) || app.pages.budget.has_queued_work(),
         );
     app.rec.present(fr.present);
-    if fr.present {
-        app.window_activity.begin_present(fr.player);
-    }
     // ---- step 9's UPLOAD, on the presenting side of the decision ---------------------
     //
     // The render cache's upload step under the frame budget (§3.3 step 9, §10: "a frame that
@@ -559,7 +555,6 @@ unsafe fn present_and_swap(
             nj_platform::tv::window::frame_probe_request();
             SDL_GL_SwapWindow(app.win);
         }
-        app.window_activity.presented(fr.player);
         // One increment, then nothing: re-ask EGL for the back buffer's AGE after real
         // presents have happened. The boot reading is 0 by construction. See `egl.rs`.
         nj_gfx::egl::late_probe();
@@ -703,7 +698,6 @@ unsafe fn ingest_sdl_event_with_window(app: &mut App, fr: &mut Frame,
     restore_window: impl FnOnce(*mut c_void)) {
     let et = rd_u32(&app.ev, 0);
     app.window_activity.event(et);
-    crate::telemetry::window::lifecycle(et, matches!(app.route(), AppArg::Player));
     if controlled_replay(app) {
         // The tape owns logical ingress; real SDL startup notifications must not be
         // counted a second time. The real compositor still owns window safety.
@@ -1493,7 +1487,6 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
         // so gating this on a started engine would silently miss the earliest and most certain
         // failure there is. It observes the value the HUD renders and reports only transitions,
         // so the steady-state cost is one atomic load.
-        crate::player::report::tick(&mut app.player.session);
         // end-of-stream: the pipeline drained at the credits → hand off to Up Next when the
         // show has another episode queued and the Next episode preference is not Off, else leave
         // the player (back to the detail page or home, whichever is behind), instead of freezing
@@ -2134,7 +2127,6 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
         crate::dev::scenarios::legal_doc_tick(app, fr.now, fr.dt);
         crate::dev::scenarios::alert_tick(app, fr.now, fr.dt);
         crate::dev::scenarios::settings_osc_tick(app, fr.now, fr.dt);
-        crate::dev::scenarios::consent_osc_tick(app, fr.now, fr.dt);
         crate::dev::scenarios::onboard_osc_tick(app, fr.now, fr.dt);
         // (`legal::update` / `consent::update` / `settings::update` stood here, self-gated on
         // their own `Popover::visible` because none of them was a route. The surface and its
@@ -2179,9 +2171,8 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
         if app.window_activity.allow_present(true) && crate::route::play_pending() {
             app.player.lifecycle.replace_with_new_playback();
         }
-        land_play_then_observe(
-            app,
-            |app| {
+        // The plan landing, as a closure so its early exits stay local to it.
+        (|app: &mut App| {
                 if !playback_may_run(app) {
                     return;
                 }
@@ -2257,12 +2248,7 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
                         }
                     }
                 }
-            },
-            // `pump_play` can install a refused `/decision` after the earlier report
-            // observation but before this frame draws the Error screen. Observe again at that
-            // exact publication boundary; latches make a healthy/no-change frame idempotent.
-            |app| crate::player::report::tick(&app.player.session),
-        );
+        })(app);
         // Async detail load: install the worker's item into CURRENT. Route-unconditional for
         // the same reason as pump_play — play_item_now requests a detail from Home and flips
         // straight to the player, so a Detail-gated pump would never land it.
@@ -2563,14 +2549,6 @@ pub(crate) unsafe fn report(app: &mut App, fr: &mut Frame) {
         app.measure_fault_logged = true;
         log("text: a width was measured with NO FONT loaded — layout is on average-advance estimates");
     }
-        // …and the same name as a reportable event, on CHANGE only. Per-frame would be a
-        // firehose of one fact; what is worth knowing is which screens get used, which is a
-        // transition count. `&'static str` from the table above, so nothing runtime-built can
-        // reach the wire — see `diag::schema`.
-        if fr.rn != app.last_route_reported {
-            app.last_route_reported = fr.rn;
-            crate::diag::event(crate::diag::schema::DiagEvent::RouteEntered { screen: fr.rn });
-        }
         // The lab envelope's `route` field, from the SAME name the heartbeat and the focus
         // fingerprint print — a snapshot that disagreed with the log about which screen the
         // tester was on would be worse than one that omitted the field. Compiles away in every
@@ -2650,7 +2628,6 @@ pub(crate) unsafe fn report(app: &mut App, fr: &mut Frame) {
                 // can be the probe's `route=`. Named rather than swept into a `_` so a new page
                 // variant is a compile error here rather than a silently mis-probed screen.
                 AppArg::Settings(_)
-                | AppArg::FirstRunConsent(_)
                 | AppArg::LibraryMenu(_)
                 | AppArg::AccountMenu
                 | AppArg::ItemMenu(_)
@@ -2939,7 +2916,6 @@ pub(crate) unsafe fn shutdown(app: &mut App) -> Teardown {
 /// stop the feed and wait for the stop scrobble.
 fn end_playback_for_exit(app: &mut App) {
     let (ps, pa) = (&mut app.player.session, &mut app.adapters.player);
-    crate::player::report::abandon_pending(ps);
     // A playback parked by an app switch has no Engine for the stop below to report from: its
     // `Stopped` goes from where the park left it (`ForegroundLifecycle::parked_ns`).
     if let Some(pos_ns) = app.player.lifecycle.parked_ns() {
@@ -3302,7 +3278,6 @@ mod lifecycle_regression_tests {
             },
             repause_at: -1,
             ok_armed: Default::default(),
-            last_route_reported: Default::default(),
             ptr: Pointer::IDLE,
             menu_play_await: Default::default(),
             prev: Default::default(),
@@ -3338,8 +3313,6 @@ mod lifecycle_regression_tests {
                 alert_step: Default::default(),
                 account_osc_last: Default::default(),
                 account_osc_down: Default::default(),
-                consent_osc_last: Default::default(),
-                consent_osc_down: Default::default(),
                 onboard_osc_last: Default::default(),
                 onboard_osc_right: Default::default(),
                 nav_osc_last: Default::default(),
@@ -3395,7 +3368,6 @@ mod lifecycle_regression_tests {
                     legal_doc: Default::default(),
                     alert_boot: Default::default(),
                     account_osc: Default::default(),
-                    consent_osc: Default::default(),
                     onboard_osc: Default::default(),
                     nav_osc: Default::default(),
                     nav_osc_rk: Default::default(),
@@ -3406,7 +3378,6 @@ mod lifecycle_regression_tests {
             measure_fault_logged: Default::default(),
             rec: super::super::recorder::Recplay::Off,
             boot_initial: Default::default(),
-            telemetry_guard: Default::default(),
             present: nj_machine::present::Present::new(),
             glass: Default::default(),
             pages: crate::ui::dispatch::Dispatcher::new(),

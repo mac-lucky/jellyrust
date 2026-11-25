@@ -17,7 +17,7 @@ looking at:
 
 - **The `/tmp` trigger surface.** `/tmp` is mode 1777 in webOS's production jail, so any co-resident
   process can create files there. Roughly forty `nativejelly-*` files change behaviour, and three are
-  outright takeovers — `nativejelly-token` beats the signed-in session, `nativejelly-servers` injects a
+  outright takeovers: `nativejelly-token` beats the signed-in session, `nativejelly-servers` injects a
   server and its token, `nativejelly-url` replaces the stream. **All of it is compiled out of a
   release build** by dropping the `devtriggers` cargo feature, and `ci/check-elf.sh` measures that
   on the shipped bytes rather than asserting it. A release binary that still carries any of it is a
@@ -25,10 +25,10 @@ looking at:
 - **The event log.** `nativejelly-events.log` is created 0600 and every line goes through
   `eventlog::scrub::scrub_local` before the write. A line that reaches it carrying a credential, a
   Jellyfin access token, a server's host name, a user name, a household name or anything about what
-  is being watched is a valid report — see [PRIVACY.md](PRIVACY.md) for the contract that is meant
+  is being watched is a valid report; see [PRIVACY.md](PRIVACY.md) for the contract that is meant
   to hold.
 - **The Jellyfin sign-in file.** `jellyfin.json` holds the server address, the user, and the access
-  token that server issued — never the password. It is written 0600 through the same atomic door as
+  token that server issued, never the password. It is written 0600 through the same atomic door as
   the session file, and is **not** encrypted with the Key Manager. A way to read it from another
   process, or to make the app write it somewhere world-readable, is in scope. So is any path where
   the password outlives the sign-in request.
@@ -39,12 +39,12 @@ looking at:
   stays on. A host with no remembered key never takes this path (`net.rs`,
   `net::keypin`). The product path talks only to the Jellyfin server whose address you enter.
   Over `http://`, your password, access token and everything JellyRust exchanges with that
-  server travel without encryption — enter `https://` for a server you reach over the internet.
+  server travel without encryption, so enter `https://` for a server you reach over the internet.
   A token sent over plaintext to an origin the user did not enter, or to a server other than the
   one the token names, is in scope.
   Only an explicit developer-trigger build can otherwise allow the lab path, and it logs the
   exception without the URL.
-  Anything that disables, downgrades or bypasses these rules is in scope — including a key-mode
+  Anything that disables, downgrades or bypasses these rules is in scope, including a key-mode
   request that accepts a different key or a wrong name; so is any path where a failure to *set* a
   security option results in a request going out anyway.
 - **The session file.** `<id>-auth.json` holds one access token per server your account can reach.
@@ -55,7 +55,7 @@ looking at:
   `open(2)`'s own mode argument. A downgrade of an existing encrypted file, a way to read it from
   another process, or a way to make the app write it somewhere world-readable is in scope.
 - **The bundled FFmpeg.** Built from unmodified FFmpeg 9.0 with demuxers, parsers and subtitle
-  decoders only — it is fed untrusted bytes from the network, so parser bugs reachable through
+  decoders only. It is fed untrusted bytes from the network, so parser bugs reachable through
   `ff.rs` are in scope. Report FFmpeg's own bugs upstream as well.
 
 ## What is not in scope
@@ -73,9 +73,10 @@ looking at:
 No account of its own, no server, no payment path, and no user-generated content. It signs in to
 **your** Jellyfin server and talks only to it.
 
-**It has no telemetry.** `telemetry/sender.rs` compiles no Sentry or PostHog endpoint into any
-build (`NJ_SENTRY_DSN` and `NJ_POSTHOG_KEY` are ignored), releases are built with `telemetry: none`,
-the crash-report and analytics choices are not offered, and nothing is spooled for sending. The app
-never contacts plex.tv or Plex's metadata provider (`catalog/account.rs`, `catalog/discover.rs`).
-A build that sends anything to a host other than the Jellyfin server you entered is a valid report,
-and a serious one. [PRIVACY.md](PRIVACY.md) is the full account of what the app stores.
+**It has no telemetry.** JellyRust contains no crash-reporting, analytics or other reporting code:
+the Sentry and PostHog clients, the report queue and the consent screens inherited from Native Jelly
+were removed from this fork, and the package ships no crash-upload helper. A crash is written only
+to the local crash log on the television. The app never contacts plex.tv or Plex's metadata provider
+(`catalog/account.rs`, `catalog/discover.rs`). A build that sends anything to a host other than the
+Jellyfin server you entered is a valid report, and a serious one. [PRIVACY.md](PRIVACY.md) is the
+full account of what the app stores.

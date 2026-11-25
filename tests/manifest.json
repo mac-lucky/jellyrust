@@ -403,36 +403,6 @@
       "comment": "The source picker as the first-run route, using every source the test identity can reach. onboardosc moves the real focus between the bottom action and source list and keeps the present gate continuously awake; both loop and presented frames must remain at or above 50/s. A configured second server may be injected with --shared-server for a heavier local run, but the baseline gate must not disappear when that private fixture is absent."
     },
     {
-      "name": "consent-crash",
-      "tier": "ui",
-      "route": "home",
-      "overlay": "consent",
-      "loop_floor": 50,
-      "fps_floor": 50,
-      "run_secs": 18,
-      "warmup_s": 5,
-      "triggers": {
-        "nativejelly-consent": "crash",
-        "nativejelly-consentosc": true
-      },
-      "comment": "The first independent first-run reporting decision. consentosc walks focus between the answer band and the two readable rows beside it, which keeps the present gate awake across both focus grounds; the trigger changes display state only and records no consent."
-    },
-    {
-      "name": "consent-product",
-      "tier": "ui",
-      "route": "home",
-      "overlay": "consent",
-      "loop_floor": 50,
-      "fps_floor": 50,
-      "run_secs": 18,
-      "warmup_s": 5,
-      "triggers": {
-        "nativejelly-consent": "product",
-        "nativejelly-consentosc": true
-      },
-      "comment": "The second first-run reporting decision, booted without answering or persisting the first. It has its own strict 50 FPS scene so Product analytics copy and wrapping cannot hide behind the Crash reports measurement."
-    },
-    {
       "name": "settings-root",
       "tier": "ui",
       "route": "home",

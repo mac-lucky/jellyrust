@@ -63,9 +63,6 @@ pub(crate) fn desktop_window_size() -> (c_int, c_int) {
 /// string `core` and `RLIMIT_CORE` is 0, so no core is written and no crashd report is ever
 /// generated. `crashtrace.c` says so itself. Two deliberate SIGSEGVs produced the signal status and
 /// an empty `/var/log/reports/librdx/`.
-///
-/// The line this hook writes is also the crash channel's PANIC input: `telemetry::crashreport`
-/// reads the log on the next launch, hashes the message and sends the location only.
 pub(crate) fn install_panic_logger() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -95,20 +92,13 @@ pub(crate) fn install_panic_logger() {
     }));
 }
 
-/// **Hand `plex` the two answers it cannot name.** The Plex layer sits beneath `route` and
-/// `telemetry`, so what it needs from them reaches it as hooks installed here, once, first thing in
-/// [`enter_application`] — before the controlled/replay split and before anything can load the
-/// session:
-///
-/// * `plex::session::install_auto_quality_ready` — `route::auto_quality_ready`, the gate a fresh
-///   session record's default quality is seeded from (unset, `plex` reads `true`, the gate's value);
-/// * `plex::session::install_account_clear_cleanup` — `telemetry::cleanup_after_account_clear`, the
-///   telemetry/consent legacy-file sweep a durable sign-out runs. It exists only where the sweep does
-///   (ARM, not the simulator, not a test build); unset, `plex` reads it as already retired.
+/// **Hand `plex` the answer it cannot name.** The Plex layer sits beneath `route`, so what it needs
+/// from it reaches it as a hook installed here, once, first thing in [`enter_application`] —
+/// before the controlled/replay split and before anything can load the session:
+/// `plex::session::install_auto_quality_ready` — `route::auto_quality_ready`, the gate a fresh
+/// session record's default quality is seeded from (unset, `plex` reads `true`, the gate's value).
 pub(crate) fn install_plex_seams() {
     crate::catalog::session::install_auto_quality_ready(crate::route::auto_quality_ready);
-    #[cfg(all(target_os = "linux", target_arch = "arm", not(feature = "hostsim"), not(test)))]
-    crate::catalog::session::install_account_clear_cleanup(crate::telemetry::cleanup_after_account_clear);
 }
 
 pub(super) fn finish_graphics<T>(owner: T, delete_context: impl FnOnce(), quit_sdl: impl FnOnce()) {
@@ -189,36 +179,6 @@ mod seam_order_tests {
         }
     }
 
-    /// `enter_application` installs the player's error-trace eraser before telemetry first loads a
-    /// decision (`pre_boot_diagnostics` -> `telemetry::boot`, which already erases through it) and
-    /// before anything can play. It was installed by `player::report::requested`, which a
-    /// detail-page preview never passes, so a failed preview's trace outlived a withdrawal. This
-    /// reads the source, like the diagnostics boot-order test below, because no host test can
-    /// run `enter_application`; what the eraser reaches is graded by `player::report`'s
-    /// `a_failed_preview_trace_is_erased_through_telemetrys_hook`.
-    #[test]
-    fn the_trace_eraser_is_installed_before_telemetry_loads_or_anything_plays() {
-        let source = include_str!("mod.rs");
-        let body = source
-            .split_once("fn enter_application(")
-            .expect("enter_application")
-            .1
-            .split_once("/// The ten-line public skeleton")
-            .expect("end of enter_application")
-            .0;
-        let eraser = body
-            .find("crate::player::report::install_trace_eraser();")
-            .expect("enter_application must install telemetry's error-trace eraser");
-        let telemetry = body
-            .find(".then(pre_boot_diagnostics)")
-            .expect("telemetry's boot load");
-        let boot = body.find("boot(pms_host").expect("application boot");
-        assert!(
-            eraser < telemetry && eraser < boot,
-            "the eraser must be installed before telemetry loads and before anything can play"
-        );
-    }
-
     /// The storage diagnostics worker probes `app_dir()` on its own thread, so it starts only after the
     /// live identity preamble has written the first two event-log lines. Reads the source like the
     /// test above, for the same reason: no host test can run `enter_application`. It lived in
@@ -253,7 +213,7 @@ mod seam_order_tests {
             .expect("end of enter_application")
             .0;
         let identity = body
-            .find(".then(pre_boot_diagnostics)")
+            .find("pre_boot_diagnostics();")
             .expect("identity preamble");
         let diagnostics = body
             .find("nj_platform::storage::diagnostics::start(")
@@ -723,22 +683,6 @@ pub(crate) unsafe fn construct(
     // means this device has no libcurl we can bind, so plex.tv sign-in will not work — the app
     // still runs, and `net::global_init` has already said so in the event log.
     let _ = nj_net::net::global_init();
-    // Drain whatever the LAST session left behind, on a worker — and **after `global_init`,
-    // which is the whole reason this line is here and not beside `telemetry::boot()` 170 lines
-    // up.** It was there first, and the end-to-end run showed why that was wrong: the worker
-    // reached `post_ca` before libcurl was bound, `net::available()` was false, every record
-    // came back Keep, and the log read `holding 5 records` immediately ABOVE `net: bound
-    // libcurl`. So the first flush of every launch failed, always, and the failure was
-    // indistinguishable from a television with no network. Worse than the lost flush: curl's
-    // own init is documented as not thread-safe, and a worker that got there first would have
-    // been doing it off the main thread.
-    //
-    // Boot is the right cadence for a television. Sessions are long, and the reports most worth
-    // having are about how one ENDED — a crash is the end, so the record was written by a
-    // process that no longer exists and this is the first moment anything can send it. A record
-    // queued during THIS session goes out at the next launch, or sooner if a consent change
-    // flushes.
-    if !preflight.controlled() { crate::telemetry::flush_soon(); }
 
     // NO token is compiled into this binary. PMS access comes from the signed-in session,
     // or — for automated runs only (the regression harness, headless captures) — from the
@@ -919,8 +863,7 @@ pub(crate) unsafe fn construct(
         super::bridge::Bridge::controlled_home(nj_base::diag::heartbeat::now_us,
             initial.as_ref().expect("controlled initialization"), &mt, preflight.replay())
     } else {
-        super::bridge::Bridge::new(nj_base::diag::heartbeat::now_us, session_init,
-            crate::telemetry::consent::current().unwrap_or_default(), &mt)
+        super::bridge::Bridge::new(nj_base::diag::heartbeat::now_us, session_init, &mt)
     };
     // Construct the one dispatcher before bootstrap commands; move this same queue into App.
     let mut pages = crate::ui::dispatch::Dispatcher::with_transition(Box::new(
@@ -1154,9 +1097,6 @@ pub(crate) unsafe fn construct(
     let account_osc_down = true;
     // First-run route oscillators keep their real focus models moving so the device FPS suite
     // grades the composition rather than a settled screen that correctly stops presenting.
-    let consent_osc = !controlled && crate::dev::scenarios::consentosc_armed();
-    let consent_osc_last = 0u32;
-    let consent_osc_down = true;
     let onboard_osc = !controlled && crate::dev::scenarios::onboardosc_armed();
     let onboard_osc_last = 0u32;
     let onboard_osc_right = true;
@@ -1277,10 +1217,6 @@ pub(crate) unsafe fn construct(
     // spring-back after key-up) so `ok_armed` marks "a press is in flight, commit it from the
     // per-frame loop when press::take_commit fires". Only ever set on Home's grid.
     let ok_armed = false;
-    // Which route name was last REPORTED as an event. Not `route` itself: several `Route`
-    // values share one name (every `Route::Player` is "player"), and an overlay
-    // opening is not a screen change.
-    let last_route_reported: &'static str = "";
     let press_tried = false; // dev: /tmp/nativejelly-press fires one simulated grid-card press
     let press_release_at = 0u32; // …and the tick at which that simulated press releases
     let itemmenu_tried = false; // dev: /tmp/nativejelly-itemmenu opens the card context menu once
@@ -1307,12 +1243,6 @@ pub(crate) unsafe fn construct(
     let ask_first_run = || !controlled && (crate::dev::scenarios::firstrun_armed()
         || (!automated_boot()
             && crate::stores::browse::onboard::asks(bridge.browse_directory())));
-    // The sign-in's telemetry question is PRESENTED on the container tree, and the tree lives on
-    // the `App` this function is still assembling — so this boot arm records that it owes the
-    // question and `maybe_ask_consent` is called once the struct exists, a few dozen lines down.
-    // Deferring it changes nothing about when it is ASKED: the surface would not have drawn until
-    // the loop's first frame either way, and the route below is a page underneath it.
-    let mut owes_consent_question = false;
     let route = match boot_to {
         // **Both Home arms ask, and the shared call is the point.** This is the one boot that
         // has no earlier hook — an install already signed in, either never asked or asked
@@ -1321,7 +1251,6 @@ pub(crate) unsafe fn construct(
         // (which is what shipped for an hour) meant a stored session that still owed the
         // sources answer walked Onboard → Home and was never asked at all.
         BootTo::Home => {
-            owes_consent_question = true;
             // More than one Jellyfin user kept: ask who is watching, signed in as the last one
             // underneath so choosing them again costs nothing — unless Automatically Sign In is
             // on, which enters as the last user exactly as a single-user television does.
@@ -1439,7 +1368,6 @@ pub(crate) unsafe fn construct(
         adapters,
         repause_at,
         ok_armed,
-        last_route_reported,
         ptr,
         menu_play_await: None,
         prev,
@@ -1459,7 +1387,6 @@ pub(crate) unsafe fn construct(
         input: crate::ui::input::Input::new(),
         rec: super::recorder::Recplay::Off,
         boot_initial: initial,
-        telemetry_guard: None,
         present: nj_machine::present::Present::new(),
         glass,
         // **The application's page stack runs the route DIP** (§6.2). It ran `Immediate` until
@@ -1489,8 +1416,6 @@ pub(crate) unsafe fn construct(
             alert_step,
             account_osc_last,
             account_osc_down,
-            consent_osc_last,
-            consent_osc_down,
             onboard_osc_last,
             onboard_osc_right,
             nav_osc_last,
@@ -1546,7 +1471,6 @@ pub(crate) unsafe fn construct(
                 legal_doc,
                 alert_boot,
                 account_osc,
-                consent_osc,
                 onboard_osc,
                 nav_osc,
                 nav_osc_rk,
@@ -1578,9 +1502,6 @@ pub(crate) unsafe fn construct(
             apply_deferred_capture(&mut app.rec, app.bridge.landgate(), deferred)
                 .map_err(|reason| { log(&format!("rec: REFUSED — {reason}")); 1 })?;
             log("bootstrap: captured session persistence applied");
-        }
-        if !replay {
-            app.telemetry_guard = Some(crate::telemetry::activate_initial(initial.consent.clone()));
         }
         if !replay { super::adapters::poster::init(); }
         app.rec.tick(initial.clock_start, 0.0);
@@ -1616,21 +1537,5 @@ pub(crate) unsafe fn construct(
         super::bridge::nav_root(&mut app.pages, route);
     }
     if controlled { log(&format!("bootstrap: root-request tree={:016x}", app.pages.state_hash())); }
-    // …the deferred half of the `BootTo::Home` arm above: the tree exists now, so the question can
-    // be presented. Idempotent and cheap (`should_show` is false once a decision is recorded and
-    // on any automated boot), so the flag is the only thing carrying the decision forward.
-    if owes_consent_question {
-        if let Some(initial) = &app.boot_initial {
-            // The same policy, evaluated over captured consent and automation inputs. A
-            // recplay trigger alone intentionally does not grant live automation authority.
-            // Preflight refuses the still-unsupported first-run surface before resource boot.
-            if crate::screens::consent::should_show(&initial.consent, initial.automated) {
-                log("bootstrap: REFUSED — unsupported initial consent route");
-                return Err(1);
-            }
-        } else {
-            maybe_ask_consent(&mut app.pages);
-        }
-    }
     Ok(app)
 }

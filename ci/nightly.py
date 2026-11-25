@@ -65,8 +65,8 @@ def next_nightly_version() -> str:
 
 
 def nightly_label(version: str, date: str) -> str:
-    """`X.Y.Z-nightly-YYYYMMDD` — the one string this build reports everywhere (Sentry release,
-    the client version sent to the server, the diagnostics panel) and the one a bug report names."""
+    """`X.Y.Z-nightly-YYYYMMDD` — the one string this build reports everywhere (the
+    client version sent to the server, the diagnostics panel) and the one a bug report names."""
     return f"{version}-nightly-{date}"
 
 

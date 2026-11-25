@@ -169,7 +169,7 @@ pub enum Icon {
     //
     // Twelve marks, one family: a BASE says what is involved (a server, plex.tv, an account, a
     // sign-in's stored key, a profile roster, a wait's clock), a BADGE knocked out of it says what
-    // went wrong (a plus/minus/x/question/alert), and `telemetry::incident::IncidentContext::
+    // went wrong (a plus/minus/x/question/alert), and `auth::incident::IncidentContext::
     // readout_glyph` is the ONE place that reads an `IncidentKind` and picks which. `WifiSlash`
     // stands alone — there is no server to blame when the TV itself has no link. Drawn by
     // `tools/readout-glyphs.py` (`shapely` polygon booleans, not hand-authored paths) because the

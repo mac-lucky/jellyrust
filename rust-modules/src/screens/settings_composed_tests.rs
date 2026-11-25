@@ -77,9 +77,6 @@ impl Mounter<InnerHost> for SurfaceMounter {
         };
         match arg {
             SettingsPage::About => mount_page(entry, SettingsPage::About, cx, fx),
-            SettingsPage::ConsentStage(stage) => Box::new(RouteSurface::new(entry, id,
-                Family::FirstRunConsent, SettingsPage::ConsentStage(*stage),
-                crate::catalog_fetch::HubsSnapshot::empty_for_test().view())),
             other => Box::new(RouteSurface::new(entry, id, Family::Settings, *other,
                 crate::catalog_fetch::HubsSnapshot::empty_for_test().view())),
         }
@@ -222,11 +219,11 @@ fn seat(d: &mut Dispatcher<InnerHost>, id: EntryId, elem: u32) {
     d.set_focus(Some(FocusKey { entry: id, elem }));
 }
 
-pub(super) fn consent_opened(page: SettingsPage) -> (Dispatcher<InnerHost>, SurfaceRig, EntryId) {
-    consent_opened_on(page, SurfaceRig::new())
+pub(super) fn surface_opened(page: SettingsPage) -> (Dispatcher<InnerHost>, SurfaceRig, EntryId) {
+    surface_opened_on(page, SurfaceRig::new())
 }
 
-fn consent_opened_on(
+fn surface_opened_on(
     page: SettingsPage,
     mut rig: SurfaceRig,
 ) -> (Dispatcher<InnerHost>, SurfaceRig, EntryId) {
@@ -238,87 +235,6 @@ fn consent_opened_on(
     frame(&mut d, &mut rig, 16, vec![]);
     let id = d.nav.modals.top().unwrap().entry.id;
     (d, rig, id)
-}
-
-#[test]
-fn composed_owner_first_run_answers_survive_full_frames() {
-    let _g = nj_base::testlock::serial();
-    for stage in [0, 1, 17] {
-        let (mut d, mut rig, id) = consent_opened(SettingsPage::ConsentStage(stage));
-        assert_eq!(d.focus(), Some(FocusKey { entry: id, elem: registry::BAND }), "stage {stage} mount");
-        frame(&mut d, &mut rig, 32, vec![]);
-        assert_eq!(d.focus().unwrap().elem, registry::BAND);
-        for (round, direction) in [Key::Left, Key::Down].into_iter().enumerate() {
-            let ms = 48 + round as u32 * 64;
-            seat(&mut d, id, 1); // Privacy policy, not a guessed geometric starting point.
-            frame(&mut d, &mut rig, ms, vec![key(direction, tick(ms))]);
-            assert!(registry::band_index(d.focus().unwrap().elem).is_some(), "stage {stage}, {direction:?}");
-            seat(&mut d, id, registry::BAND);
-            frame(&mut d, &mut rig, ms + 16, vec![key(Key::Right, tick(ms + 16))]);
-            assert_eq!(d.focus().unwrap().elem, registry::BAND + 1);
-            frame(&mut d, &mut rig, ms + 32, vec![]);
-            assert_eq!(d.focus().unwrap().elem, registry::BAND + 1);
-            frame(&mut d, &mut rig, ms + 48, vec![key(Key::Left, tick(ms + 48))]);
-            assert_eq!(d.focus().unwrap().elem, registry::BAND);
-        }
-        assert_eq!(d.nav.input_owner(), Some(InputOwner::Entry(id)));
-        assert_eq!(rig.roots, 0);
-    }
-}
-
-#[test]
-fn composed_owner_settings_done_survives_then_disappears_with_reverted_draft() {
-    let _reporting = super::super::consent::offer_reporting_for_test(); // litefin: the upstream rows
-    let _g = nj_base::testlock::serial();
-    let (mut d, mut rig, id) = consent_opened(SettingsPage::Privacy);
-    seat(&mut d, id, 0);
-    frame(&mut d, &mut rig, 32, vec![key(Key::Ok, tick(32))]); // draft only
-    frame(&mut d, &mut rig, 48, vec![key(Key::Left, tick(48))]);
-    assert_eq!(d.focus().unwrap().elem, registry::BAND);
-    frame(&mut d, &mut rig, 64, vec![]);
-    assert_eq!(d.focus().unwrap().elem, registry::BAND);
-    seat(&mut d, id, 0);
-    frame(&mut d, &mut rig, 80, vec![key(Key::Ok, tick(80))]); // reverse draft
-    seat(&mut d, id, registry::BAND); // a retained key for a removed control
-    frame(&mut d, &mut rig, 96, vec![]);
-    assert!(registry::band_index(d.focus().unwrap().elem).is_none());
-    assert_eq!(d.nav.input_owner(), Some(InputOwner::Entry(id)));
-}
-
-#[test]
-fn composed_owner_pointer_seats_and_validates_answer_press_identity_without_committing() {
-    use nj_machine::machine::{InputEvent, InputKind, PressId, Source};
-    use crate::ui::screen::{Activate, Hover, Stop};
-    let _g = nj_base::testlock::serial();
-    for stage in [0, 1] {
-        let (mut d, mut rig, id) = consent_opened(SettingsPage::ConsentStage(stage));
-        for (round, elem) in [registry::BAND, registry::BAND + 1].into_iter().enumerate() {
-            let ms = 32 + round as u32 * 32;
-            let unchanged_path = path(&d, id);
-            let focused = FocusKey { entry: id, elem };
-            let c = cx(None);
-            let screen = &d.nav.entry(id).unwrap().inst.as_ref().unwrap().screen;
-            let placed = screen.place(&elem, &c, At::Drawn).expect("real Consent button geometry");
-            // No GL draw on the host: publish the real queried geometry to the real hit map.
-            d.input.hit.fill(vec![Stop { key: focused, rect: placed.rect, rest_rect: placed.rest_rect,
-                clip: placed.clip, hover: Hover::Focus, activate: Activate::Press }]);
-            d.input.hit.swap();
-            d.input.hit.dpad_mode = false;
-            frame(&mut d, &mut rig, ms, vec![InputEvent { at: tick(ms), source: Source::Script,
-                kind: InputKind::Pointer { x: placed.rect.cx(), y: placed.rect.cy(), hit: None } }]);
-            assert_eq!(d.focus(), Some(focused));
-            let instance = d.nav.instance_of(id).unwrap();
-            // The production typed press validator, but Hold rather than Commit: this
-            // page does not answer on hold, so neither consent choice is made or saved.
-            d.emit(MachineId::Input, Fx::Deliver(MachineId::Instance(instance),
-                Delivery::Press { id: PressId(1), key: focused, held: true }));
-            let report = d.frame_with(&mut rig, tick(ms + 16), vec![], vec![], &mut NoTap, false);
-            assert_eq!(report.dropped_deliveries, 0, "a valid button was refused by press identity validation");
-            assert_eq!(d.focus(), Some(focused));
-            assert_eq!(path(&d, id), unchanged_path, "holding must not answer or advance the stage");
-            assert_eq!(d.nav.input_owner(), Some(InputOwner::Entry(id)));
-        }
-    }
 }
 
 #[test]
@@ -341,7 +257,7 @@ fn composed_owner_favourites_footer_survives_left_down_and_idle_frames() {
     rig.stores.browse.borrow_mut().seed_registered_table_for_test([a, b]);
     rig.stores.capture_browse(&mut rig.directory);
     let pins = rig.directory.view().favorite_sections().to_vec();
-    let (mut d, mut rig, id) = consent_opened_on(SettingsPage::Favourites, rig);
+    let (mut d, mut rig, id) = surface_opened_on(SettingsPage::Favourites, rig);
     seat(&mut d, id, 0);
     frame(&mut d, &mut rig, 32, vec![key(Key::Ok, tick(32))]); // local draft only
     for (round, direction) in [Key::Left, Key::Down].into_iter().enumerate() {
@@ -532,7 +448,7 @@ fn playback_picker_seats_the_saved_option_and_restores_its_parent_row() {
     crate::route::restore_quality(crate::route::Quality::P480);
     crate::route::restore_direct_play_mode(crate::route::DirectPlayMode::Auto);
     for back in [Key::Back, Key::Left] {
-        let (mut d, mut rig, id) = consent_opened(SettingsPage::Playback);
+        let (mut d, mut rig, id) = surface_opened(SettingsPage::Playback);
         // A real DOWN/UP gives the engine an explicit parent cursor at Default quality.
         frame(&mut d, &mut rig, 32, vec![key(Key::Down, tick(32))]);
         frame(&mut d, &mut rig, 48, vec![key(Key::Up, tick(48))]);
@@ -567,7 +483,7 @@ fn account_preference_landing_seats_the_first_rows_and_retry_landing() {
     let _signed_in = crate::jf::preferences::LiveSignInForTest::new("http://10.0.0.2:8096", "preference-seat-fixture");
     let (request, snapshot) = PreferenceRequest::fixture_for_test("http://10.0.0.2:8096", "preference-seat-fixture", AudioPreferences::default());
     for fail_first in [false, true] {
-        let (mut d, mut rig, id) = consent_opened(SettingsPage::AudioSubtitles);
+        let (mut d, mut rig, id) = surface_opened(SettingsPage::AudioSubtitles);
         frame(&mut d, &mut rig, 32, vec![]);
         assert_eq!(d.focus(), Some(FocusKey { entry: id, elem: 7 }), "loading lists and seats the local row");
         let Some(PreferenceCmd::Load { reply }) = rig.preference_commands.pop() else {
@@ -635,7 +551,7 @@ fn force_warning_engine_focus_confirms_only_the_chosen_answer() {
         vec![down, up]
     };
     for confirm in [false, true] {
-        let (mut d, mut rig, id) = consent_opened(SettingsPage::Playback);
+        let (mut d, mut rig, id) = surface_opened(SettingsPage::Playback);
         frame(&mut d, &mut rig, 32, vec![key(Key::Down, tick(32))]);
         assert_eq!(d.focus(), Some(FocusKey { entry: id, elem: 1 }));
         frame(&mut d, &mut rig, 48, ok(48));
@@ -683,7 +599,7 @@ fn a_typed_app_id_reaches_the_page_through_the_surface() {
         if let InputKind::Key { edge, .. } = &mut up.kind { *edge = Edge::Up; }
         vec![down, up]
     };
-    let (mut d, mut rig, id) = consent_opened(SettingsPage::RootBack);
+    let (mut d, mut rig, id) = surface_opened(SettingsPage::RootBack);
     let mut ms = settle_frames(&mut d, &mut rig, 16);
     ms = walk_to(&mut d, &mut rig, ms, 2);
     ms += 16;

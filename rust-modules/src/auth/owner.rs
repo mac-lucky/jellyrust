@@ -9,11 +9,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use nj_machine::machine::{Addr, Canon, LogicalState, MachineId};
 
-mod incident;
-use crate::telemetry::incident::{IncidentContext, InternalClass};
-#[allow(unused_imports)]
-pub(crate) use incident::{IncidentDelivery, IncidentFlow, IncidentKey, IncidentLane, IncidentOffer,
-    IncidentReport, IncidentState};
+use crate::auth::incident::{IncidentContext, InternalClass};
 
 pub(crate) const SESSION_DATA_RECORDS: usize = 64;
 pub(crate) const SESSION_OWNER_RESERVATIONS: u32 = 32;
@@ -175,14 +171,6 @@ pub(crate) enum Command {
     /// Answer the currently shown [`PersistenceWarning`]. A key that does not match the warning
     /// currently held is inert — it may be stale (a newer warning replaced it).
     AcknowledgePersistenceWarning { key: PersistenceWarningKey },
-    /// The consent decision for the held incident, as the presenting screen derived it at
-    /// `revision` (`telemetry::consent::revision`). Stale ids and unchanged revisions are inert.
-    ResolveIncident { id: u32, permission: crate::telemetry::consent::Permission, revision: u32 },
-    /// Send report — from the incident alert or from Details. A person's press, and the whole of
-    /// the one-off report's consent.
-    ReportIncident { id: u32 },
-    /// Not now: the offer is answered for this launch.
-    DeclineIncident { id: u32 },
     /// The person's answer to "Connect without encryption?" (or Settings' switch) for one server
     /// — every consent surface sends this one command. On the sign-in read-out it answers the
     /// offer shown there ([`SessionInit::plaintext`]; another machine is inert) and an *Allowed*
@@ -204,12 +192,7 @@ pub(crate) struct ReplyTo { pub instance: u32, pub correlation: u32 }
 /// machine, platform API or global publication from inside its transition.
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub(crate) enum CoordinatorAction {
-    CloseTelemetry,
     LocalDataErased,
-    SignInStarted,
-    SignInCompleted,
-    SignInCancelled,
-    SignInFailed { phase: Phase },
 }
 
 /// What a [`RegistryPlan::Install`] does to the slots already live. The line that matters is
@@ -275,7 +258,7 @@ pub(crate) struct PersistenceWarning {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PersistenceEvidence {
-    class: crate::telemetry::incident::PersistenceFailure,
+    class: crate::auth::incident::PersistenceFailure,
     keymanager_stage: Option<nj_platform::storage::wire::KeymanagerStage>,
     service_error_code: Option<i32>,
 }
@@ -284,7 +267,7 @@ impl PersistenceWarning {
     pub(crate) fn from_outcome(key: PersistenceWarningKey, site: PersistenceWarningSite,
         outcome: &crate::catalog::session::async_persistence::CompletionOutcome) -> Self {
         let context = IncidentContext {
-            kind: crate::telemetry::incident::IncidentKind::SaveFailed,
+            kind: crate::auth::incident::IncidentKind::SaveFailed,
             ..IncidentContext::internal(InternalClass::CommitRefused)
         }.with_persistence(outcome);
         Self {
@@ -293,17 +276,6 @@ impl PersistenceWarning {
                 class, keymanager_stage: context.keymanager_stage, service_error_code: context.service_error_code,
             }),
         }
-    }
-
-    /// Both the original offer and a later explicit one-off use this same closed snapshot.
-    pub(super) fn incident_context(self) -> Option<IncidentContext> {
-        let evidence = self.persistence?;
-        Some(IncidentContext {
-            kind: crate::telemetry::incident::IncidentKind::SaveFailed,
-            persistence: Some(evidence.class), helper: self.helper, candidate_errnos: self.candidate_errnos,
-            keymanager_stage: evidence.keymanager_stage, service_error_code: evidence.service_error_code,
-            ..IncidentContext::internal(InternalClass::CommitRefused)
-        })
     }
 }
 
@@ -563,9 +535,6 @@ pub(crate) enum SessionFx {
     Erase { req: u32, epoch: u64, all_local: bool },
     Coordinator(CoordinatorAction),
     RestartReply { to: ReplyTo, accepted: bool },
-    /// Queue one incident report on `lane`. The adapter answers with
-    /// [`SessionEvent::IncidentReported`] carrying the same `id`.
-    Incident { id: u32, lane: IncidentLane, report: IncidentReport },
     SelectionReply { to: ReplyTo, accepted: bool, flow_epoch: u64 },
     BackReply { to: ReplyTo, resumed: bool },
     /// Record the person's plaintext answer for one server: this launch's grant authority
@@ -592,8 +561,6 @@ pub(crate) enum SessionEvent {
     /// effect/FIFO path. It is fenced by request/epoch/arrival/revision before it settles anything.
     Persistence(crate::catalog::session::async_persistence::PersistenceCompletion),
     Erased { epoch: u64, leftovers: usize },
-    /// What became of a [`SessionFx::Incident`]; fenced by the offer's id.
-    IncidentReported { id: u32, delivery: IncidentDelivery },
 }
 
 impl CredentialPatch {
@@ -726,15 +693,6 @@ pub(crate) struct SessionInit {
     pub active_profile: Option<UserRef>,
     pub profile_scope: ProfileScope,
     pub delete_leftovers: usize,
-    /// The onboarding incident being offered or reported, if any — see `owner::incident`.
-    #[serde(default)]
-    pub incident: Option<IncidentOffer>,
-    /// Every incident key already resolved this launch: none of them is raised again.
-    #[serde(default)]
-    pub incidents_seen: Vec<IncidentKey>,
-    /// The last incident id handed out. Never reused within a launch.
-    #[serde(default)]
-    pub next_incident: u32,
     /// plex.tv has left at least two consecutive polls of the code on screen unanswered.
     #[serde(default)]
     pub link_trouble: bool,
@@ -821,7 +779,7 @@ impl SessionInit {
             persistence_warning: None, held_handoff: None, persistence_warning_answered: false,
             unconfirmed_fresh_prior: None, pending_erase: None, inbox: VecDeque::new(), pump_pending: false,
             active_profile: None, profile_scope: ProfileScope(0),
-            delete_leftovers: 0, incident: None, incidents_seen: Vec::new(), next_incident: 0,
+            delete_leftovers: 0,
             link_trouble: false, discovery_retry: None, plaintext: None, signin_account: None,
             switch_refused_for: None }
     }
@@ -841,8 +799,41 @@ impl SessionInit {
     }
 }
 
-pub(super) fn write_incident_context(w: &mut Canon, context: &crate::telemetry::incident::IncidentContext) {
-    incident::write_context(w, context);
+pub(super) fn write_incident_context(w: &mut Canon, c: &crate::auth::incident::IncidentContext) {
+    use crate::auth::incident::keymanager_stage_code;
+    w.str(c.kind.code());
+    w.str(c.link.code());
+    w.option(c.http_status, |w, s| {
+        w.u32(u32::from(s));
+    });
+    w.option(c.curl_rc, |w, rc| {
+        w.u32(rc as u32);
+    });
+    w.str(c.unanswered.code()).str(c.failing_for.code());
+    w.option(c.code_generation, |w, g| {
+        w.u8(g);
+    });
+    w.option(c.persistence, |w, p| {
+        w.str(p.code());
+    });
+    w.option(c.keymanager_stage, |w, s| {
+        w.str(keymanager_stage_code(s));
+    });
+    w.option(c.service_error_code, |w, e| {
+        w.u32(e as u32);
+    });
+    w.option(c.helper, |w, helper| { w.str(&serde_json::to_string(&helper).unwrap()); });
+    for errno in c.candidate_errnos { w.option(errno, |w, n| { w.u32(n as u32); }); }
+    w.u64(c.occurred_at_ms);
+    // Appended only when present, so every context without it keeps its recorded digest.
+    if let Some(outcome) = c.plaintext_consent {
+        w.str(outcome.code());
+    }
+    if let Some(discovery) = c.discovery {
+        w.str(discovery.trigger.code());
+        if let Some(target) = discovery.target { w.str(target.code()); }
+        if let Some(attempts) = c.discovery_attempts { w.u32(attempts); }
+    }
 }
 
 pub(super) fn write_plaintext_verdict(w: &mut Canon, v: &super::PlaintextVerdict) {
@@ -1045,10 +1036,7 @@ impl LogicalState for SessionInit {
         w.option(self.pending_erase, |w, (epoch, sign_in)| { w.u64(epoch).bool(sign_in); });
         w.bool(self.pump_pending).seq(self.inbox.len());
         for envelope in &self.inbox { envelope.write(w); }
-        w.option(self.incident.as_ref(), incident::write_offer);
-        w.seq(self.incidents_seen.len());
-        for key in &self.incidents_seen { incident::write_key(w, key); }
-        w.u32(self.next_incident).bool(self.link_trouble);
+        w.bool(self.link_trouble);
         w.option(self.switch_refused_for.as_ref(), |w, id| {
             w.str(&id.client_id).str(&id.account_token).str(&id.profile_uuid);
         });
@@ -1091,8 +1079,6 @@ pub(crate) struct SessionSnapshot {
     pub scope: ProfileScope,
     pub delete_leftovers: usize,
     pub persistence_warning: Option<PersistenceWarning>,
-    /// The onboarding incident being offered or reported — see `owner::incident`.
-    pub incident: Option<IncidentOffer>,
     /// plex.tv is not answering the polls of the code on screen.
     pub link_trouble: bool,
     pub discovery_retry: Option<super::DiscoveryRetryProgress>,
@@ -1163,7 +1149,7 @@ impl SessionSnapshot {
             && self.code_replaced == state.code_replaced && self.pin_denied == state.pin_denied
             && self.scope == state.profile_scope && self.delete_leftovers == state.delete_leftovers
             && self.persistence_warning == state.persistence_warning
-            && self.incident == state.incident && self.link_trouble == state.link_trouble
+            && self.link_trouble == state.link_trouble
             && self.discovery_retry == state.discovery_retry
             && self.plaintext == state.plaintext
             && self.account.as_deref() == state.readout_account()
@@ -1198,7 +1184,7 @@ impl SessionSnapshot {
             profile: state.active_profile.as_ref().map(|p| ProfileRead {
                 uuid: p.uuid.clone(), title: p.title.clone(), thumb: p.thumb.clone(),
             }), scope: state.profile_scope, delete_leftovers: state.delete_leftovers,
-            persistence_warning: state.persistence_warning, incident: state.incident.clone(),
+            persistence_warning: state.persistence_warning,
             link_trouble: state.link_trouble, discovery_retry: state.discovery_retry,
             plaintext: state.plaintext.clone(),
             account: state.readout_account().map(Arc::from),
@@ -1466,7 +1452,6 @@ impl SessionMachine {
             let superseded = admitted.fresh && self.state.persistence_warning.is_some();
             if superseded {
                 self.state.persistence_warning = None;
-                self.retire_save_incident();
             }
             // Release only the handoff THIS completion is for — a routine completion arriving
             // while an unrelated fresh handoff is held must not free it.
@@ -1486,15 +1471,7 @@ impl SessionMachine {
                 // showing (`Discovery` and `Final` never coexist: an unacknowledged Discovery warning
                 // blocks `take_ready`), so the newer one wins by direct overwrite.
                 let warning = PersistenceWarning::from_outcome(correlation_key, admitted.site, &completion.outcome);
-                self.retire_save_incident();
                 self.state.persistence_warning = Some(warning);
-                if warning.helper.is_some() {
-                    // The reducer reads no clock. Both report paths use this fenced completion's
-                    // local warning evidence, not later process-global diagnostics.
-                    if let Some(context) = warning.incident_context() {
-                        self.raise_incident(IncidentFlow::SignIn, context);
-                    }
-                }
                 self.replace_publication();
             }
         }
@@ -1566,7 +1543,6 @@ impl SessionMachine {
                 DevCommitDelta::StartAccount { login_req } => {
                     self.state.authority = BootstrapAuthority::Account { extras: Vec::new() };
                     self.state.signin_active = true;
-                    emit(SessionFx::Coordinator(CoordinatorAction::SignInStarted));
                     self.start_reserved_login(*login_req, emit);
                 }
             }
@@ -1595,8 +1571,8 @@ impl SessionMachine {
             pending.phase = StreamPhase::ProfileSeated;
             self.cancel_obsolete_interests(reply.req, emit);
         }
-        if delta.complete_signin && std::mem::take(&mut self.state.signin_active) {
-            emit(SessionFx::Coordinator(CoordinatorAction::SignInCompleted));
+        if delta.complete_signin {
+            self.state.signin_active = false;
         }
         if delta.activate_profile {
             if commit.fresh && admit_revision.is_some() && !self.state.persistence_warning_answered {
@@ -1648,13 +1624,6 @@ impl SessionMachine {
         }
     }
 
-    fn retire_save_incident(&mut self) {
-        if self.state.incident.as_ref().is_some_and(|offer|
-            offer.key.kind == crate::telemetry::incident::IncidentKind::SaveFailed) {
-            self.state.incident = None;
-        }
-    }
-
     /// The AUTH-03 acknowledgement door: clears the warning and, if a handoff is still held for
     /// it, releases it — exactly ONE `SessionFx::Ready` for the flow, through
     /// [`Self::release_held_handoff`], never a second one from here.
@@ -1662,7 +1631,6 @@ impl SessionMachine {
         emit: &mut impl FnMut(SessionFx)) -> bool {
         if self.state.persistence_warning.map(|warning| warning.key) != Some(key) { return false; }
         self.state.persistence_warning = None;
-        self.retire_save_incident();
         // This authorization's unsaved-login question is answered now: storage may never gate
         // entry a second time for it (AUTH-03's field bug). A later failure — Discovery then
         // Final, or a retry — releases the handoff itself instead of asking again.
@@ -1968,9 +1936,7 @@ impl SessionMachine {
             return true;
         }
         self.advance_epoch(emit).expect("epoch preflight");
-        if std::mem::take(&mut self.state.signin_active) {
-            emit(SessionFx::Coordinator(CoordinatorAction::SignInCancelled));
-        }
+        self.state.signin_active = false;
         self.state.persisted = stored;
         self.state.phase = Phase::Ready;
         self.state.apply_pending = true;
@@ -1992,7 +1958,6 @@ impl SessionMachine {
 
     fn erase(&mut self, sign_in: bool, emit: &mut impl FnMut(SessionFx)) -> bool {
         if self.state.pending_erase.is_some() || self.state.epoch.checked_add(1).is_none() { return false; }
-        emit(SessionFx::Coordinator(CoordinatorAction::CloseTelemetry));
         self.advance_epoch(emit).expect("epoch preflight");
         self.state.persisted = PersistedSession::default();
         self.state.committed_credentials = CredentialPatch::of(&self.state.persisted);
@@ -2015,7 +1980,6 @@ impl SessionMachine {
         self.state.signin_active = false;
         self.state.apply_pending = false;
         self.state.code_replaced = false;
-        self.forget_incidents();
         self.publish_profile(None, emit);
         emit(SessionFx::Erase { req: self.state.next_req, epoch: self.state.epoch, all_local: !sign_in });
         self.replace_publication();
@@ -2412,7 +2376,6 @@ impl SessionMachine {
         if self.state.next_req.checked_add(1).is_none() { return false; }
         let discovery = !fresh_login && super::retry_kind(self.state.phase,
             self.state.authorized_in_flow) == super::RetryKind::Discovery;
-        let fresh_attempt = fresh_login || super::restart_is_a_new_attempt(self.state.signin_active);
         let requests = self.state.pending.keys().copied().collect();
         self.discard_owned_envelopes(emit);
         self.state.pending.clear();
@@ -2451,7 +2414,6 @@ impl SessionMachine {
         self.state.link_trouble = false;
         self.state.plaintext = None;
         self.state.signin_account = None;
-        if fresh_attempt { emit(SessionFx::Coordinator(CoordinatorAction::SignInStarted)); }
         let op = if discovery { SessionOp::Rediscover } else { SessionOp::Login };
         let req = self.allocate(op, None).expect("request exhaustion checked before transition");
         let client_id = self.state.persisted.client_id.clone();
@@ -2529,14 +2491,10 @@ impl SessionMachine {
         true
     }
 
-    /// End the flow on the error read-out. **Every ending names its incident**: `Some` is the
-    /// failure's own closed evidence and is raised here, so the read-out's Details and Send report
-    /// are about THIS failure; `None` is an ending the onboarding report does not cover, and it
-    /// retires whatever is held, which explains an earlier failure and not this one.
-    fn fail_login(&mut self, message: &str, incident: Option<IncidentContext>, emit: &mut impl FnMut(SessionFx)) {
-        if std::mem::take(&mut self.state.signin_active) {
-            emit(SessionFx::Coordinator(CoordinatorAction::SignInFailed { phase: self.state.phase }));
-        }
+    /// End the flow on the error read-out. `incident` is the failure's own closed evidence, when
+    /// it has one.
+    fn fail_login(&mut self, message: &str, incident: Option<IncidentContext>, _emit: &mut impl FnMut(SessionFx)) {
+        self.state.signin_active = false;
         self.state.error = message.to_owned();
         self.state.phase = Phase::Error;
         self.state.plaintext = None;
@@ -2549,13 +2507,9 @@ impl SessionMachine {
         // A token plex.tv refused is not an authorization in flight any more: without this, the
         // retry decision (`retry_kind`) kept offering a discovery-only pass that presents the same
         // refused token again, and Try again could never recover. Dropping it makes the retry a
-        // new QR sign-in; the incident below is raised exactly as before, so its dedup holds.
+        // new QR sign-in.
         if incident.is_some_and(|context| context.kind.refuses_the_account_token()) {
             self.state.authorized_in_flow = false;
-        }
-        match incident {
-            Some(context) => self.raise_incident(IncidentFlow::SignIn, context),
-            None => self.state.incident = None,
         }
     }
 
@@ -2648,9 +2602,6 @@ impl SessionMachine {
                     LoginProgress::LinkTrouble { trouble, .. } => {
                         if envelope.key.op != SessionOp::Login { return false; }
                         self.state.link_trouble = trouble.is_some();
-                        if let Some(context) = trouble {
-                            self.raise_incident(IncidentFlow::SignIn, *context);
-                        }
                     }
                     LoginProgress::Failed { message, incident, plaintext, account, .. } => {
                         self.fail_login(message, Some(*incident), emit);
@@ -2735,12 +2686,6 @@ impl<H: SessionHost> nj_machine::machine::Machine<H> for SessionMachine {
             SessionEvent::Command(Command::TakeReady) => self.take_ready(&mut emit),
             SessionEvent::Command(Command::AcknowledgePersistenceWarning { key }) =>
                 self.acknowledge_persistence_warning(*key, &mut emit),
-            SessionEvent::Command(command @ (Command::ResolveIncident { .. }
-                | Command::ReportIncident { .. } | Command::DeclineIncident { .. })) => {
-                let handled = self.step_incident_command(command, &mut emit);
-                if handled { self.replace_publication(); }
-                handled
-            }
             SessionEvent::Command(Command::StartSwitch(picker)) => self.start_switch(*picker, &mut emit),
             SessionEvent::Command(Command::SelectProfile { index, pin }) => self.select_profile(*index, pin.clone(), &mut emit),
             SessionEvent::Command(Command::SelectProfileWithReply { index, pin, reply }) => {
@@ -2779,11 +2724,6 @@ impl<H: SessionHost> nj_machine::machine::Machine<H> for SessionMachine {
             SessionEvent::Read(reply) => self.apply_read(reply, &mut emit),
             SessionEvent::Admission(reply) => self.apply_admission(*reply, &mut emit),
             SessionEvent::Erased { epoch, leftovers } => self.erased(*epoch, *leftovers, &mut emit),
-            SessionEvent::IncidentReported { id, delivery } => {
-                let handled = self.incident_reported(*id, delivery);
-                if handled { self.replace_publication(); }
-                handled
-            }
             SessionEvent::Pump => {
                 self.state.pump_pending = false;
                 self.pump_one(&mut emit);
@@ -3210,59 +3150,6 @@ mod tests {
     }
 
     #[test]
-    fn declined_warning_reconstructs_every_persistence_class_and_its_evidence() {
-        use crate::catalog::session::async_persistence::{CompletionOutcome as O, Failure as F, Operation, PersistOutcome};
-        use crate::catalog::session::persistence::ProtectionFailure;
-        use nj_platform::storage::wire::{AuthPreservation, ErrorCode, KeymanagerFailure, KeymanagerFailureCategory,
-            KeymanagerOperation, KeymanagerStage};
-        use nj_platform::storage::wire::failure::{HelperFailure, Stage};
-        use crate::telemetry::incident::{IncidentKind, PersistenceFailure as P};
-        let protection = ProtectionFailure {
-            failure: KeymanagerFailure { operation: KeymanagerOperation::Seal, stage: KeymanagerStage::Finish,
-                code: ErrorCode::Unavailable, category: KeymanagerFailureCategory::ServiceRejected, service_code: Some(-3961) },
-            preservation: AuthPreservation::Unchanged, db8_commit_verified: false,
-        };
-        let helper = HelperFailure::new(Stage::Db8, Some(-3963));
-        let mut errnos = [None; 8];
-        errnos[0] = Some(libc::EACCES);
-        for (outcome, class) in [
-            (O::Failed(F::Admission(nj_base::storage_worker::SubmitError::Full)), P::Admission),
-            (O::Failed(F::Persistence(PersistOutcome::WriteFailed)), P::WriteFailed),
-            (O::Failed(F::Storage(nj_platform::storage::StoreError::HelperUnavailable)), P::Storage),
-            (O::Failed(F::Helper(helper, errnos)), P::Storage),
-            (O::Uncertain { stage: nj_platform::storage::CommitStage::Readback, errno: 0, helper: Some((helper, errnos)) }, P::CommitUncertain),
-            (O::Uncertain { stage: nj_platform::storage::CommitStage::ParentSync, errno: 5, helper: None }, P::CommitUncertain),
-            (O::Failed(F::Protection(protection)), P::Protection),
-            (O::ProtectionUncertain(ProtectionFailure { preservation: AuthPreservation::Uncertain, ..protection }), P::ProtectionUncertain),
-            (O::Failed(F::WorkerDropped), P::WorkerDropped),
-        ] {
-            let mut owner = SessionMachine::from_init(discovering_after_authorization());
-            let expected = IncidentContext { kind: IncidentKind::SaveFailed,
-                ..IncidentContext::internal(InternalClass::CommitRefused) }.with_persistence(&outcome);
-            assert_eq!(expected.persistence, Some(class));
-            let warning = PersistenceWarning::from_outcome(
-                PersistenceWarningKey { epoch: owner.state.epoch, req: 1 }, PersistenceWarningSite::Final, &outcome);
-            // Replay/serialization must preserve the same local evidence as the live warning.
-            owner.state.persistence_warning = Some(serde_json::from_value(serde_json::to_value(warning).unwrap()).unwrap());
-            owner.raise_incident(IncidentFlow::SignIn, expected);
-            let id = owner.state.incident.as_ref().unwrap().id;
-            step(&mut owner, SessionEvent::Command(Command::ResolveIncident {
-                id, permission: crate::telemetry::consent::Permission::Declined, revision: 1 }));
-            assert!(owner.state.incident.as_ref().unwrap().context.is_none());
-            let effects = step(&mut owner, SessionEvent::Command(Command::ReportIncident { id }));
-            let rebuilt = effects.iter().find_map(|effect| match effect {
-                SessionFx::Incident { lane: IncidentLane::OneOff, report: IncidentReport::Retained(context), .. } => Some(*context),
-                _ => None,
-            }).expect("classified warning must reconstruct its report");
-            assert_eq!(rebuilt, expected, "class {class:?}");
-        }
-        for outcome in [O::Superseded, O::Failed(F::Superseded), O::Durable(Operation::Clear { cleanup_failed: false })] {
-            assert!(PersistenceWarning::from_outcome(PersistenceWarningKey { epoch: 1, req: 1 },
-                PersistenceWarningSite::Final, &outcome).incident_context().is_none());
-        }
-    }
-
-    #[test]
     fn fresh_owner_sign_in_records_the_account_token_as_its_plex_tv_credential() {
         let mut owner = SessionMachine::from_init(discovering_after_authorization());
         let req = owner.state.next_req;
@@ -3280,96 +3167,6 @@ mod tests {
         assert!(!credentials.account_token.is_empty());
         assert_eq!(credentials.user.plex_tv_token.as_deref(),
             Some(credentials.account_token.as_str()));
-    }
-
-    #[test]
-    fn uncertain_db8_reply_reaches_the_warning_and_incident_report() {
-        use crate::catalog::session::{persistence, async_persistence::{CompletionOutcome, PersistenceCompletion}};
-        use nj_platform::storage::wire::failure::{Detail, Stage};
-        for reconcile in [false, true] {
-            let mut owner = SessionMachine::from_init(discovering_after_authorization());
-            let req = owner.state.next_req;
-            let epoch = owner.state.epoch;
-            let signed_in = qr_event(&owner, req, 1, super::super::LoginProgress::SignedIn {
-                epoch, server: local_server(), sources: Vec::new(),
-                users: vec![UserTile { title: "Synthetic user".into(), ..Default::default() }],
-            }, true);
-            step(&mut owner, SessionEvent::Result(signed_in));
-            step(&mut owner, SessionEvent::Commit(CommitReply { req, epoch, arrival: 1,
-                admission: CommitAdmission::Admitted { revision: 1, purpose: PersistencePurpose::Discovery } }));
-            let outcome = persistence::uncertain_helper_reply_for_test(reconcile);
-            assert!(matches!(outcome, CompletionOutcome::Uncertain { .. }));
-            step(&mut owner, SessionEvent::Persistence(PersistenceCompletion { req, epoch, arrival: 1,
-                revision: 1, purpose: PersistencePurpose::Discovery, outcome }));
-            let warning = owner.publication().persistence_warning.unwrap();
-            let helper = warning.helper.expect("uncertain helper reply lost DB8 evidence");
-            assert_eq!(helper.helper, Some(Detail::new(Stage::Db8, Some(-3963))));
-            assert_eq!(helper.line(), "storage: helper · db8 (-3963)");
-            assert_eq!(owner.state.incident.as_ref().unwrap().context.as_ref().unwrap().helper, Some(helper));
-            let context = crate::telemetry::incident::IncidentContext::new(
-                crate::telemetry::incident::IncidentKind::SaveFailed, None).with_persistence(&outcome);
-            let body = crate::telemetry::incident::event_body(&"a".repeat(32), "", None, context,
-                crate::telemetry::incident::ConsentKind::OneOff);
-            assert_eq!(body["contexts"]["incident"]["persistence"], "commit_uncertain");
-            assert_eq!(body["contexts"]["incident"]["helper"]["helper"]["stage"], "db8");
-            assert_eq!(body["contexts"]["incident"]["helper"]["helper"]["code"], -3963);
-            let offer = owner.state.incident.clone().unwrap();
-            let retained = offer.context.unwrap();
-            step(&mut owner, SessionEvent::Command(Command::ResolveIncident {
-                id: offer.id, permission: crate::telemetry::consent::Permission::Declined, revision: 1 }));
-            assert!(owner.state.incident.as_ref().unwrap().context.is_none());
-            let effects = step(&mut owner, SessionEvent::Command(Command::ReportIncident { id: offer.id }));
-            let rebuilt = effects.iter().find_map(|effect| match effect {
-                SessionFx::Incident { lane: IncidentLane::OneOff, report: IncidentReport::Retained(context), .. } => Some(*context),
-                _ => None,
-            }).expect("one-off save report must use the visible warning evidence");
-            assert_eq!(rebuilt.persistence, retained.persistence);
-            assert_eq!(rebuilt.helper, retained.helper);
-            assert_eq!(rebuilt, retained);
-        }
-    }
-
-    #[test]
-    fn helper_failure_warning_and_one_off_are_bound_to_the_completion() {
-        use crate::catalog::session::async_persistence::{CompletionOutcome, Failure, PersistenceCompletion};
-        use nj_platform::storage::wire::failure::{HelperFailure, Stage};
-        for permission in [crate::telemetry::consent::Permission::NotDetermined,
-            crate::telemetry::consent::Permission::Declined] {
-            let mut owner = SessionMachine::from_init(discovering_after_authorization());
-            let req = owner.state.next_req;
-            let epoch = owner.state.epoch;
-            let signed_in = qr_event(&owner, req, 1, super::super::LoginProgress::SignedIn {
-                epoch, server: local_server(), sources: Vec::new(),
-                users: vec![UserTile { title: "Synthetic user".into(), ..Default::default() }],
-            }, true);
-            step(&mut owner, SessionEvent::Result(signed_in));
-            step(&mut owner, SessionEvent::Commit(CommitReply { req, epoch, arrival: 1,
-                admission: CommitAdmission::Admitted { revision: 1, purpose: PersistencePurpose::Discovery } }));
-            let failure = HelperFailure::new(Stage::Connect, Some(libc::ECONNREFUSED));
-            let mut errnos = [None; 8];
-            errnos[0] = Some(libc::EACCES);
-            let completion = PersistenceCompletion { req, epoch, arrival: 1, revision: 1,
-                purpose: PersistencePurpose::Discovery,
-                outcome: CompletionOutcome::Failed(Failure::Helper(failure, errnos)) };
-            step(&mut owner, SessionEvent::Persistence(PersistenceCompletion { req: req + 99, ..completion }));
-            assert!(owner.state.persistence_warning.is_none());
-            step(&mut owner, SessionEvent::Persistence(completion));
-            let warning = owner.publication().persistence_warning.unwrap();
-            assert_eq!(warning.helper, Some(failure));
-            let offer = owner.state.incident.clone().unwrap();
-            assert_eq!(offer.context.unwrap().helper, Some(failure));
-            let effects = step(&mut owner, SessionEvent::Command(Command::ResolveIncident {
-                id: offer.id, permission, revision: 1 }));
-            assert!(!effects.iter().any(|fx| matches!(fx, SessionFx::Incident { .. })));
-            assert!(matches!(owner.state.incident.as_ref().unwrap().state,
-                IncidentState::Offered { .. } | IncidentState::Dropped));
-            let effects = step(&mut owner, SessionEvent::Command(Command::ReportIncident { id: offer.id }));
-            assert!(effects.iter().any(|fx| matches!(fx, SessionFx::Incident {
-                lane: IncidentLane::OneOff, report: IncidentReport::Retained(context), ..
-            } if context.helper == Some(failure) && context.candidate_errnos == errnos)));
-            step(&mut owner, SessionEvent::Command(Command::AcknowledgePersistenceWarning { key: warning.key }));
-            assert!(owner.state.incident.is_none());
-        }
     }
 
     // Field regression: an unrooted webOS 4.4.3 device unwritable on BOTH the Discovery and

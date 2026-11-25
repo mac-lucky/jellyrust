@@ -56,7 +56,7 @@ so that a recording of the UI can be COMMITTED to this public repository:
   against it with `make sim-shot SIM_PMS=127.0.0.1 SIM_PORT=32499` and any non-empty
   `$SIM_DIR/nativejelly-token`.
 - **`tests/focusfp.sh`** drives eleven focus flows (boot → grid, grid → detail → BACK, the
-  Library, Search with a seeded query, detail ↔ person, the Settings family, first-run consent,
+  Library, Search with a seeded query, detail ↔ person, the Settings family, the first-run sources editor,
   press-and-hold, the player read-out, pointer clicks; flow 10 — root BACK — is a television flow
   and is SKIPPED here) on the simulator against that server, and writes one `.fp` file per flow:
   every `focus …` fingerprint (`crate::focusprobe`, `nativejelly-focus`) and every heartbeat route

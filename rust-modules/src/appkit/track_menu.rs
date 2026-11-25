@@ -941,9 +941,6 @@ impl TrackMenuState {
                             a.normalize_loudness
                         });
                     }
-                    crate::diag::event(crate::diag::schema::DiagEvent::FeatureUsed {
-                        feature: crate::diag::schema::Feature::AudioEnhancement,
-                    });
                     TrackOk::Commit { commit: TrackCommit::AudioEnhancement(a), keep_open: true }
                 }
                 Some(TrackRow::Audio(i)) => {
@@ -958,9 +955,6 @@ impl TrackMenuState {
                             let ord = tracks(meta)
                                 .map(|t| metadata::audio_ordinal(&t.audio, i))
                                 .unwrap_or(pick);
-                            crate::diag::event(crate::diag::schema::DiagEvent::FeatureUsed {
-                                feature: crate::diag::schema::Feature::AudioTrack,
-                            });
                             return TrackOk::Commit {
                                 commit: TrackCommit::Audio(crate::route::CarriedAudio::from_stream(s, ord)),
                                 keep_open: false,
@@ -1009,7 +1003,6 @@ impl TrackMenuState {
     /// The subtitle commit behind OK on Off (`-1`) or on a track row: records the pick, and answers
     /// the commit.
     fn commit_sub(&mut self, new_sub: c_int, meta: metadata::MetadataView<'_>) -> TrackOk {
-        let changed = self.active_sub != new_sub;
         self.active_sub = new_sub;
         // the client renderer takes the EMBEDDED-subtitle ordinal (what the demuxer
         // enumerates); an external pick has no demux ordinal — it is drawn by the sidecar
@@ -1018,11 +1011,6 @@ impl TrackMenuState {
             .filter(|_| new_sub >= 0)
             .map(|t| metadata::sub_render_ordinal(&t.subs, new_sub as usize))
             .unwrap_or(-1);
-        if changed {
-            crate::diag::event(crate::diag::schema::DiagEvent::FeatureUsed {
-                feature: crate::diag::schema::Feature::SubtitleTrack,
-            });
-        }
         let sidecar = tracks(meta)
             .filter(|_| new_sub >= 0)
             .and_then(|t| t.subs.get(new_sub as usize))

@@ -40,10 +40,6 @@ on:
           from the shell rather than set empty here, gets the Makefile's own today's-date default.
         type: string
         default: ''
-      telemetry:
-        description: 'Which telemetry credential pair to compile in — production or development.'
-        type: string
-        required: true
       artifact:
         description: 'upload-artifact name for the built package + evidence files.'
         type: string
@@ -77,10 +73,6 @@ on:
           release both pass this true; a non-publishing caller can still opt out.
         type: boolean
         default: false
-    secrets:
-      SENTRY_AUTH_TOKEN:
-        # Not required: a `none` build (JellyRust's releases) uploads no debug files.
-        required: false
     outputs:
       ipk:
         description: Path to the built .ipk inside the runner's workspace (pkg/*.ipk).
@@ -95,20 +87,15 @@ jobs:
     outputs:
       ipk: ${{ steps.name.outputs.ipk }}
     steps:
-      - name: Validate flavor and telemetry inputs
+      - name: Validate flavor input
         env:
           FLAVOR: ${{ inputs.flavor }}
-          TELEMETRY: ${{ inputs.telemetry }}
           HOMEBREW_MANIFEST: ${{ inputs.homebrew-manifest }}
         run: |
           set -euo pipefail
           case "$FLAVOR" in
             stable|debug|nightly) ;;
             *) echo "::error::flavor must be stable, debug, or nightly, got '$FLAVOR'"; exit 1 ;;
-          esac
-          case "$TELEMETRY" in
-            production|development|none) ;;
-            *) echo "::error::telemetry must be production, development or none, got '$TELEMETRY'"; exit 1 ;;
           esac
           # The manifest filename and the Homebrew Channel listing are both keyed to the STABLE
           # app id — a manifest generated for a flavoured id would name a package the Channel does
@@ -156,7 +143,6 @@ jobs:
         env:
           WEBOS_SDK: ${{ steps.ndk.outputs.sdk-dir }}
           RUST_NIGHTLY: ${{ vars.RUST_NIGHTLY || 'nightly-2026-07-02' }}
-          TELEMETRY: ${{ inputs.telemetry }}
           # Drops the `devtools` cargo feature — no on-screen counter in a public build.
           RELEASE: "1"
           # WHICH INSTALL. `FLAVOR ?= debug` in the Makefile — deliberately, so a developer's
@@ -178,29 +164,6 @@ jobs:
           # separated .debug back to the binary a stranger's television crashed in. Two steps would
           # hand us a .debug matching nothing that ever shipped.
           SYMBOLS: "1"
-          # The PRODUCTION telemetry endpoints, and `vars` rather than `secrets` DELIBERATELY.
-          # They are write-only client identifiers: they permit sending TO a project and grant no
-          # read of anything in it, and `strings` finds both in every shipped binary, so treating
-          # them as secret is theatre. It would also be actively harmful here — GitHub masks a
-          # secret's value everywhere it appears in a log, and `ci/gen-release-audit.py` reads the
-          # endpoints back OUT of the packaged binary and prints them, which is the row that lets a
-          # stranger confirm where their television reports to. Masked, that row reads `***`.
-          # Only SENTRY_AUTH_TOKEN, in the upload step below, is a real secret: it can read and
-          # delete the project.
-          #
-          # A developer's machine gets the `_DEV` pair instead (`make telemetry-local`), and
-          # `telemetry::sender::ENVIRONMENT` is derived from WHICH pair a build was handed — so
-          # this is also the whole reason a `telemetry: production` build reports as `production`
-          # and a `telemetry: development` one (nightly today) cannot. Declared EMPTY rather than
-          # merely absent when the other pair is wanted: the checks below refuse a build that
-          # carries the wrong environment's credentials, and an assertion on a variable this
-          # workflow never names reads as dead code to the next person editing it — which is how a
-          # guard gets deleted. It also makes the check hold if a `set -u` is ever added to the
-          # script.
-          NJ_SENTRY_DSN: ${{ inputs.telemetry == 'production' && vars.NJ_SENTRY_DSN || '' }}
-          NJ_POSTHOG_KEY: ${{ inputs.telemetry == 'production' && vars.NJ_POSTHOG_KEY || '' }}
-          NJ_SENTRY_DSN_DEV: ${{ inputs.telemetry == 'development' && vars.NJ_SENTRY_DSN_DEV || '' }}
-          NJ_POSTHOG_KEY_DEV: ${{ inputs.telemetry == 'development' && vars.NJ_POSTHOG_KEY_DEV || '' }}
         run: |
           make -j"$(nproc)"
           make ipk symbols
@@ -211,65 +174,18 @@ jobs:
             || { echo "::error::RELEASE=1 did not take — pkg/.build-config says [$(cat pkg/.build-config)]"; exit 1; }
           # Same argument for SYMBOLS, and it needs its own check because the failure is silent in
           # the other direction: `make symbols` REFUSES without the flag, but a stamp that lost it
-          # between the two invocations would relink and hand the upload a .debug for a binary
-          # nobody shipped.
+          # between the two invocations would relink and hand back a .debug for a binary nobody
+          # shipped.
           grep -q '+symbols' pkg/.build-config \
             || { echo "::error::SYMBOLS=1 did not take — pkg/.build-config says [$(cat pkg/.build-config)]"; exit 1; }
           test -s pkg/nativejelly.debug \
             || { echo "::error::pkg/nativejelly.debug is missing or empty"; exit 1; }
-          # The build id is what pairs the two. Assert it here rather than trusting the upload:
-          # `sentry-cli` will happily accept a .debug whose id matches nothing that shipped.
+          # The build id is what pairs the two, and nothing downstream notices a .debug whose id
+          # matches nothing that shipped, so assert it here.
           idof() { readelf -n "$1" | awk '/Build ID/{print $3}'; }
           [ "$(idof pkg/nativejelly)" = "$(idof pkg/nativejelly.debug)" ] \
             || { echo "::error::build id mismatch between the shipped binary and its .debug"; exit 1; }
           echo "build-id $(idof pkg/nativejelly)"
-          if [ "$TELEMETRY" = production ]; then
-            # **The telemetry configuration FAILS CLOSED here, and only here.** For a local build,
-            # "no endpoint -> telemetry compiled out" is the right default and the safe one. For an
-            # OFFICIAL RELEASE it is a configuration failure: a binary that silently cannot report is
-            # indistinguishable from a healthy one until months later, when the crash that should
-            # have arrived never did. This step used to warn and continue.
-            [ -n "$NJ_SENTRY_DSN" ] \
-              || { echo "::error::NJ_SENTRY_DSN is unset — refusing to ship a release that cannot report a crash. Set it as a repository VARIABLE (not a secret)."; exit 1; }
-            [ -n "$NJ_POSTHOG_KEY" ] \
-              || { echo "::error::NJ_POSTHOG_KEY is unset — refusing to ship a release that cannot report usage. Set it as a repository VARIABLE (not a secret)."; exit 1; }
-            # The DEVELOPMENT pair must be ABSENT. Supplying both is already a compile error —
-            # `telemetry::sender`'s const block refuses it, because the environment a build reports
-            # is derived from which pair it was given and two pairs have no answer — so this is the
-            # same assertion, made earlier and in words that name the workflow rather than the crate.
-            [ -z "$NJ_SENTRY_DSN_DEV$NJ_POSTHOG_KEY_DEV" ] \
-              || { echo "::error::development telemetry credentials are present in a release build"; exit 1; }
-            grep -q 'tel:' pkg/.build-config \
-              || { echo "::error::telemetry endpoints were set but did not reach the build"; exit 1; }
-            # And that the binary carries the PRODUCTION endpoint specifically, rather than merely
-            # "some endpoint". `option_env!` yields a `&'static str`, so a configured DSN is in
-            # `.rodata` verbatim; finding it there is what proves `telemetry::sender`'s const block
-            # took the production branch, and so that `ENVIRONMENT` is `production` and every event
-            # from this release lands in the right project. Substring, not whole-line: Rust string
-            # literals are not NUL-terminated and adjacent ones merge into one `strings` record.
-            strings pkg/nativejelly | grep -qF "$NJ_SENTRY_DSN" \
-              || { echo "::error::the packaged binary does not carry the production Sentry DSN"; exit 1; }
-            strings pkg/nativejelly | grep -qF "$NJ_POSTHOG_KEY" \
-              || { echo "::error::the packaged binary does not carry the production PostHog key"; exit 1; }
-            # Fingerprints, not values. These are publishable, but they are also usable to write junk
-            # into the project and burn a free-tier quota, and a workflow log is a far more casually
-            # read surface than the audit file — which does record them in full, deliberately, being
-            # the document that makes the package reproducible by somebody other than the maintainer.
-            echo "telemetry fingerprints (sha256, first 16):"
-            printf '  sentry  %s\n' "$(printf %s "$NJ_SENTRY_DSN"  | sha256sum | cut -c1-16)"
-            printf '  posthog %s\n' "$(printf %s "$NJ_POSTHOG_KEY" | sha256sum | cut -c1-16)"
-          elif [ "$TELEMETRY" = development ]; then
-            [ -n "$NJ_SENTRY_DSN_DEV" ] || { echo '::error::NJ_SENTRY_DSN_DEV is required for a development-telemetry build.'; exit 1; }
-            [ -n "$NJ_POSTHOG_KEY_DEV" ] || { echo '::error::NJ_POSTHOG_KEY_DEV is required for a development-telemetry build.'; exit 1; }
-            [ -z "$NJ_SENTRY_DSN$NJ_POSTHOG_KEY" ] || { echo '::error::production telemetry is present in a development-telemetry build.'; exit 1; }
-            grep -q 'tel:' pkg/.build-config
-            python3 -c 'import os; b=open("pkg/nativejelly","rb").read(); assert os.environ["NJ_SENTRY_DSN_DEV"].encode() in b; assert os.environ["NJ_POSTHOG_KEY_DEV"].encode() in b'
-          else
-            # `none` (JellyRust): telemetry/sender.rs compiles no endpoint in, so none may reach the build.
-            # (`tel:<hash>` is in pkg/.build-config either way: it hashes the configuration, empty or not.)
-            [ -z "$NJ_SENTRY_DSN$NJ_POSTHOG_KEY$NJ_SENTRY_DSN_DEV$NJ_POSTHOG_KEY_DEV" ] \
-              || { echo '::error::telemetry credentials are present in a none-telemetry build'; exit 1; }
-          fi
           # ...and carry the stamp to the caller's downstream jobs under a NON-HIDDEN name:
           # upload-artifact silently drops dotfiles, so `pkg/.build-config` would never arrive and
           # the release audit would lose the row recording which configuration was built.
@@ -285,44 +201,6 @@ jobs:
           appid=$(make -s print-appid FLAVOR="$FLAVOR")
           ls "pkg/${appid}"_*_arm.ipk >/dev/null 2>&1 \
             || { echo "::error::packaged the wrong flavour — pkg/ holds $(ls pkg/*.ipk 2>&1)"; exit 1; }
-
-      - name: Upload debug files to Sentry
-        if: inputs.telemetry != 'none'
-        # **In the same job as the build, deliberately.** `pkg/nativejelly.debug` is 75 MB and exists
-        # only here; carrying it between jobs as an artifact would cost an upload and a download to
-        # move a file whose only consumer is this step. It also keeps the pairing local: the binary
-        # and its .debug are asserted to share a build id twenty lines up, and nothing can come
-        # between that assertion and this upload.
-        #
-        # **Fails the release.** A build whose native crash addresses have no matching DIF is not a
-        # working crash-reporting build: ingest accepts it silently and the dashboard shows bare
-        # addresses. The binary/debug build-id assertion above catches a wrong pair; this step
-        # catches a missing token, unusable DIF and failed upload.
-        #
-        # `--include-sources` bundles every source the DWARF references, so Sentry can show source
-        # context around a frame. Checked before enabling it: 1961 files are referenced and NONE of
-        # them is gitignored — in particular `src/config.local.h`, which holds a live Plex token, is
-        # not referenced at all, and that token appears zero times in both the .debug and the
-        # stripped binary. The source is GPL-3.0-or-later; publication also requires the corresponding-source gate.
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ vars.SENTRY_ORG || 'gleb-linnik' }}
-          SENTRY_PROJECT: ${{ inputs.telemetry == 'production' && (vars.SENTRY_PROJECT || 'native-jelly') || (vars.SENTRY_PROJECT_DEV || 'native-jelly') }}
-          TELEMETRY: ${{ inputs.telemetry }}
-        run: |
-          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
-            echo "::error::SENTRY_AUTH_TOKEN is not set — refusing to ship unsymbolicatable crash reports."
-            exit 1
-          fi
-          if [ "$TELEMETRY" = development ]; then
-            [ "$SENTRY_PROJECT" = native-jelly ] || { echo "::error::a development-telemetry build's DIFs must upload to native-jelly, not $SENTRY_PROJECT."; exit 1; }
-          fi
-          # `debug-files check` first: it is the step that says whether Symbolicator can use this
-          # object at all, and its answer (`Arch: arm`, `Usable: yes`) is the one thing no vendor
-          # documentation states about armv7.
-          npx --yes @sentry/cli@3.7.0 debug-files check pkg/nativejelly.debug
-          npx --yes @sentry/cli@3.7.0 debug-files upload \
-              --include-sources pkg/nativejelly.debug pkg/nativejelly
 
       - name: ELF + packaging assertions
         # REQUIRE_PACKAGE: this step runs AFTER `make ipk`, so "nothing staged" here means the build
@@ -455,13 +333,6 @@ jobs:
         # archives; reconstruction restores them before the offline build.
         if: inputs.source-asset
         env:
-          # Both telemetry pairs, whichever one `inputs.telemetry` compiled in: the scan proves the
-          # source tarball carries no private value, and a development build holds the `_DEV` pair.
-          GPL_SCAN_SENTRY_DSN: ${{ vars.NJ_SENTRY_DSN }}
-          GPL_SCAN_POSTHOG_KEY: ${{ vars.NJ_POSTHOG_KEY }}
-          GPL_SCAN_SENTRY_DSN_DEV: ${{ vars.NJ_SENTRY_DSN_DEV }}
-          GPL_SCAN_POSTHOG_KEY_DEV: ${{ vars.NJ_POSTHOG_KEY_DEV }}
-          GPL_SCAN_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           # The NDK the release was built with: prepare-source-release.py records its compiler hash
           # and verify-source-rebuild.py rebuilds with it. Both refuse to run without it.
           WEBOS_SDK: ${{ steps.ndk.outputs.sdk-dir }}

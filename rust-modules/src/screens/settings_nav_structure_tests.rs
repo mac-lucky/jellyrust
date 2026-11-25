@@ -9,7 +9,7 @@
 //!
 //! The last test is the grep gate: no screen outside the family surface owns a `RoutePush`.
 
-use super::composed_tests::{consent_opened, frame, opened, path, settle_frames, walk_to, SurfaceRig};
+use super::composed_tests::{surface_opened, frame, opened, path, settle_frames, walk_to, SurfaceRig};
 use super::*;
 use super::test_support::*;
 use crate::jf::preferences::{AudioPreferences, PreferenceRequest};
@@ -125,7 +125,7 @@ fn every_playback_field_pushes_its_picker() {
          SettingsPage::Picker(PickerKind::SubtitleSize), SettingsPage::Picker(PickerKind::SubtitlePosition),
          SettingsPage::Picker(PickerKind::NextEpisode), SettingsPage::Picker(PickerKind::SkipInterval),
          SettingsPage::Picker(PickerKind::InstantDpadSeeking), SettingsPage::Picker(PickerKind::EpisodeNavigation)]);
-    assert_every_nav_item_pushes_exactly_its_dest("playback", &items, &|| consent_opened(SettingsPage::Playback));
+    assert_every_nav_item_pushes_exactly_its_dest("playback", &items, &|| surface_opened(SettingsPage::Playback));
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn every_audio_and_subtitles_field_pushes_its_picker() {
     let items = super::super::preferences::nav_items_for_test(super::super::preferences::Kind::AudioSubtitles, Some(&AudioPreferences::default()));
     assert_eq!(items.len(), 7, "{items:?}");
     assert_every_nav_item_pushes_exactly_its_dest("audio & subtitles", &items, &|| {
-        let (mut d, mut rig, id) = consent_opened(SettingsPage::AudioSubtitles);
+        let (mut d, mut rig, id) = surface_opened(SettingsPage::AudioSubtitles);
         frame(&mut d, &mut rig, 32, vec![]);
         let Some(registry::PreferenceCmd::Load { reply }) = rig.preference_commands.pop() else {
             panic!("the page asks its host for the load");
@@ -185,18 +185,7 @@ fn every_legal_index_row_pushes_its_own_document() {
     let items = super::super::legal::nav_items_for_test();
     assert_eq!(items.len(), 6, "{items:?}");
     assert!(items.iter().all(|(_, d)| matches!(d, SettingsPage::Document(_))), "{items:?}");
-    assert_every_nav_item_pushes_exactly_its_dest("legal index", &items, &|| consent_opened(SettingsPage::Legal));
-}
-
-#[test]
-fn every_consent_settings_preview_row_pushes_its_preview() {
-    let _reporting = super::super::consent::offer_reporting_for_test(); // litefin: the upstream rows
-    let _g = nj_base::testlock::serial();
-    let _sess = scratch_session("nav-structure-consent");
-    let items = super::super::consent::nav_items_for_test(None);
-    assert_eq!(items.len(), 5, "{items:?}");
-    assert!(items.iter().all(|(_, d)| matches!(d, SettingsPage::Preview(_))), "{items:?}");
-    assert_every_nav_item_pushes_exactly_its_dest("consent (settings)", &items, &|| consent_opened(SettingsPage::Privacy));
+    assert_every_nav_item_pushes_exactly_its_dest("legal index", &items, &|| surface_opened(SettingsPage::Legal));
 }
 
 /// **No page in the family owns a `RoutePush` but the family itself.** A picker (or any future

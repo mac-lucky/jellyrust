@@ -29,10 +29,6 @@
       "catalog",
       "http",
       "jf"
-    ],
-    [
-      "diag",
-      "telemetry"
     ]
   ]
 }

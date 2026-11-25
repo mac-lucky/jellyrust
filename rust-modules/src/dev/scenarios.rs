@@ -67,7 +67,6 @@ pub(crate) struct DevFlags {
     pub(crate) legal_doc: bool,
     pub(crate) alert_boot: bool,
     pub(crate) account_osc: bool,
-    pub(crate) consent_osc: bool,
     pub(crate) onboard_osc: bool,
     pub(crate) nav_osc: bool,
     pub(crate) nav_osc_rk: String,
@@ -101,8 +100,6 @@ pub(crate) struct Scenarios {
     pub(crate) alert_step: u8,
     pub(crate) account_osc_last: u32,
     pub(crate) account_osc_down: bool,
-    pub(crate) consent_osc_last: u32,
-    pub(crate) consent_osc_down: bool,
     pub(crate) onboard_osc_last: u32,
     pub(crate) onboard_osc_right: bool,
     pub(crate) nav_osc_last: u32,
@@ -445,10 +442,6 @@ pub(crate) fn alert_armed() -> bool {
 /// `/tmp/nativejelly-acctosc`.
 pub(crate) fn acctosc_armed() -> bool {
     nj_base::devtrig::flag("acctosc")
-}
-/// `/tmp/nativejelly-consentosc`.
-pub(crate) fn consentosc_armed() -> bool {
-    nj_base::devtrig::flag("consentosc")
 }
 /// `/tmp/nativejelly-onboardosc`.
 pub(crate) fn onboardosc_armed() -> bool {
@@ -2596,20 +2589,6 @@ pub(crate) fn settings_osc_tick(app: &mut App, now: u32, dt: f32) {
     }
 }
 
-/// `/tmp/nativejelly-consentosc` — sweep the first-run consent question's focus.
-pub(crate) fn consent_osc_tick(app: &mut App, now: u32, dt: f32) {
-    if app.scenarios.dev.consent_osc && crate::app::bridge::consent_up(&app.pages) {
-        nj_machine::idle::invalidate();
-        if now.wrapping_sub(app.scenarios.consent_osc_last) > 520 {
-            app.scenarios.consent_osc_last = now;
-            let key = if app.scenarios.consent_osc_down { Key::Down } else { Key::Up };
-            app.scenarios.consent_osc_down = !app.scenarios.consent_osc_down;
-            let tick = Tick { ms: now, dt_us: (dt * 1_000_000.0) as u32 };
-            app.inputs.extend(crate::app::bridge::script_key(key, tick));
-        }
-    }
-}
-
 /// `/tmp/nativejelly-onboardosc` — sweep the first-run sources editor's focus.
 pub(crate) fn onboard_osc_tick(app: &mut App, now: u32, dt: f32) {
     if app.scenarios.dev.onboard_osc && matches!(app.route(), AppArg::Onboard) {
@@ -2637,13 +2616,6 @@ pub(crate) fn detail_osc_tick(app: &mut App, now: u32) {
 // it is genuinely production code with one dev-only branch, or is the recorder/replay path this
 // phase's instructions say to leave alone.
 // =================================================================================================
-
-/// `/tmp/nativejelly-consent[=<crash|product>]` — forces either first-run purpose even on an
-/// automated boot. Read by `app::input::maybe_ask_consent`, which stays production code with this
-/// one dev-only branch: presenting the real consent screen is not itself a dev arm.
-pub(crate) fn consent_override() -> Option<String> {
-    nj_base::devtrig::read("consent")
-}
 
 /// `/tmp/nativejelly-rec` — read by controlled-bootstrap preflight. The recorder/replay MECHANISM
 /// stays in `app/recorder.rs` (this phase's instructions: it is not a scenario), but the raw
@@ -2686,8 +2658,6 @@ pub(crate) fn app_init_value() -> Option<Result<serde_json::Value, &'static str>
     None
 }
 
-// The sign-in trouble arms (`nativejelly-signinfail`, `nativejelly-readout`), the consent-state boot
-// override (`nativejelly-consentstate`) and the harness-driven test are READ by modules below this
-// layer — `auth`, `telemetry`, the login screen — and only read trigger files, so their reads
-// moved down beside them (`auth::scripted`, `telemetry::consent::state_override`,
-// `screens::login::harness_driven`) instead of being reached up into from here.
+// The sign-in trouble arms (`nativejelly-signinfail`, `nativejelly-readout`) and the harness-driven
+// test are READ by modules below this layer - `auth`, the login screen - and only read trigger
+// files, so their reads moved down beside them (`auth::scripted`, `screens::login::harness_driven`) instead of being reached up into from here.

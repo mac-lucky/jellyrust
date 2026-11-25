@@ -23,7 +23,7 @@ ROOT_DIRS = {'src', 'include', 'rust-modules', 'assets', 'ci', 'tools', 'docs', 
 PKG_FILES = {'OFL.txt', 'appfont.ttf', 'appfont-bold.ttf', 'appfont-inter.ttf', 'appfont-inter-bold.ttf',
              'appfont-cjk.ttf',
              'appinfo.json', 'icon.png', 'icon160.png', 'icon320.png', 'icon400.png',
-             'largeIcon.png', 'splash.png', 'telemetry.local.json.example'}
+             'largeIcon.png', 'splash.png'}
 PRIVATE_NAMES = {'.tv-host', '.tv-mac', '.tv-dpad-pass', '.tv-remote-url',
                  'config.local.h', 'manifest.local.json', 'auth.json', 'lab.json',
                  'telemetry.local.json', 'local.env', '.env', 'id_rsa', 'id_ed25519'}
@@ -75,8 +75,7 @@ def allowed(name):
                 (len(p.parts) == 4 and p.parts[1] == 'resources' and p.name == 'appinfo.json') or
                 name in {'pkg/dev/icon.png', 'pkg/dev/largeIcon.png',
                          'pkg/nightly/icon.png', 'pkg/nightly/largeIcon.png'})
-    return (name.startswith('vendor/nanosvg/') or name == 'vendor/sentry-native/webos-arm32.patch'
-            or name.startswith('.github/'))
+    return name.startswith('vendor/nanosvg/') or name.startswith('.github/')
 
 
 def tracked_sources(root, private_values=()):
@@ -100,6 +99,7 @@ def tracked_sources(root, private_values=()):
         transformation = None
         if name.startswith(('docs/release-audits/', 'docs/release-notes/')):
             original = data
+            # Upstream's v0.6.0-v0.10.0 audits still carry its Sentry DSNs; the scan below refuses them.
             data = re.sub(rb'(?mi)^.*\| telemetry endpoints \|.*$',
                 b'| telemetry endpoints | Redacted in the source reconstruction copy; original release record unchanged |', data)
             for value in sorted(private_values, key=len, reverse=True):
@@ -132,9 +132,6 @@ def read_regular(root, name):
 SENTRY_DSN_PATTERN = rb'https?://[0-9a-fA-F]{24,}@[A-Za-z0-9.-]*ingest[A-Za-z0-9.-]*sentry\.io/'
 PRIVATE_KEY_PATTERN = rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\r\n]+[A-Za-z0-9+/=\r\n]{32,}'
 PUBLIC_SAMPLE_FILES = {
-    # Demo DSN in the upstream Android sample app.
-    'sentry-native-0.16.6/ndk/sample/src/main/java/io/sentry/ndk/sample/MainActivity.java':
-        (SENTRY_DSN_PATTERN, '5c67de55db824517dc03b4d3aba066f45bb6e94425ce7c176733aad75719b1be'),
     # Doc-example and unit-test keys in the crates behind the `rcgen` dev-dependency (Cargo.lock
     # pins each crate's checksum; `cargo vendor` ships dev-dependencies because a build from the
     # vendored tree must resolve the whole lock).
@@ -286,7 +283,7 @@ def validate(path, expected_snapshot=None, private_values=()):
     ids = [dep['id'] for dep in dependencies]
     if len(ids) != len(set(ids)):
         fail('duplicate dependency identity')
-    for required in ['ffmpeg', 'sentry-native', 'cargo-vendor', 'rust-runtime']:
+    for required in ['ffmpeg', 'cargo-vendor', 'rust-runtime']:
         if required not in ids:
             fail('missing dependency source mapping: ' + required)
     # Older source bundles predate the renderer. For a tree carrying its build

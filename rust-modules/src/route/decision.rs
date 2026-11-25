@@ -2147,7 +2147,7 @@ pub(crate) fn pending_user_route_intent(intent: UserRouteIntent) -> bool {
 
 /// Test-only: put the reducer in `Applying(serial)` without a real claim, for a test that owns a
 /// presentation hold (`player::claim_hold`) and needs its serial to name a claim still flying.
-#[cfg(test)]
+#[cfg(all(test, feature = "hostsim"))]
 pub(crate) fn force_applying_for_test(serial: u64) {
     PLAYER_CONTROL.lock().unwrap_or_else(|e| e.into_inner()).phase = ControlPhase::Applying(serial);
 }
@@ -2654,7 +2654,6 @@ fn is_worker_ticket_current(expected: &WorkerTicket) -> bool {
 /// the demux worker starts; it never reads the mutable route session afterwards.
 #[derive(Clone)]
 pub(crate) struct HlsAbrControl {
-    trace_generation: u32,
     /// The attempt's capability snapshot; the worker's rung negotiations build their profile
     /// from it rather than re-reading the boot answer.
     caps: std::sync::Arc<nj_platform::devcaps::Caps>,
@@ -2703,9 +2702,8 @@ pub(crate) struct PrimedHls {
 pub(crate) enum OriginalProbeResult {
     Measured(crate::curlio::ThroughputSample),
     /// The request reached no usable body. The client-side HLS route remained selected; PMS-side
-    /// cursor continuity is not inferred. The outcome is telemetry, not a zero-capacity sample.
+    /// cursor continuity is not inferred. This is not a zero-capacity sample.
     Failed {
-        outcome: crate::player::report::TraceOutcome,
         failure: OriginalProbeFailure,
     },
     /// The active route changed while the finite GET was in flight. Its bytes belong to an old
@@ -2735,10 +2733,6 @@ pub(crate) enum HlsCommitRefusal {
 }
 
 impl HlsAbrControl {
-    pub(crate) fn trace_generation(&self) -> u32 {
-        self.trace_generation
-    }
-
     pub(crate) fn request_original_recovery(
         &self,
         ticket: &WorkerTicket,
@@ -2807,7 +2801,6 @@ impl HlsAbrControl {
         F: FnOnce() -> bool,
     {
         use crate::curlio::{OpenErr, ThroughputFailure as Failure};
-        use crate::player::report::{OriginalProbePhase as Phase, TraceOutcome as Outcome};
 
         if !is_worker_ticket_current(expected) {
             return OriginalProbeResult::Stale;
@@ -2815,7 +2808,6 @@ impl HlsAbrControl {
         let url = if self.fixture_base.is_empty() {
             let Some(client) = crate::catalog::client_for(self.sid) else {
                 return OriginalProbeResult::Failed {
-                    outcome: Outcome::Inconclusive,
                     failure: OriginalProbeFailure::Other,
                 };
             };
@@ -2825,11 +2817,6 @@ impl HlsAbrControl {
         } else {
             self.original_probe_part.clone()
         };
-        crate::player::report::note_original_probe_for(
-            self.trace_generation,
-            Phase::SampleSource,
-            Outcome::Started,
-        );
         let sample = crate::curlio::sample_active_throughput_result(
             &url,
             plan.target_bytes,
@@ -2838,20 +2825,10 @@ impl HlsAbrControl {
             cancelled,
         );
         if !is_worker_ticket_current(expected) {
-            crate::player::report::note_original_probe_for(
-                self.trace_generation,
-                Phase::SampleSource,
-                Outcome::Inconclusive,
-            );
             return OriginalProbeResult::Stale;
         }
         match sample {
             Ok(sample) => {
-                crate::player::report::note_original_probe_for(
-                    self.trace_generation,
-                    Phase::SampleSource,
-                    source_probe_sample_outcome(sample),
-                );
                 OriginalProbeResult::Measured(sample)
             }
             Err(failure) => {
@@ -2867,25 +2844,10 @@ impl HlsAbrControl {
                     Failure::NoBody { .. } => OriginalProbeFailure::NoBody,
                     _ => OriginalProbeFailure::Other,
                 };
-                let outcome = match failure {
-                    Failure::Open(OpenErr::Deadline) | Failure::BodyDeadline => Outcome::Deadline,
-                    Failure::Open(OpenErr::Transport(_) | OpenErr::Multi(_))
-                    | Failure::BodyRead { .. } => Outcome::Transport,
-                    Failure::Open(OpenErr::Status(503 | 509)) => Outcome::Refused,
-                    Failure::Open(OpenErr::Status(500..=599)) => Outcome::ServerState,
-                    Failure::NoBody { .. } => Outcome::NoBody,
-                    _ => Outcome::Inconclusive,
-                };
-                crate::player::report::note_original_probe_for(
-                    self.trace_generation,
-                    Phase::SampleSource,
-                    outcome,
-                );
                 crate::player::log(&format!(
                     "abr: Original source request produced no capacity sample failure={failure:?}"
                 ));
                 OriginalProbeResult::Failed {
-                    outcome,
                     failure: detail,
                 }
             }
@@ -3172,7 +3134,6 @@ pub(crate) fn hls_abr_control(ps: &PlaybackSession) -> Option<(HlsAbrControl, Wo
         .flatten();
     Some((
         HlsAbrControl {
-            trace_generation: playback_trace_generation(),
             caps: attempt_caps(ps),
             sid: cur_sid(ps),
             rating_key: cur_rk(ps),
@@ -3441,7 +3402,6 @@ pub(crate) fn fallback_auto_to_hls_for(
         rung,
         offset_secs,
         true,
-        crate::player::report::DeliveryReason::LinkFallback,
     )
 }
 
@@ -3476,7 +3436,6 @@ pub(crate) fn fallback_unopened_auto_to_hls(ps: &mut PlaybackSession, offset_sec
         rung,
         offset_secs,
         false,
-        crate::player::report::DeliveryReason::OriginalOpenRollback,
     )
 }
 
@@ -3490,7 +3449,6 @@ fn install_auto_hls(
     rung: crate::abr::Rung,
     offset_secs: i64,
     visible_switch: bool,
-    reason: crate::player::report::DeliveryReason,
 ) -> Option<String> {
     let fixture_base = ps.auto_fixture_base.clone();
     let previous = {
@@ -3546,12 +3504,6 @@ fn install_auto_hls(
         if visible_switch {
             note_visible_switch(ps, ps.now_ms);
         }
-        crate::player::report::note_delivery_requested_for(
-            playback_trace_generation(),
-            crate::player::report::DeliveryClass::Hls,
-            crate::player::report::rung_quality_class(rung),
-            reason,
-        );
         Some(url)
     };
     if !fixture_base.is_empty() {
@@ -3783,12 +3735,6 @@ pub(crate) fn recover_auto_to_original_for(
             "enhancement: released to Original remux; previous encoder held pending frames"
         }
     });
-    crate::player::report::note_delivery_requested_for(
-        playback_trace_generation(),
-        crate::player::report::DeliveryClass::Remux,
-        crate::player::report::QualityClass::Original,
-        crate::player::report::DeliveryReason::OriginalRecovery,
-    );
     Some(AutoOriginalReload::Remux)
 }
 
@@ -3970,12 +3916,6 @@ fn recover_original_direct(
             "enhancement: released to Original direct play; remux encoder held pending frames"
         }
     });
-    crate::player::report::note_delivery_requested_for(
-        playback_trace_generation(),
-        crate::player::report::DeliveryClass::Direct,
-        crate::player::report::QualityClass::Original,
-        crate::player::report::DeliveryReason::OriginalRecovery,
-    );
     Some(AutoOriginalReload::Direct)
 }
 
@@ -4368,12 +4308,6 @@ pub(crate) fn play_resolution_failed(ps: &PlaybackSession) -> bool {
 pub(crate) fn play_verdict(ps: &PlaybackSession) -> Option<&str> {
     ps.play_verdict.as_ref().map(PlayVerdict::text)
 }
-/// Did the SERVER refuse this playback (`PlaybackInfo` answered with no way to serve it)? `false`
-/// for the app's own refusals (Direct Play off, Force Direct Play), where the server was never
-/// asked to decide. The sentence is [`play_verdict`], and it never reaches a report. MAIN THREAD.
-pub(crate) fn server_refused(ps: &PlaybackSession) -> bool {
-    matches!(ps.play_verdict, Some(PlayVerdict::Server(_)))
-}
 pub(crate) fn engine_failure(ps: &PlaybackSession) -> Option<crate::player::RuntimeFailure> {
     ps.engine_failure
 }
@@ -4414,35 +4348,6 @@ fn clear_play_verdict(ps: &mut PlaybackSession) {
 #[cfg(test)]
 pub(crate) fn clear_play_verdict_for_test(ps: &mut PlaybackSession) {
     clear_play_verdict(ps)
-}
-/// Test-only: leave `ps` exactly as a refusing [`apply_plan`] does — the verdict installed, no URL,
-/// no encoder session. For asserting what the failure report says about a playback that never got
-/// a route.
-#[cfg(test)]
-pub(crate) fn refuse_for_test(ps: &mut PlaybackSession, verdict: PlayVerdict) {
-    ps.play_verdict = Some(verdict);
-}
-/// Test-only: leave `ps` as a refusing [`apply_plan`] does after the SERVER refused a transcode —
-/// the verdict installed, the attempted route's contract and the source file's codecs recorded,
-/// and still no URL and no encoder session.
-#[cfg(test)]
-pub(crate) fn refuse_by_server_for_test(
-    ps: &mut PlaybackSession,
-    refusal: crate::catalog::Refusal,
-    remux: bool,
-    hls: bool,
-    src_vcodec: &str,
-    src_acodec: &str,
-) {
-    ps.play_verdict = Some(PlayVerdict::Server(refusal));
-    ps.cur_contract.remux = remux;
-    ps.cur_contract.delivery = if hls {
-        crate::catalog::TranscodeDelivery::FixedHls { seconds_per_segment: 2 }
-    } else {
-        crate::catalog::TranscodeDelivery::ProgressiveMkv
-    };
-    ps.src_vcodec = src_vcodec.to_owned();
-    ps.src_acodec = src_acodec.to_owned();
 }
 /// Test-only: install a live transcode route (`encoder` session, optional remux, optional
 /// fixed-HLS delivery) the way a successful [`apply_plan`] leaves it.
@@ -5602,9 +5507,6 @@ pub(crate) fn set_next_episode_mode(mode: NextEpisodeMode) -> bool {
     if saved {
         restore_next_episode_mode(mode);
         nj_machine::idle::invalidate();
-        crate::diag::event(crate::diag::schema::DiagEvent::FeatureUsed {
-            feature: crate::diag::schema::Feature::NextEpisode(mode),
-        });
     }
     saved
 }
@@ -5632,9 +5534,6 @@ pub(crate) fn set_skip_interval(interval: SkipInterval) -> bool {
     if saved {
         restore_skip_interval(interval);
         nj_machine::idle::invalidate();
-        crate::diag::event(crate::diag::schema::DiagEvent::FeatureUsed {
-            feature: crate::diag::schema::Feature::SkipInterval(interval),
-        });
     }
     saved
 }
@@ -5809,7 +5708,6 @@ pub(crate) fn restore_quality(q: Quality) {
 /// rebuilds from the stored ceiling, so only an explicit pick can move it mid-film.
 fn persist_quality_choice(q: Quality) -> Quality {
     let q = supported_quality(q);
-    crate::player::report::note_quality_selected_for(playback_trace_generation(), q);
     // See `restore_quality`: the same process global, the same lock requirement in tests.
     #[cfg(test)]
     nj_base::testlock::assert_held("the playback quality ceiling (persist_quality_choice)");
@@ -6531,7 +6429,7 @@ fn request_play_inner(
     let trace_generation = if request.preview {
         0
     } else {
-        trace_generation.unwrap_or_else(|| crate::player::report::requested(ps, sid))
+        trace_generation.unwrap_or_else(crate::player::report::requested)
     };
     let resume_ns = if request.preview { 0 } else { resume_ns.max(0) };
     // The fields a play REQUEST owns, as against the ones only a landing may install: the HUD
@@ -7294,7 +7192,7 @@ fn prepare_original_remux(
     // candidate's plain Original is still the route this recovery exists to reach.
     let enhancement_refused = audio.any();
     if enhancement_refused {
-        note_enhancement_refused(" in Original recovery; fell back", audio);
+        note_enhancement_refused(" in Original recovery; fell back");
         if candidate.direct {
             return Some(OriginalRemux::RefusedToDirect);
         }
@@ -7534,7 +7432,7 @@ fn try_retranscode(
     // A live enhancement toggle is a rejected action on Jellyfin (no audio DSP): the current
     // stream is retained and the menu shows what plays.
     if audio.any() {
-        note_enhancement_refused("; current stream retained", audio);
+        note_enhancement_refused("; current stream retained");
         return RetranscodeWorkerOutcome::Refused;
     }
     let qsess = next_encoder_session(&inputs.namespace);

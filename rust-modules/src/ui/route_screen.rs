@@ -1305,34 +1305,6 @@ mod tests {
         );
     }
 
-    /// Real consent questions need a third HERO line in Spanish and Belarusian. The shared
-    /// title must keep the whole question and move the disclosure region by that same height.
-    #[test]
-    fn translated_consent_questions_keep_their_complete_titles() {
-        struct QuestionMeasure;
-        impl nj_machine::machine::Measure for QuestionMeasure {
-            fn width(&self, text: &std::ffi::CStr, size: i32, _bold: bool) -> f32 {
-                text.to_string_lossy().chars().count() as f32 * size as f32 * 0.6
-            }
-            fn cap_h(&self, size: i32) -> f32 { size as f32 * 0.7 }
-            fn line_h(&self, size: i32) -> f32 { size as f32 * 1.2 }
-        }
-        let measure = QuestionMeasure;
-        let layout = RouteLayout::screen();
-        for preference in [nj_platform::i18n::Preference::En, nj_platform::i18n::Preference::Es, nj_platform::i18n::Preference::Be, nj_platform::i18n::Preference::Ru] {
-            let locale = nj_platform::i18n::LocaleContext::resolve(preference, None, None, None, None);
-            for question in [nj_platform::i18n::msg::settings_consent_crash_title_in(&locale),
-                nj_platform::i18n::msg::settings_consent_product_title_in(&locale)] {
-                let title = RouteLayout::narrative_title(question).with_measure(&measure);
-                assert!(!title.truncates(layout.narrative.w), "question was elided: {question}");
-                let height = title.measure_h(layout.narrative.w);
-                let copy = layout.narrative_copy_frame(false, question, layout.action.y, &measure);
-                assert_eq!(copy.y, layout.narrative_top(false) + height + theme::space::MD);
-                assert!(copy.h > theme::size::BODY as f32 * 6.0, "disclosure keeps a readable viewport");
-            }
-        }
-    }
-
     #[test]
     fn simultaneous_actions_flow_in_one_shared_bottom_row() {
         let l = RouteLayout::screen();

@@ -312,7 +312,7 @@ jobs:
     if: always() && needs.guard.result == 'success' && needs['legal-gate'].result == 'success'
     # The ARM build+verify pipeline itself lives in build-package.yml — shared with nightly.yml so
     # the two stop being hand-kept copies of one job. This job only carries the release-specific
-    # decisions: which ref, which flavour, which telemetry pair, which optional steps.
+    # decisions: which ref, which flavour, which optional steps.
     uses: ./.github/workflows/build-package.yml
     with:
       ref: ${{ needs.guard.outputs.tag }}
@@ -325,8 +325,6 @@ jobs:
       # package deliberately does not write that released asset name) — a loud failure naming a
       # checksum rather than a flavour.
       flavor: stable
-      # JellyRust ships no telemetry: no endpoint, no Sentry upload (docs/litefin-fork.md).
-      telemetry: none
       artifact: release-assets
       homebrew-manifest: true
       source-asset: true
@@ -334,8 +332,6 @@ jobs:
       # nativejelly-storage too (its 8 DT_NEEDED first went stable in 0.7.0), so it owes the same
       # gate webosbrew-ipk-verify's per-package verdict does not replace.
       fwcompat: true
-    secrets:
-      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
   publish:
     name: publish release

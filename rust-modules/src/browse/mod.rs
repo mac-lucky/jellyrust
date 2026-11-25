@@ -1413,7 +1413,6 @@ impl BrowseState {
                 choice,
                 query,
             } => {
-                let switched = self.cur() != index;
                 if select {
                     self.set_cur(index);
                 }
@@ -1422,11 +1421,6 @@ impl BrowseState {
                 }
                 if choice {
                     self.note_library_choice(index);
-                    if switched {
-                        crate::diag::event(crate::diag::schema::DiagEvent::FeatureUsed {
-                            feature: crate::diag::schema::Feature::LibrarySwitch,
-                        });
-                    }
                 }
                 match query {
                     Some(QueryEdit::Sort { key, desc }) => {

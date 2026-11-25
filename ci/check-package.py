@@ -39,10 +39,10 @@ def build_configuration(stamp: str) -> "str | None":
 
     THE FEATURE FLAGS ARE ONE FIELD OF SEVERAL, and reading the stamp as a whole string is what
     silently switched every gate that depends on this off. `RUST_CFG` is `features:$(RUST_FEATFLAGS)`,
-    then `+symbols` when SYMBOLS=1, then `+nightly:<date>` when FLAVOR=nightly, then always
-    `+tel:<hash>` — so the real stamp for an ordinary dev build is `features:+tel:98c4b7d3`, which
-    equals neither of the two literals this was once written against. It matched when it was
-    written; the telemetry field was added later, and from that day the answer was None for EVERY
+    then `+symbols` when SYMBOLS=1, then `+nightly:<date>` when FLAVOR=nightly; builds from before
+    telemetry was removed also ended in `+tel:<hash>`, so their stamp for an ordinary dev build was
+    `features:+tel:98c4b7d3`, which equals neither of the two literals this was once written
+    against. It matched when it was written; that field was added later, and from that day the answer was None for EVERY
     build this project makes. Nothing failed — the callers print "SKIP — neither shipped
     configuration" and move on — so the dev-trigger gate, the dev-only-library gate and the
     reported-version gate all graded nothing on every CI run. Exactly the defect class DEV_WITNESS
@@ -285,19 +285,20 @@ def _selftest() -> int:
 
     cases = {
         # what the Makefile writes today, per documented configuration
-        "features:+tel:98c4b7d37a4c": "dev",
-        "features:--no-default-features+tel:98c4b7d37a4c": "release",
-        "features:--no-default-features+symbols+tel:98c4b7d37a4c": "release",   # the release cut
-        "features:+symbols+tel:98c4b7d37a4c": "dev",
-        # the nightly cut: RELEASE=1 (so --no-default-features), SYMBOLS=1, and the dated field
-        "features:--no-default-features+symbols+nightly:20260919+tel:98c4b7d37a4c": "release",
-        # older stamps, from before the telemetry and symbols fields existed
         "features:": "dev",
         "features:--no-default-features": "release",
+        "features:--no-default-features+symbols": "release",   # the release cut
+        "features:+symbols": "dev",
+        # the nightly cut: RELEASE=1 (so --no-default-features), SYMBOLS=1, and the dated field
+        "features:--no-default-features+symbols+nightly:20260919": "release",
+        # older stamps, from builds that still carried the telemetry field
+        "features:+tel:98c4b7d37a4c": "dev",
+        "features:--no-default-features+symbols+tel:98c4b7d37a4c": "release",
         # configurations that are neither shipped one, and must SAY so rather than be graded
-        "features: --features lab-diagnostics+tel:abc123def456": None,          # LAB=1
-        "features:--no-default-features --features lab-diagnostics+tel:abc123def456": None,
-        "features:--no-default-features --features devtriggers+tel:abc123def456": None,  # shots
+        "features: --features lab-diagnostics": None,          # LAB=1
+        "features:--no-default-features --features lab-diagnostics": None,
+        "features:--no-default-features --features devtriggers": None,  # shots
+        "features:--no-default-features --features devtriggers+tel:abc123def456": None,
         # nothing to read
         "": None,
         "garbage": None,
@@ -337,10 +338,11 @@ def _selftest() -> int:
     # date of the wrong length — all three must be told apart, because the caller's rule is
     # "require it, FAIL if absent or malformed" and a silent `None` reads as "absent" either way.
     nightly_date_cases = {
-        "features:--no-default-features+symbols+nightly:20260919+tel:98c4b7d37a4c": "20260919",
-        "features:--no-default-features+symbols+tel:98c4b7d37a4c": None,                    # no field
-        "features:--no-default-features+symbols+nightly:2026091+tel:98c4b7d37a4c": None,    # 7 digits
-        "features:--no-default-features+symbols+nightly:202609190+tel:98c4b7d37a4c": None,  # 9 digits
+        "features:--no-default-features+symbols+nightly:20260919": "20260919",
+        "features:--no-default-features+symbols+nightly:20260919+tel:98c4b7d37a4c": "20260919",  # older
+        "features:--no-default-features+symbols": None,                    # no field
+        "features:--no-default-features+symbols+nightly:2026091": None,    # 7 digits
+        "features:--no-default-features+symbols+nightly:202609190": None,  # 9 digits
     }
     nightly_date_bad = 0
     for stamp, want in nightly_date_cases.items():
@@ -360,7 +362,7 @@ def _selftest() -> int:
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         good = Path(td) / "good.build-config"
-        good.write_text("features:--no-default-features+symbols+nightly:20260919+tel:98c4b7d37a4c")
+        good.write_text("features:--no-default-features+symbols+nightly:20260919")
         good_proc = subprocess.run([sys.executable, __file__, "--print-nightly-date", str(good)],
                                     capture_output=True, text=True)
         good_ok = good_proc.returncode == 0 and good_proc.stdout.strip() == "20260919"
@@ -372,7 +374,7 @@ def _selftest() -> int:
         # `sed -n` this replaces, NOT an error: `label="$version${nightly_date:+-nightly-...}"`
         # relies on an empty capture meaning "no suffix".
         missing = Path(td) / "missing.build-config"
-        missing.write_text("features:--no-default-features+symbols+tel:98c4b7d37a4c")
+        missing.write_text("features:--no-default-features+symbols")
         missing_proc = subprocess.run(
             [sys.executable, __file__, "--print-nightly-date", str(missing)],
             capture_output=True, text=True)
@@ -1202,7 +1204,7 @@ if binary.exists():
     # `RELEASE_LINE` marker at the repo root, see `expected_dev_version`'s doc and
     # `rust-modules/src/release_line.rs`), the next PATCH instead (`0.6.1` published, `0.6.2-dev`
     # in the tree). That exists so a developer build stops impersonating the last release in
-    # X-Plex-Version, in the Sentry release and on the diagnostics panel — and it means a version
+    # X-Plex-Version and on the diagnostics panel — and it means a version
     # string now has a way to be wrong that no file comparison can see: a package for the stable id
     # whose binary reports a version no release will ever carry, or, once this rule exists, a
     # developer build that silently stopped saying so.
@@ -1217,9 +1219,9 @@ if binary.exists():
     # MATCHED WITH THE `nativejelly@` PREFIX, not as a bare number, and that is the difference
     # between grading `NJ_VERSION` and grading whatever digits happen to be in .rodata: the About
     # page and any release note text carry the version too, so a bare-number search was satisfiable
-    # by a page the version mechanism never touched. `telemetry::{crashreport,native,playback}`
-    # compose `concat!("nativejelly@", env!("NJ_VERSION"))` in every configuration — telemetry is
-    # ungated on purpose — so this witnesses the emitted value itself.
+    # by a page the version mechanism never touched. `catalog::identity::VERSION_TAG` is
+    # `concat!("nativejelly@", env!("NJ_VERSION"))`, ungated in every configuration, so this
+    # witnesses the emitted value itself.
     #
     # NIGHTLY IS GRADED SEPARATELY. Its package version (`appinfo["version"]`, already checked
     # against Cargo.toml above) IS the next-minor-or-patch number — recomputing "next" a second
@@ -1510,7 +1512,7 @@ for loc in staged_locales:
 
 print("== ipk payload ==")
 expected = {
-    "nativejelly", "sentry-crash", "libass-plx.so.0", "appinfo.json", "icon.png", "largeIcon.png", "splash.png",
+    "nativejelly", "libass-plx.so.0", "appinfo.json", "icon.png", "largeIcon.png", "splash.png",
     # appfont-cjk.ttf is the fallback face. Its absence is not a cosmetic loss: every Korean,
     # Japanese and Chinese title in the library becomes tofu, which is LG checklist #6 and #48.
     # appfont-inter*.ttf are the subtitle family and the UI chain's Cyrillic/Greek/Latin Extended link.
@@ -1551,8 +1553,6 @@ if data_blob is not None:
           "the ipk's subtitle faces are byte-identical to pkg/fonts/subs (same SHA-256)")
     check(modes.get("nativejelly") == 0o755,
           "native app is executable by its jailed runtime uid")
-    check(modes.get("sentry-crash") == 0o755,
-          "native crash handler is executable in the archive")
     # **The simulator's Mach-O FFmpeg lives in pkg/ too, and must never be in the package.** It
     # cannot get there today — `APP_FILES` is an explicit list, not a glob — but "cannot" is a
     # property of one Makefile line, and what it guards against is 2 MB of unrunnable arm64 shipped

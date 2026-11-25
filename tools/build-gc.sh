@@ -518,8 +518,9 @@ checkout_kb() {
 }
 
 # The derived-tree names, in one place. `rust-modules/target*` covers every feature set's dir
-# (target, -release, -sim, -lab, -sym, -macapp, -shots); the vendor entries are the FFmpeg and
-# Sentry source and object trees, whose only product is the small prefix beside them.
+# (target, -release, -sim, -lab, -sym, -macapp, -shots); the vendor entries are the FFmpeg source
+# and object trees, whose only product is the small prefix beside them, plus the Sentry Native
+# trees that builds from before telemetry was removed left behind.
 lane_trees() {
   for d in "$1"/rust-modules/target*; do
     case "$d" in *'*'*) continue ;; esac
@@ -770,7 +771,7 @@ drop() {
 # running, in a script whose refusal message promises the opposite. The check is worth nothing
 # unless it precedes the first thing that can delete.
 # WHAT COUNTS AS "A BUILD IS RUNNING" IS WIDER THAN CARGO. Most of a `make` here is not cargo at
-# all — FFmpeg's own configure and make, the Sentry Native CMake build, the C translation units,
+# all — FFmpeg's own configure and make, the C translation units,
 # the final link — and during every one of those phases neither `cargo` nor `rustc` exists as a
 # process. A guard that watched only those two would pass happily and delete the very tree the
 # build was reading, which is not a clean failure: it is a half-removed object tree and a build

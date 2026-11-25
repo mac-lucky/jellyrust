@@ -181,8 +181,7 @@ APPPORT      = $(if $(filter stable,$(FLAVOR)),8910,$(if $(filter nightly,$(FLAV
 .DEFAULT_GOAL := all
 
 QUERY_GOALS = print-flavor print-appid print-appdir print-rundir print-eventlog print-appport print-tv \
-              print-simbin print-app-files print-deploy-files print-sentry-handler print-ffmpeg-staged \
-              print-sentry-project print-bench-config
+              print-simbin print-app-files print-deploy-files print-ffmpeg-staged print-bench-config
 print-flavor:   ; @echo '$(FLAVOR)'
 print-appid:    ; @echo '$(APPID)'
 print-appdir:   ; @echo '$(APPDIR)'
@@ -195,21 +194,18 @@ print-tv:       ; @echo '$(TV)'
 # `macapp` build has its own — so a tool that restates the path silently runs another lane's
 # binary. Same argument as `print-appdir`: ask, never restate.
 print-simbin:   ; @printf '%s\n' "$$SIM_MACOS_BIN_ENV"
-# The four queries `ci/test_deploy_manifest.py` asks instead of running `make -p` (which prints a
+# The queries `ci/test_deploy_manifest.py` asks instead of running `make -p` (which prints a
 # RECURSIVE variable's unexpanded definition — see the ban on it elsewhere in this file — and
 # would in any case hand a host test the SAME string for two different flavours). Defined once
-# `APP_FILES`/`DEPLOY_FILES`/`SENTRY_HANDLER`/`FFMPEG_STAGED` exist, further down this file; make
+# `APP_FILES`/`DEPLOY_FILES`/`FFMPEG_STAGED` exist, further down this file; make
 # reads the whole file before running a recipe, so the forward reference is fine.
 print-app-files:      ; @echo '$(APP_FILES)'
 print-deploy-files:   ; @echo '$(DEPLOY_FILES)'
 print-subs-font-files: ; @echo '$(SUBS_FONT_FILES)'
-print-sentry-handler: ; @echo '$(SENTRY_HANDLER)'
 print-ffmpeg-staged:  ; @echo '$(FFMPEG_STAGED)'
-print-sentry-project: ; @echo '$(SENTRY_PROJECT)'
-print-cargo-env: ; @env $(TELEMETRY_ENV) env | grep '^NJ_' | sort || true
+print-cargo-env: ; @env | grep '^NJ_' | sort || true
 # What `tools/build-bench.py` needs to run the recipes' cargo invocations without restating their
-# flags: toolchain, target dirs, feature flags, RUSTFLAGS. Never the telemetry credentials -- the
-# `build-bench` recipe hands those over in the environment, exactly like `test-fast` does.
+# flags: toolchain, target dirs, feature flags, RUSTFLAGS.
 print-bench-config:
 	@printf '%s\n' 'RUST_NIGHTLY=$(RUST_NIGHTLY)' 'RUST_TDIR=$(RUST_TDIR)' 'RUST_TARGET=$(RUST_TARGET)' \
 	  'RUST_FEATFLAGS=$(RUST_FEATFLAGS)' 'RUST_LIB=$(RUST_LIB)' 'RUST_ENV=$(RUST_ENV)' \
@@ -252,8 +248,8 @@ SYSROOT      = $(WEBOS_SDK)/arm-webos-linux-gnueabi/sysroot
 # NDK gcc default target is cortex-a9 / armv7-a / soft-float — portable across
 # webOS 3–6 and safe on the A53 (ARMv7 barriers are `dmb`, not the ARMv6 CP15
 # `mcr p15` that SIGILLs on ARMv8). So we do NOT pin -mcpu here.
-# -Wall -Wextra -Werror: the C side is five files (boot shim, crash tracer, narrow Sentry value
-# wrapper, Starfish/ACB seam and nanosvg rasterizer) and it built without this gate until
+# -Wall -Wextra -Werror: the C side is four files (boot shim, crash tracer, Starfish/ACB seam and
+# nanosvg rasterizer) and it built without this gate until
 # 2026-08-15 — so the crash tracer and the 15-symbol C++ seam, the two places where a sloppy cast is
 # least survivable, were compiled at gcc's bare default. Turning it on cost nothing: the only hit
 # in the tree is inside vendored nanosvg, suppressed at its include in src/svg.c.
@@ -266,9 +262,8 @@ SYSROOT      = $(WEBOS_SDK)/arm-webos-linux-gnueabi/sysroot
 #
 # Escape hatch while mid-edit: `make WERROR= …` (and see Cargo.toml for the Rust equivalent).
 WERROR      ?= -Werror
-# The out-of-process crash walker follows ARM's APCS frame chain. Keeping r11 frame pointers in
-# every C frame is therefore part of the crash-reporting ABI, not debug-only codegen; without it a
-# valid envelope contains only the faulting PC. Rust's matching flag is in RUST_ENV/config.toml.
+# r11 frame pointers and unwind tables in every C frame keep a core dump or a gdb session on the
+# rooted set walkable along ARM's APCS frame chain. Rust's matching flag is in RUST_ENV/config.toml.
 CFLAGS       = --sysroot=$(SYSROOT) -O2 -fno-omit-frame-pointer -funwind-tables -Wall -Wextra $(WERROR) -Iinclude -Isrc -Ivendor/nanosvg -D_GNU_SOURCE
 # DEBUG=1 keeps DWARF in the binary so a crash PC symbolizes to file:line instead of just
 # a function name (tools/crash-report.sh / the crash-triage skill). Same codegen, bigger
@@ -293,17 +288,6 @@ CFLAGS       = --sysroot=$(SYSROOT) -O2 -fno-omit-frame-pointer -funwind-tables 
 # home-relative REMAINDER — worktree name, CI's repo-name-twice segment — still varies build to
 # build, which is exactly the gap a symbol-server upload should not have and CI's runner path
 # happening to be stable today does not guarantee tomorrow.
-#
-# KNOWN TRADEOFF, not fixed here: this makes every remapped path (this one and RUST_REMAP's three)
-# stop resolving to a real file on whatever machine later runs `sentry-cli debug-files upload
-# --include-sources` — confirmed locally: `debug-files bundle-sources` against a binary built this
-# way finds zero files, against the same command finding real ones when comp_dir is left pointing
-# at a directory that still exists. RUST_REMAP has shipped with this same property since before
-# v0.5.0; `--include-sources` in release.yml is new since v0.5.0 and had never actually run in a
-# published release as of the build that added this comment, so whether it hard-fails an empty
-# source bundle or degrades to file+line-only symbolication was NOT determined before shipping. The
-# fix, if the degradation turns out to matter, is a real directory or symlink at each remapped
-# target path, created in the CI job between the build and the upload step — not a change here.
 CFLAGS_REMAP = -fdebug-prefix-map=$(HOME)=/build -fdebug-prefix-map=$(WEBOS_SDK)=/webos-sdk \
                -fdebug-prefix-map=$(CURDIR)=/nativejelly
 
@@ -494,8 +478,8 @@ RUST_TDIR      = target$(if $(RELEASE),-release,)$(if $(LAB),-lab,)$(if $(SYMBOL
 
 # WHICH VERSION THE BINARY REPORTS, which is not always the version it was cut from. A release
 # commit leaves the whole tree at the version it just published, so every developer build after it
-# reported that exact number as its own — in X-Plex-Version, in the Sentry release, on the
-# diagnostics panel — and nothing downstream could tell a working tree from the shipped artifact.
+# reported that exact number as its own — in X-Plex-Version, on the diagnostics panel — and
+# nothing downstream could tell a working tree from the shipped artifact.
 # `rust-modules/build.rs` reads this ONE variable: set, the binary says `0.6.0`; unset or empty, it
 # says `0.7.0-dev`, the next MINOR — trunk is where features land, so that is what is cut from it
 # next; a patch release comes off an existing minor's own line. Exported (rather than per recipe) so
@@ -584,61 +568,8 @@ RUST_STAMP     = pkg/.build-config
 # `make RELEASE=1 ipk` followed by `make RELEASE=1 SYMBOLS=1 symbols` silently relinks a different
 # binary and hands you a `.debug` that will never match anything a user's television reports — the
 # same shape as `make RELEASE=1 && make deploy`, which is the trap this whole mechanism exists for.
-# The telemetry endpoints, read out of the gitignored pkg/telemetry.local.json and handed to the
-# compiler as option_env! values. Absent file, absent key, EMPTY value -> the constant is None and
-# `telemetry::sender::configured()` is false at COMPILE time, so a fork, a CI runner and anyone
-# building from source get a binary with no endpoint in it at all. That is the safe direction and
-# it is a property of the artifact rather than of a runtime flag.
-#
-# **FOUR values, in two PAIRS, and the pair decides the environment.** This is not symmetry for its
-# own sake: the build's `environment` field is derived from WHICH pair it was given
-# (`telemetry::sender::ENVIRONMENT`), so a binary cannot label itself `production` while sending to
-# the dev project. The first draft derived it from the feature set instead, and
-# `make RELEASE=1 FLAVOR=debug deploy` -- an ordinary command -- would have done exactly that:
-# `RELEASE=1` drops `devtriggers`, so it read as production, while the key still came from the local
-# file and the data still went to dev. Destination and label diverging silently is the worst
-# outcome for a field whose only job is to say which side data is on.
-#
-# The DEV pair is what a developer's machine holds; the PRODUCTION pair exists only as a GitHub
-# repository variable and is injected by the release workflow. So a local build physically cannot
-# reach production -- not because a flag was set, but because the value is not on the machine.
-#
-# All four are WRITE-ONLY ingest credentials and publishable by design -- any client that sends
-# anything must carry one, and `strings` finds them in any shipped binary. The Sentry AUTH TOKEN is
-# a different thing entirely (it can read and delete the project's data), is not read here, and is
-# never compiled in; it lives only as a GitHub secret and is used only by `sentry-cli` in CI.
-# `python3 -c` rather than a grep because the file is JSON and a value can contain a `:` or a `/`;
-# `|| true` because the whole point is that a checkout without the file still builds.
-TELEMETRY_JSON = pkg/telemetry.local.json
-telemetry_val = $(shell python3 -c "import json,sys;print(json.load(open('$(TELEMETRY_JSON)')).get('$(1)',''))" 2>/dev/null || true)
-# The dev pair: read from the working copy, written there by `make telemetry-local`.
-NJ_SENTRY_DSN_DEV  ?= $(call telemetry_val,sentry_dsn_dev)
-NJ_POSTHOG_KEY_DEV ?= $(call telemetry_val,posthog_key_dev)
-# The production pair: deliberately NOT read from the file. Only the environment can supply these,
-# which in practice means the release workflow. Reading them from the working copy is precisely the
-# bug this whole arrangement exists to make impossible.
-NJ_SENTRY_DSN  ?=
-NJ_POSTHOG_KEY ?=
-
-# The telemetry values as `NAME='value'` words for the front of a cargo command line, for the
-# NON-EMPTY ones only. Cargo fingerprints an environment variable as an Option, so `NAME=''` is a
-# different input from NAME unset: a recipe that passed all four blank made every bare `cargo`
-# afterwards (a CI step, rust-analyzer, an agent's `cargo test`) recompile the whole app crate, and
-# the next `make` recompile it back. The crate reads all four through `option_env!` +
-# `non_empty()` (`telemetry/sender.rs`), so blank and unset already mean the same thing in code
-# and the binary is byte-for-byte what it was. A value the CALLER exported blank still reaches
-# cargo (make passes its environment through), which is the same blank a bare `cargo` in that
-# shell sees. `make -s print-cargo-env` prints what a cargo recipe receives.
-TELEMETRY_ENV = $(foreach v,NJ_SENTRY_DSN NJ_POSTHOG_KEY NJ_SENTRY_DSN_DEV NJ_POSTHOG_KEY_DEV,$(if $($(v)),$(v)='$($(v))',))
-
-# In the stamp, and it has to be: switching a build from unconfigured to configured changes what
-# the binary CAN DO and nothing about the sources, so without this the configuration would be
-# baked in from whichever build happened to run first -- the same class of trap as
-# `make RELEASE=1 && make deploy`. The values are hashed rather than written, so the stamp file
-# (which is not gitignored) never contains a credential.
-TELEMETRY_CFG  = $(shell printf '%s|%s|%s|%s' '$(NJ_SENTRY_DSN)' '$(NJ_POSTHOG_KEY)' '$(NJ_SENTRY_DSN_DEV)' '$(NJ_POSTHOG_KEY_DEV)' | shasum | cut -c1-12)
-# `+nightly:<date>` carries NJ_NIGHTLY_DATE into the stamp itself, the same reason SYMBOLS and the
-# telemetry pair are in it and RELEASE already was: a nightly binary's REPORTED version is dated by
+# `+nightly:<date>` carries NJ_NIGHTLY_DATE into the stamp itself, the same reason SYMBOLS is in it
+# and RELEASE already was: a nightly binary's REPORTED version is dated by
 # this value (`build.rs`'s NJ_CHANNEL=nightly arm), so `ci/check-package.py` needs the exact date a
 # packaged binary was built with to grade it — and the ONLY other place that date exists is this
 # environment variable, gone the moment the shell that ran `make` exits. Embedding the real value
@@ -647,7 +578,7 @@ TELEMETRY_CFG  = $(shell printf '%s|%s|%s|%s' '$(NJ_SENTRY_DSN)' '$(NJ_POSTHOG_K
 # else about the configuration moved. `$(filter nightly,$(FLAVOR))` guards it exactly the way
 # NJ_CHANNEL and NJ_NIGHTLY_DATE above are themselves guarded, so a non-nightly stamp is
 # byte-for-byte what it always was.
-RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(SYMBOLS),+symbols,)$(if $(filter nightly,$(FLAVOR)),+nightly:$(NJ_NIGHTLY_DATE),)+tel:$(TELEMETRY_CFG)
+RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(SYMBOLS),+symbols,)$(if $(filter nightly,$(FLAVOR)),+nightly:$(NJ_NIGHTLY_DATE),)
 # Handled by $(shell) during PARSING, and by DELETING the output rather than by timestamps.
 # Both choices are load-bearing, and both were arrived at by measuring the failures:
 #   * A rule cannot do it. macOS ships GNU make 3.81, which decides whether a target is up to date
@@ -768,30 +699,6 @@ $(LIBASS_STAGED): $(LIBASS_INPUTS)
 
 libass: $(LIBASS_STAGED)
 
-# Sentry Native supplies only the async-signal-safe capture and out-of-process ARM stack walk. Its
-# HTTP transport is compiled out: the resulting envelope is handed back to this executable in
-# spool-only mode and sent later by telemetry::sender, behind the app's own consent and retry rules.
-# The pinned source, webOS/glibc-2.12/ARM32 patch and build recipe live in ci/build-sentry-native.sh.
-SENTRY_NATIVE_PREFIX = vendor/sentry-native-prefix
-SENTRY_NATIVE_LIB     = $(SENTRY_NATIVE_PREFIX)/lib/libsentry.a
-SENTRY_UNWIND_LIB     = $(SENTRY_NATIVE_PREFIX)/lib/libunwind.a
-SENTRY_REMOTE_UNWIND_LIB = $(SENTRY_NATIVE_PREFIX)/lib/libunwind_remote.a
-SENTRY_HANDLER        = $(SENTRY_NATIVE_PREFIX)/bin/sentry-crash
-SENTRY_NATIVE_STAMP   = $(SENTRY_NATIVE_PREFIX)/.built
-SENTRY_NATIVE_INPUTS  = ci/arm-cc.py ci/check-link-evidence.py ci/stage-link-evidence.py ci/build-sentry-native.sh vendor/sentry-native/webos-arm32.patch
-
-# `sentry_context.c` is the only application TU that includes the SDK header. Its Rust caller sees
-# plain C strings rather than sentry_value_t's opaque by-value union, whose AAPCS ABI must stay on
-# the C side. The header is generated by the pinned SDK build, hence the explicit prerequisite.
-src/sentry_context.o: CFLAGS += -I$(SENTRY_NATIVE_PREFIX)/include
-src/sentry_context.o: $(SENTRY_NATIVE_STAMP)
-
-$(SENTRY_NATIVE_STAMP): $(SENTRY_NATIVE_INPUTS)
-	WEBOS_SDK=$(WEBOS_SDK) ./ci/build-sentry-native.sh
-	@touch $@
-
-sentry-native: $(SENTRY_NATIVE_STAMP)
-
 $(FFMPEG_INC)/libavformat/avformat.h: ci/build-ffmpeg.sh ci/arm-cc.py ci/check-link-evidence.py ci/stage-link-evidence.py
 	RELEASE=$(RELEASE) ./ci/build-ffmpeg.sh
 
@@ -823,7 +730,6 @@ $(RUST_LIB): LICENSE $(RUST_INPUTS) rust-modules/Cargo.toml rust-modules/Cargo.l
 	$(CARGO_SEED) restore $(RUST_TDIR) rust-modules/$(RUST_TDIR)
 	mkdir -p rust-modules/$(RUST_TDIR)
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" $(RUST_ENV) \
-	  $(TELEMETRY_ENV) \
 	  cargo +$(RUST_NIGHTLY) rustc --release --target $(RUST_TARGET) \
 	    --lib --crate-type staticlib --target-dir $(RUST_TDIR) $(RUST_FEATFLAGS) \
 	    --message-format=json-render-diagnostics > $(RUST_TDIR)/.lib-artifacts.json
@@ -876,7 +782,7 @@ pkg/nativejelly-storage: LICENSE $(STORAGE_INPUTS) rust-modules/Cargo.toml rust-
 # unwinder Rust's panic_unwind std references) + libc/pthread/dl/m/rt itself.
 # `--build-id` is UNCONDITIONAL and costs 20 bytes in an allocated note section. It is the only
 # stable identifier that survives `strip` and matches a separated `.debug` file back to the binary
-# it came from — which is what every symbol server, Sentry's included, keys a debug image on, and
+# it came from — which is what every symbol server keys a debug image on, and
 # what makes "is this .debug the one for that crash?" answerable at all. Until 2026-08-29 the ELF
 # carried only `.note.ABI-tag` and there was no such identifier; `tools/crash-report.sh` compares
 # whole-file md5s instead, which works only while the local binary is byte-identical to the shipped
@@ -910,10 +816,9 @@ SMP_INTERPOSER_LDFLAG = -Wl,--export-dynamic-symbol=$(SMP_CALLBACK_HOOK)
 # explicitly. `ci/check-elf.sh` only asserts that the Starfish interposer is exported (and that
 # Load-with-context is not a loader dependency); it does not assert that nothing else is defined.
 GC_SECTIONS_LDFLAG = -Wl,--gc-sections
-pkg/nativejelly: $(OBJS) $(RUST_LIB) $(FFMPEG_STAGED) $(LIBASS_STAGED) $(SENTRY_NATIVE_STAMP) Makefile ci/arm-cc.py ci/check-link-evidence.py
+pkg/nativejelly: $(OBJS) $(RUST_LIB) $(FFMPEG_STAGED) $(LIBASS_STAGED) Makefile ci/arm-cc.py ci/check-link-evidence.py
 	$(CC) $(CFLAGS) -Wl,--build-id=sha1 $(GC_SECTIONS_LDFLAG) $(SMP_INTERPOSER_LDFLAG) \
-	  $(OBJS) $(RUST_LIB) $(SENTRY_NATIVE_LIB) \
-	  $(SENTRY_UNWIND_LIB) $(LIBS_REAL) -ldl -lrt -lpthread -lm -o $@
+	  $(OBJS) $(RUST_LIB) $(LIBS_REAL) -ldl -lrt -lpthread -lm -o $@
 
 # --- NDK bootstrap -----------------------------------------------------------
 # Download + extract + relocate the webosbrew native-toolchain into $(WEBOS_SDK).
@@ -939,36 +844,6 @@ NDK_URL = https://github.com/webosbrew/native-toolchain/releases/download/$(NDK_
 # where an unverified 156 MB download actually matters.
 NDK_SHA256_linux-aarch64 = 45a2d12ff557457d92cde4fddaa77a6f1090fca03adc43bb74397e5e0c379501
 NDK_SHA256 = $(NDK_SHA256_$(NDK_PLAT))
-# Fetch this checkout's DEV telemetry credentials from GitHub into the gitignored local file.
-#
-# **GitHub is the single source of truth for every credential**, including the dev ones; the working
-# copy is a cache and never an origin. That is what makes a fresh clone or a second worktree one
-# command instead of a hunt — `[[worktree-fleet-hazards]]` records forgotten gitignored files as a
-# recurring cost here, and this is one of them.
-#
-# It fetches ONLY the `_DEV` pair, and being the sole writer of this file is what keeps the dev /
-# production separation true. The production pair is never written to disk on a developer's machine.
-#
-# The AUTH TOKEN is deliberately absent and cannot be fetched: `gh` reads repository VARIABLES but
-# GitHub secrets are write-only through the API, and the only consumer — `sentry-cli` — runs in CI.
-# So the one genuinely dangerous credential never lands on this machine at all.
-#
-# No `gh`, no network, or never having run this: the build simply carries no endpoint and sends
-# nothing, which is the safe direction and already the behaviour.
-telemetry-local:
-	@command -v gh >/dev/null || { echo "telemetry-local: needs the gh CLI (brew install gh)"; exit 1; }
-	@gh auth status >/dev/null 2>&1 || { echo "telemetry-local: gh is not authenticated (gh auth login)"; exit 1; }
-	@set -e; \
-	  dsn=$$(gh variable get NJ_SENTRY_DSN_DEV 2>/dev/null || true); \
-	  key=$$(gh variable get NJ_POSTHOG_KEY_DEV 2>/dev/null || true); \
-	  if [ -z "$$dsn$$key" ]; then \
-	    echo "telemetry-local: neither NJ_SENTRY_DSN_DEV nor NJ_POSTHOG_KEY_DEV is set on the repo"; \
-	    exit 1; \
-	  fi; \
-	  python3 -c 'import json,sys; json.dump({"_comment":["Written by `make telemetry-local`. GITIGNORED. DEV credentials only — the production pair lives solely in GitHub repository variables and is injected by the release workflow.","No auth token here: gh cannot read secrets, and sentry-cli runs in CI."],"sentry_dsn_dev":sys.argv[1],"posthog_key_dev":sys.argv[2],"sentry_org":"gleb-linnik","sentry_project":"native-jelly","posthog_host":"https://eu.i.posthog.com"}, open("$(TELEMETRY_JSON)","w"), indent=2)' "$$dsn" "$$key"; \
-	  chmod 0600 $(TELEMETRY_JSON); \
-	  echo "telemetry-local: wrote $(TELEMETRY_JSON) (dev credentials; environment=development)"
-
 setup-env:
 	@test "$(NDK_PLAT)" != UNSUPPORTED || { \
 	  echo "no webOS NDK published for $(NDK_OS)-$(NDK_HOST) at $(NDK_REL)."; \
@@ -1021,7 +896,7 @@ ICONS     = $(if $(filter stable,$(FLAVOR)),pkg/icon.png pkg/largeIcon.png,$(ICO
 # a Cloud Test Lab set has no ssh and the package is the only channel into it. GITIGNORED, 0600,
 # and in `.claude/hooks/outbound-guard.py`'s PRIVATE_FILES — it carries a live credential.
 LAB_FILES = $(if $(LAB),pkg/lab.json,)
-APP_FILES = pkg/nativejelly $(SENTRY_HANDLER) $(APPINFO) $(ICONS) pkg/splash.png \
+APP_FILES = pkg/nativejelly $(APPINFO) $(ICONS) pkg/splash.png \
             pkg/appfont.ttf pkg/appfont-bold.ttf pkg/appfont-inter.ttf pkg/appfont-inter-bold.ttf \
             pkg/appfont-cjk.ttf pkg/OFL.txt \
             THIRD-PARTY-NOTICES.md LICENSING.md \
@@ -1030,17 +905,17 @@ APP_FILES = pkg/nativejelly $(SENTRY_HANDLER) $(APPINFO) $(ICONS) pkg/splash.png
 
 # Everything `deploy` scp's as a PLAIN file, in one connection — the SAME set `ipk` stages via
 # `cp $(APP_FILES) $(STAGE)/`, minus the three entries that need their own handling for a reason
-# documented at each recipe rather than a plain copy: the binary and the crash handler (a running
-# process holds their inodes, so both go through a `.new` + `mv` dance), the bundled FFmpeg
+# documented at each recipe rather than a plain copy: the binary (a running process holds its
+# inode, so it goes through a `.new` + `mv` dance), the bundled FFmpeg
 # libraries (their own retirement loop removes a superseded major after the copy), and the LAB
 # session file (a non-LAB deploy must actively REMOVE it, which a plain copy must never do to any
 # other entry). `filter-out` rather than a second hand-typed list is the whole fix: this recipe
-# used to scp the binary, the handler, the appinfo and the fonts BY NAME, one line per file, while
+# used to scp the binary, the appinfo and the fonts BY NAME, one line per file, while
 # `ipk` staged whatever `APP_FILES` said — so `pkg/splash.png`, both icon sizes, `pkg/OFL.txt` and
 # `THIRD-PARTY-NOTICES.md` were in every `.ipk` and in NO deployed app directory, silently, for as
 # long as nobody compared the two by hand. `ci/test_deploy_manifest.py` pins the relationship
 # itself (via `print-app-files`/`print-deploy-files`), not just today's four names.
-DEPLOY_FILES = $(filter-out pkg/nativejelly $(SENTRY_HANDLER) $(FFMPEG_STAGED) $(LAB_FILES),$(APP_FILES))
+DEPLOY_FILES = $(filter-out pkg/nativejelly $(FFMPEG_STAGED) $(LAB_FILES),$(APP_FILES))
 
 # The subtitle faces (tools/cut-noto-subs.py): Noto Sans <script> Bold, one file per script, plus the
 # manifest that names them in add order. They are NOT in `APP_FILES`, because that list is staged
@@ -1086,7 +961,7 @@ pkg/.flavor/$(FLAVOR)/appinfo.json: pkg/appinfo.json ci/flavor.py ci/install-ide
 # prerequisites run left to right, and a cold `make deploy` spends ~2 minutes building FFmpeg
 # before it touches the television. Taking the lock first would hold the set through a build that
 # needs no television — and, on the short implicit lease, could even let it expire before the scp.
-deploy: pkg/nativejelly pkg/nativejelly-storage $(FFMPEG_STAGED) $(SENTRY_NATIVE_STAMP) $(APPINFO) release-guard tv-lock-require
+deploy: pkg/nativejelly pkg/nativejelly-storage $(FFMPEG_STAGED) $(APPINFO) release-guard tv-lock-require
 	@echo "deploying $(if $(RELEASE),RELEASE,dev) build ($(RUST_CFG)) to $(APPID) [$(FLAVOR)]"
 	@$(SSH) 'test -d $(APPDIR)' || { \
 	  echo "$(APPDIR) does not exist on the TV — the $(FLAVOR) flavour is not installed."; \
@@ -1111,18 +986,11 @@ deploy: pkg/nativejelly pkg/nativejelly-storage $(FFMPEG_STAGED) $(SENTRY_NATIVE
 	# that is not fast, and this is ~2.1 MB on every deploy. Unconditional, like the fonts —
 	# a CHANGED library must be able to reach the TV.
 	$(SCP) $(FFMPEG_STAGED) tv:$(APPDIR)/
-	# The native crash daemon is a separate process so it can read the dying process's stack while
-	# the signal handler keeps that process parked. It has no network transport of its own. Stage
-	# then rename: an already-running app keeps the old daemon executable open, and scp directly to
-	# that inode fails with ETXTBSY (observed on the first handler upgrade). Renaming is atomic and
-	# leaves the old process on its old inode while the next launch gets this one.
-	$(SCP) $(SENTRY_HANDLER) tv:$(APPDIR)/sentry-crash.new
-	$(SSH) 'chmod 755 $(APPDIR)/sentry-crash.new && mv $(APPDIR)/sentry-crash.new $(APPDIR)/sentry-crash'
 	# The storage helper is a registered LS2 SERVICE, not part of the app directory — `ipk` has
 	# shipped it since the service existed (`ci/stage-link-evidence.py` into
 	# `usr/palm/services/$(APPID).storage/`), but `deploy` never had a path to it at all, so an
 	# iterated fix to `storage_service/*.rs` only ever reached the TV via a full `make install`
-	# reinstall. Same `.new` + `mv` dance as the crash handler and for the same reason: LS2 may
+	# reinstall. Same `.new` + `mv` dance as the binary and for the same reason: LS2 may
 	# already have this service's OLD binary running (`appinstalld` execs `services.json`'s
 	# `executable` under its own uid), so `scp` straight onto that inode risks `ETXTBSY`.
 	$(SCP) pkg/nativejelly-storage tv:$(SERVICEDIR)/nativejelly-storage.new
@@ -1170,10 +1038,9 @@ deploy: pkg/nativejelly pkg/nativejelly-storage $(FFMPEG_STAGED) $(SENTRY_NATIVE
 	@if [ -n "$(TURBOJPEG_SO)" ]; then \
 	  $(SSH) 'test -f $(APPDIR)/libturbojpeg.so.0' || $(SCP) $(TURBOJPEG_SO) tv:$(APPDIR)/libturbojpeg.so.0; \
 	else echo "note: no libturbojpeg in the sysroot — capture JPEG mode will use the slow encoder"; fi
-	@# `scp` preserves the host mode. This checkout runs under umask 077, so `chmod +x` left a
-	@# root-owned 0700 binary: SAM could launch it before entering the app jail, but Sentry's
-	@# same-uid external reporter could not `execv` it to spool a crash envelope. The .ipk builder
-	@# already normalises this member to 0755; make the fast deploy path identical.
+	@# `scp` preserves the host mode, and this checkout runs under umask 077, so `chmod +x` would
+	@# leave a root-owned 0700 binary. The .ipk builder normalises this member to 0755; make the
+	@# fast deploy path identical.
 	$(SSH) 'mv $(APPDIR)/nativejelly.new $(APPDIR)/nativejelly && chmod 755 $(APPDIR)/nativejelly'
 	@$(MAKE) --no-print-directory verify-deploy FLAVOR=$(FLAVOR) RELEASE=$(RELEASE) LAB=$(LAB)
 
@@ -1186,10 +1053,10 @@ deploy: pkg/nativejelly pkg/nativejelly-storage $(FFMPEG_STAGED) $(SENTRY_NATIVE
 # just shipped by basename (`md5sum` on busybox), and hands that text plus the LOCAL paths to
 # `ci/verify-deploy.py`, which does the comparison (`md5 -q` on this Mac, matching busybox's hex
 # output) and fails loudly, naming every mismatch, rather than leaving a stale file for a bug
-# report to find weeks later. `VERIFY_FILES` is deliberately not `DEPLOY_FILES` alone: the binary,
-# the crash handler and the FFmpeg libraries take their own path to the device above and are just
+# report to find weeks later. `VERIFY_FILES` is deliberately not `DEPLOY_FILES` alone: the binary
+# and the FFmpeg libraries take their own path to the device above and are just
 # as capable of silently drifting, so they are verified too.
-VERIFY_FILES = pkg/nativejelly $(SENTRY_HANDLER) $(FFMPEG_STAGED) $(DEPLOY_FILES) pkg/nativejelly-storage \
+VERIFY_FILES = pkg/nativejelly $(FFMPEG_STAGED) $(DEPLOY_FILES) pkg/nativejelly-storage \
                $(SUBS_FONT_FILES) $(if $(LAB),pkg/lab.json,)
 verify-deploy: tv-lock-require
 	@echo "verify-deploy: comparing $(words $(VERIFY_FILES)) files against $(APPID) [$(FLAVOR)]"
@@ -1398,13 +1265,8 @@ check-cargo-unit-default:
 	@#
 	@# `mktemp -d` per invocation rather than a fixed path, so two checkouts (or two lanes) cannot
 	@# share one, and it is removed on the way out whether the suite passed or not.
-	@# The telemetry credentials are passed here too, and that is not decoration: `ENVIRONMENT` and
-	@# the two compile-time refusals are derived from them, so a host suite run WITHOUT them grades a
-	@# configuration nobody builds. With them, `the_environment_matches_the_credential_pair_that_was_
-	@# supplied` checks this checkout's actual configuration rather than the empty one.
 	@set -e; d=$$(mktemp -d /tmp/nativejelly-check.XXXXXX); trap 'rm -rf "'"$$d"'"' EXIT; \
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" NJ_RUNTIME_DIR="$$d" \
-	  $(TELEMETRY_ENV) \
 	  cargo +$(RUST_NIGHTLY) test --lib -p nativejelly-modules -p nj_base -p nj_machine -p nj_platform -p nj_gfx -p nj_net
 	RUST_NIGHTLY=$(RUST_NIGHTLY) python3 ci/test_storage_service_package.py
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" cargo +$(RUST_NIGHTLY) test -p nativejelly-storage --bin nativejelly-storage
@@ -1437,11 +1299,10 @@ check-cargo-unit-hostsim:
 	@# this costs a few seconds warm rather than a rebuild.
 	@set -e; d=$$(mktemp -d /tmp/nativejelly-check.XXXXXX); trap 'rm -rf "'"$$d"'"' EXIT; \
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" NJ_RUNTIME_DIR="$$d" \
-	  $(TELEMETRY_ENV) \
 	  cargo +$(RUST_NIGHTLY) test --lib -p nativejelly-modules -p nj_base -p nj_machine -p nj_platform -p nj_gfx -p nj_net --features hostsim
 
 # OPT-IN incremental inner loop: the default-feature unit suite (the same `cargo test --lib` as
-# `check-cargo-unit-default`, same throwaway runtime root and telemetry env) with
+# `check-cargo-unit-default`, same throwaway runtime root) with
 # CARGO_INCREMENTAL=1 in its OWN target dir. Measured 2026-10-01, same machine, 5 interleaved
 # rounds: an edit-rebuild is ~10 s vs 31-32 s non-incremental, flat across leaf/mid/hub edits;
 # cold is 51.7 s vs 46.2 s; the tree is 2.7 GB (debug/incremental 2.0 GB) vs 1.0 GB. Lanes stay
@@ -1460,7 +1321,6 @@ test-fast:
 	@set -e; d=$$(mktemp -d /tmp/nativejelly-check.XXXXXX); trap 'rm -rf "'"$$d"'"' EXIT; \
 	cd rust-modules && CARGO_INCREMENTAL=1 CARGO_TARGET_DIR=$(TEST_FAST_TDIR) \
 	  PATH="$$HOME/.cargo/bin:$$PATH" NJ_RUNTIME_DIR="$$d" \
-	  $(TELEMETRY_ENV) \
 	  cargo +$(RUST_NIGHTLY) test --lib -p nativejelly-modules -p nj_base -p nj_machine -p nj_platform -p nj_gfx -p nj_net $(if $(T),'$(T)')
 
 # `make build-bench [ARGS='--runs 5 --json out.json']` -- the repeatable local build benchmark
@@ -1469,14 +1329,14 @@ test-fast:
 # invocations as the recipes above (toolchain, dirs, feature flags and RUSTFLAGS come from
 # `print-bench-config`; ci/test_build_bench.py pins the rest), under the same machine-wide lock as
 # `make check` so two builds never skew each other, and with the environment `test-fast` gives
-# cargo (telemetry words included -- they are compile-time inputs). It only edits-and-restores two
+# cargo. It only edits-and-restores two
 # source files (restored in a finally) and never cleans a target dir.
 # Listed in SIDE_EFFECT_FREE: it builds none of the TV artifacts, so it must not reset the stamp.
 # RELEASE=1 is refused: the host test build is not the shipping feature set.
 .PHONY: build-bench build-bench-quick
 build-bench build-bench-quick:
 	@$(if $(RELEASE),echo "make $@: refused under RELEASE=1 -- it benchmarks the default-feature host build; RELEASE=1 is the shipping feature set." >&2; exit 1,:)
-	@python3 tools/check-lock.py -- env NJ_BENCH_VIA_MAKE=1 $(TELEMETRY_ENV) \
+	@python3 tools/check-lock.py -- env NJ_BENCH_VIA_MAKE=1 \
 	  python3 tools/build-bench.py $(if $(filter build-bench-quick,$@),--quick) $(ARGS)
 
 check-python: check-localization
@@ -1502,7 +1362,7 @@ check-python: check-localization
 	python3 -W ignore tools/test_tv_sched_trace.py
 	@# ...and the stamp decoder `ci/check-package.py` grades every "is this a RELEASE build?"
 	@# assertion through. It is pure string arithmetic over values only THIS file produces, and it
-	@# had been wrong since the telemetry field was added to RUST_CFG — decoding every real stamp as
+	@# had been wrong since a field was added to RUST_CFG — decoding every real stamp as
 	@# "neither shipped configuration", which is a SKIP, so three gates printed nothing and nobody
 	@# saw it. Free, and the one place the make-side and python-side spellings of the stamp meet.
 	python3 ci/check-package.py --selftest
@@ -1562,10 +1422,9 @@ check-python: check-localization
 	@# that serve the catalog skip, and say so, where the derived artwork cache is absent.
 	python3 tests/test_demo_library.py
 	python3 tests/test_image_cache_stress.py
-	@# Host-only halves of the opt-in live diagnostics: /proc/interrupt parsing, rate normalization,
-	@# stack aggregation and folded output. Neither command resolves a TV or takes its lock.
+	@# Host-only half of the opt-in live diagnostics: /proc/interrupt parsing and rate
+	@# normalization. It does not resolve a TV or take its lock.
 	tools/profile-graphics --selftest
-	tools/nativejelly-sample selftest
 	@# The direct-screen TV command's own host-only contract: `--server N` must suppress the
 	@# singular token boot (which cannot register N>0) and must construct the exact identity marker
 	@# that `up` requires after launch. No SSH or television access occurs in this self-test.
@@ -1709,7 +1568,7 @@ ifneq ($(SYMBOLS),1)
 else
 	$(TOOLPREFIX)objcopy --only-keep-debug pkg/nativejelly pkg/nativejelly.debug
 	@# The build ids MUST agree, and asserting it here is the point: everything downstream —
-	@# the DIF upload, the symbol server's lookup, `addr2line` against the right file — keys on
+	@# `addr2line` against the right file, any symbol server's lookup — keys on
 	@# this one value, and a mismatch is invisible until a real crash fails to symbolize.
 	@bin=$$($(TOOLPREFIX)readelf -n pkg/nativejelly | sed -n 's/.*Build ID: //p'); \
 	 dbg=$$($(TOOLPREFIX)readelf -n pkg/nativejelly.debug 2>/dev/null | sed -n 's/.*Build ID: //p'); \
@@ -1718,25 +1577,8 @@ else
 	 echo "symbols: pkg/nativejelly.debug  build-id $$bin  ($$(du -h pkg/nativejelly.debug | cut -f1))"
 endif
 
-# Validate and upload the exact debug file that matches `pkg/nativejelly`. This is a separate target
-# so a development build used for an on-device crash test gets the same fail-closed pairing as CI.
-# `SENTRY_AUTH_TOKEN` is read only from the process environment and is never echoed or written.
-SENTRY_ORG     ?= gleb-linnik
-# A local symbol build carries the development DSN, so its DIF belongs beside the events in the
-# development project. Release CI supplies SENTRY_PROJECT=native-jelly explicitly; a checkout with
-# no telemetry cache keeps that production fallback for deliberate one-off invocations.
-SENTRY_PROJECT ?= $(or $(call telemetry_val,sentry_project),native-jelly)
-SENTRY_CLI     ?= npx --yes @sentry/cli@latest
-sentry-symbols: symbols
-	@test -n "$${SENTRY_AUTH_TOKEN:-}" || { \
-	  echo "sentry-symbols: SENTRY_AUTH_TOKEN is required" >&2; exit 1; }
-	@SENTRY_ORG='$(SENTRY_ORG)' SENTRY_PROJECT='$(SENTRY_PROJECT)' \
-	  $(SENTRY_CLI) debug-files check pkg/nativejelly.debug
-	@SENTRY_ORG='$(SENTRY_ORG)' SENTRY_PROJECT='$(SENTRY_PROJECT)' \
-	  $(SENTRY_CLI) debug-files upload --include-sources pkg/nativejelly.debug pkg/nativejelly
-
 ipk: pkg/nativejelly pkg/nativejelly-storage $(APPINFO) release-guard
-	python3 ci/check-link-evidence.py pkg/nativejelly pkg/nativejelly-storage $(SENTRY_HANDLER) $(FFMPEG_STAGED) $(LIBASS_STAGED)
+	python3 ci/check-link-evidence.py pkg/nativejelly pkg/nativejelly-storage $(FFMPEG_STAGED) $(LIBASS_STAGED)
 	@echo "packaging $(if $(RELEASE),RELEASE,dev) build ($(RUST_CFG)) as $(APPID) [$(FLAVOR)]"
 	rm -rf ipkroot/data/usr && mkdir -p $(STAGE)/licenses
 	cp $(APP_FILES) $(STAGE)/
@@ -1750,7 +1592,7 @@ ipk: pkg/nativejelly pkg/nativejelly-storage $(APPINFO) release-guard
 	@# release crash report. Deploy ships the unstripped one by design; only the ipk is stripped.
 	$(TOOLPREFIX)strip --strip-unneeded $(STAGE)/nativejelly
 	rm -rf pkg/link-evidence/$(FLAVOR)
-	@for source in pkg/nativejelly $(SENTRY_HANDLER) $(FFMPEG_STAGED) $(LIBASS_STAGED); do \
+	@for source in pkg/nativejelly $(FFMPEG_STAGED) $(LIBASS_STAGED); do \
 	  python3 ci/stage-link-evidence.py "$$source" "$(STAGE)/$$(basename "$$source")" --stripped \
 	    --evidence-base "pkg/link-evidence/$(FLAVOR)/$$(basename "$$source")" || exit $$?; \
 	done
@@ -1894,18 +1736,6 @@ mali-irq-sample: tools/mali-irq-sample.c
 	@mkdir -p pkg
 	$(CC) $(CFLAGS) -o pkg/mali-irq-sample tools/mali-irq-sample.c
 
-# tools/nativejelly-stackwalk.c — opt-in live-process sampler for the rooted development set.  The
-# ptrace implementation is the same libunwind remote archive used by sentry-crash, but this helper
-# is never an APP_FILE and therefore never enters an ipk or a deploy.  tools/nativejelly-sample owns
-# its temporary copy under /tmp and removes it after every session.
-nativejelly-stackwalk: $(SENTRY_NATIVE_STAMP) tools/nativejelly-stackwalk.c
-	@mkdir -p pkg
-	$(CC) $(CFLAGS) \
-	  -Ivendor/sentry-native-src/vendor/libunwind/include \
-	  -Ivendor/sentry-native-build/vendor/libunwind/include \
-	  -o pkg/nativejelly-stackwalk tools/nativejelly-stackwalk.c \
-	  $(SENTRY_REMOTE_UNWIND_LIB) -ldl -lpthread
-
 # ---------------------------------------------------------------------------------------------
 # The desktop UI simulator — the same app core against a desktop SDL2 + desktop GL, no television.
 #
@@ -2027,8 +1857,7 @@ pkg/.ffabi-host-ok: ci/ffabi-assert.c $(FFMPEG_HOST_INC)/libavformat/avformat.h 
 sim: sim-macos
 
 sim-macos: $(FFMPEG_HOST_STAGED) $(LIBASS_HOST_STAGED) pkg/.ffabi-host-ok
-	$(TELEMETRY_ENV) \
-	  cargo build --manifest-path rust-modules/Cargo.toml --target-dir $(SIM_TDIR)$(if $(LAB),-lab,) --features hostsim$(if $(LAB), --features lab-diagnostics,) --bin nativejelly-sim
+	cargo build --manifest-path rust-modules/Cargo.toml --target-dir $(SIM_TDIR)$(if $(LAB),-lab,) --features hostsim$(if $(LAB), --features lab-diagnostics,) --bin nativejelly-sim
 
 # Full product replay is a renderer-backed host gate. Keep the fast unit suite usable without
 # a window system; Simulator CI runs this same driver against the simulator it just built.
@@ -2083,8 +1912,7 @@ $(FFMPEG_LINUX_HOST_STAGED) &: $(FFMPEG_HOST_INC)/libavformat/avformat.h ci/stag
 	./ci/stage-host-ffmpeg-linux.sh
 
 sim-linux: $(LIBASS_HOST_STAGED) $(FFMPEG_LINUX_HOST_STAGED) pkg/.ffabi-host-ok
-	$(TELEMETRY_ENV) \
-	  cargo build --release --manifest-path rust-modules/Cargo.toml --target-dir "$$SIM_LINUX_TDIR_ENV" \
+	cargo build --release --manifest-path rust-modules/Cargo.toml --target-dir "$$SIM_LINUX_TDIR_ENV" \
 	  --features hostsim --bin nativejelly-sim
 
 # `make sim-linux-run SIM_PMS=<host> [SIM_PORT=<port>]` — the Linux simulator WITH PLAYBACK. Arms the
@@ -2236,5 +2064,5 @@ fetch-profile:
 	-$(SCP) tv:$(RUNDIR)/nativejelly-hwcnt.jsonl pkg/nativejelly-hwcnt.jsonl
 	@ls -l pkg/nativejelly-*.jsonl 2>/dev/null || echo "no profiler output in $(RUNDIR) on the TV ($(APPID))"
 
-.PHONY: libass libass-host screenshots screenshots-sim demo-library disk symbols sentry-symbols sentry-native all setup-env telemetry-local deploy verify-deploy run run-stream kill check check-unlocked check-ffmpeg lint test ipk clean tv-lock-require threadprobe sockprobe logmprobe mali-hwcnt-probe tv-capture-bench mali-irq-sample nativejelly-stackwalk sim sim-macos sim-linux sim-wsl sim-run sim-macos-run sim-shot sim-macos-shot sim-token sim-macos-token sim-play sim-macos-play sim-clean sim-macos-clean macapp macapp-zip fixtures fixtures-quick fixtures-pipeline fetch-profile \
+.PHONY: libass libass-host screenshots screenshots-sim demo-library disk symbols all setup-env deploy verify-deploy run run-stream kill check check-unlocked check-ffmpeg lint test ipk clean tv-lock-require threadprobe sockprobe logmprobe mali-hwcnt-probe tv-capture-bench mali-irq-sample sim sim-macos sim-linux sim-wsl sim-run sim-macos-run sim-shot sim-macos-shot sim-token sim-macos-token sim-play sim-macos-play sim-clean sim-macos-clean macapp macapp-zip fixtures fixtures-quick fixtures-pipeline fetch-profile \
         release-guard lab-guard install uninstall $(QUERY_GOALS)

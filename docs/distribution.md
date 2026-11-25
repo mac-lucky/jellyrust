@@ -629,6 +629,9 @@ world-readable `/tmp` on the TV across many runs.
   `diag::scrub`'s `no_log_call_site_interpolates_viewing_content` greps the tree to keep it that
   way, and is itself proven to fail on a reintroduced leak.
 
+(Native Jelly's state when this was written. JellyRust removed Sentry, PostHog and the consent
+flow described here: `docs/litefin-fork.md`.)
+
 **Verified clean, no action:** the only outbound hosts are the user's PMS, plex.tv and
 `discover.provider.plex.tv` — plus, since the telemetry work, Sentry and PostHog in the EU, and
 those two only after an explicit first-run Share choice or a later Done in Account → Settings →

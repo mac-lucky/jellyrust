@@ -106,12 +106,6 @@ pub(crate) fn release(pa: &mut super::adapter::PlayerAdapter, restore_play: bool
     }
 }
 
-/// Test-only: stand a hold up for `serial` without a live Engine.
-#[cfg(test)]
-pub(crate) fn hold_for_test(serial: u64, restore_play: bool) {
-    store(&mut slot(), Some(Hold { serial, restore_play }));
-}
-
 /// Drop any hold without touching the transport: the playback it belonged to is gone (teardown
 /// resets the transport itself).
 pub(crate) fn clear() {

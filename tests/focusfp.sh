@@ -264,8 +264,8 @@ record_flow 5 detail-person-detail "detail=$RK_MOVIE detailsec=1 detailok" "slee
 # Language, Privacy, Legal, About and Privacy is row 2. Step down twice, visit it and toggle its
 # first choice, then return to row 2 and step down once to Legal.
 record_flow 6 settings-family "settings=root" "sleep:1 down down down ok sleep:1 ok sleep:1 back sleep:1 down ok sleep:1 ok sleep:1 back back back" 'overlay=settings'
-# 7 first-run consent -> onboard -> Home
-record_flow 7 firstrun-consent-onboard "firstrun" "sleep:1 ok sleep:1 ok sleep:1 down ok sleep:2" 'route='
+# 7 first-run sources editor -> Home
+record_flow 7 firstrun-onboard "firstrun" "sleep:1 down ok sleep:2" 'route='
 # 8 Detail -> hold on Related -> ItemMenu -> BACK. detailsec is a DOWN count, not a section id:
 # the synthetic movie's order is hero -> Cast -> Related -> About.
 record_flow 8 detail-hold-itemmenu "detail=$RK_MOVIE detailsec=2" "sleep:2 okdown sleep:0.7 okup sleep:1 back" 'route=detail'

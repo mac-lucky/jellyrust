@@ -1,11 +1,10 @@
-//! Session workers graded through the live Session adapter: the sign-out consent teardown that
-//! the adapter's `CloseTelemetry` effect executes, and the profile-switch worker's observations as
-//! the adapter's landing delivers them. The worker functions are `auth`'s; the adapter, the
+//! Session workers graded through the live Session adapter: the profile-switch worker's
+//! observations as the adapter's landing delivers them. The worker functions are `auth`'s; the adapter, the
 //! `Bridge` and the dispatcher that drive them sit above that layer, so the grading lives here
 //! (these four were `auth_session_worker_tests.rs`'s).
 
 use crate::app::adapters::session::SessionAdapter;
-use crate::auth::owner::{self, SessionArrival, SessionOp, SessionWorkKey};
+use crate::auth::owner::{SessionArrival, SessionOp, SessionWorkKey};
 use crate::auth::test_support::cached_session;
 use crate::auth::{
     discovery_insecure_only_message, observation, profile_switch_worker_with_io,
@@ -16,106 +15,6 @@ use crate::catalog::account::{AccountClient, CallEvidence, Resource, SwitchOutco
 use crate::catalog::probe::{self, Outcome};
 use crate::catalog::session::SourceRef;
 use nj_machine::machine::RequestId;
-
-/// **The next account to sign in must be asked afresh.** The maintainer's scenario (2026-09-04):
-/// account A consents to both channels, signs out, account B signs in through the QR flow — and
-/// B was never asked, while B's usage went out under A's consent and A's identifiers. Consent
-/// belongs to the person who gave it, so signing out ends it: the decision returns to
-/// *unanswered*, both identifiers are destroyed and the file is gone, exactly as a withdrawal
-/// plus a fresh install would leave it. This resource test grades the live Session adapter's
-/// CloseTelemetry effect. The Bridge erasure test separately proves that the owner emits it
-/// before resource deletion; no network work is launched here.
-#[test]
-fn signing_out_leaves_no_consent_and_no_identifier_for_the_next_account() {
-    let _endpoint = crate::telemetry::consent::as_if_configured(); // upstream's configured-build gates
-    use crate::telemetry::consent;
-    /// Every crate-global redirect this test takes, handed back on drop — so a failed
-    /// assertion cannot leave the next test writing into this one's directory.
-    struct Redirects {
-        dir: std::path::PathBuf,
-        saved: Option<consent::Consent>,
-    }
-    impl Drop for Redirects {
-        fn drop(&mut self) {
-            crate::telemetry::spool::set_test_path(None);
-            crate::telemetry::redirect_for_test(None);
-            crate::catalog::session::redirect_for_test(None);
-            if let Some(c) = self.saved.take() {
-                consent::install(c);
-            }
-            let _ = std::fs::remove_dir_all(&self.dir);
-        }
-    }
-    let _g = nj_base::testlock::serial();
-    let dir =
-        std::env::temp_dir().join(format!("nativejelly-signout-consent-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a writable temp dir");
-    let _redirects = Redirects {
-        dir: dir.clone(),
-        saved: consent::current(),
-    };
-    crate::catalog::session::redirect_for_test(Some(dir.join("auth.json")));
-    let consent_file = dir.join("telemetry.json");
-    crate::telemetry::redirect_for_test(Some(consent_file.clone()));
-    crate::telemetry::spool::set_test_path(Some(dir.join("spool.jsonl")));
-
-    // Account A answers yes to both, which mints both identifiers and persists the decision.
-    crate::telemetry::record(consent::apply(
-        &consent::Consent::default(),
-        true,
-        true,
-        || Some("a".repeat(32)),
-    ));
-    assert!(consent::allows_usage() && consent::errors_id().is_some());
-    assert!(
-        crate::telemetry::persistence::load(std::slice::from_ref(&consent_file)).any(),
-        "the decision was persisted for account A"
-    );
-
-    let mut bridge = crate::app::bridge::Bridge::for_consent_resource_test(
-        consent::current().expect("account A decision is published"),
-    );
-    let mut dispatcher =
-        crate::ui::dispatch::Dispatcher::<crate::app::bridge::AppHost>::new();
-    dispatcher.emit(
-        nj_machine::machine::MachineId::Session,
-        nj_machine::machine::Fx::App(
-            crate::screens::registry::AppFx::SessionEffect(
-                owner::SessionFx::Coordinator(owner::CoordinatorAction::CloseTelemetry),
-            ),
-        ),
-    );
-    dispatcher.frame_with(
-        &mut bridge,
-        nj_machine::machine::Tick::default(),
-        Vec::new(),
-        Vec::new(),
-        &mut crate::ui::dispatch::NoTap,
-        false,
-    );
-
-    let after = consent::current().expect("a decision is always published");
-    assert!(
-        !after.answered(),
-        "account B would never be asked: A's answer survived the sign-out"
-    );
-    assert!(
-        after.install_id.is_none() && after.errors_id.is_none(),
-        "an identifier survived the sign-out and would tag B's reports as A"
-    );
-    assert!(!consent::allows_usage() && !consent::allows_errors());
-    assert!(consent::errors_id().is_none());
-    assert!(
-        consent::should_ask(&after, false),
-        "the next authorized sign-in must put the question on screen again"
-    );
-    let reopened = crate::telemetry::persistence::load(std::slice::from_ref(&consent_file));
-    assert!(
-        !consent_file.exists() && !reopened.answered() && reopened.errors_id.is_none(),
-        "the persisted decision outlived the sign-out and would resume A's at the next boot"
-    );
-}
 
 #[test]
 fn instance_profile_worker_completes_offline_policy_on_its_own_landing() {

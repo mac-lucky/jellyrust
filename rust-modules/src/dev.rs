@@ -218,10 +218,8 @@ pub(crate) fn arm_wayland_debug() {
         return;
     }
     // SAFETY (of the environment write): the caller (`app::pre_boot_diagnostics`) runs this before
-    // `telemetry::boot`, whose `sentry_init` is the first step that starts threads (sentry-native's
-    // "sentry-tele" pool; `lab::boot` starts none, its poll thread comes later from
-    // `lab::start_control`). Checked against vendor/sentry-native-src/src/sentry_telemetry.c.
-    // `arm_gst_logging`'s own write runs after it and is not changed here.
+    // any worker thread starts (`lab::boot` starts none; its poll thread comes later from
+    // `lab::start_control`). `arm_gst_logging`'s own write runs after it and is not changed here.
     std::env::set_var("WAYLAND_DEBUG", "client");
     let stamp = |clock| {
         let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
@@ -278,9 +276,8 @@ pub(crate) fn server_slot() -> Option<Result<u16, String>> {
 ///
 /// Not a feature. An INSTRUMENT for the instrument, and it exists because of the rule this repo
 /// keeps re-learning: prove the instrument can see the thing before you read its silence, and
-/// prove the recorder records before you trust an empty recording. The fallback C crash tracer is
-/// always one witness; when crash consent and a DSN are present, Sentry Native's out-of-process
-/// handler is a second witness that can safely inspect the stopped process. Until
+/// prove the recorder records before you trust an empty recording. The witness is the C crash
+/// tracer (`src/crashtrace.c`), which writes `nativejelly-crash.log`. Until
 /// 2026-08-29 nothing had ever exercised it deliberately — which is how it went seven weeks with a
 /// re-raise that did not re-raise, silently costing every crash its `WIFSIGNALED` status — and only
 /// that: no crashd backtrace was lost, because this firmware writes no core and so produces none.
@@ -293,21 +290,14 @@ pub(crate) fn server_slot() -> Option<Result<u16, String>> {
 /// `panic` is a Rust panic inside an `extern "C"` CALLBACK — the shape of `ff::read_cb` under
 /// libav: the hook writes its `*** RUST PANIC` line, the unwind stops at the callback's own
 /// boundary, and the process aborts with `nj_run`'s frame intact. That leaves BOTH a panic
-/// record and a native SIGABRT envelope, the pair `telemetry::crashreport` must send as the one
-/// panic.
+/// record and the tracer's SIGABRT record.
 ///
 /// `unwind` panics straight in here instead, so the unwind crosses `nj_run`'s own frame before
-/// aborting at its `extern "C"` boundary. That used to drop the telemetry `Guard` on the way past
-/// and stop the native backend before the abort landed (dev set, 2026-09-19), so no envelope was
-/// written. `Drop for Guard` (`telemetry::native`) now checks `std::thread::panicking()` and
-/// returns early instead of tearing the backend down, so the backend stays armed through the
-/// unwind and the boundary abort still produces a native SIGABRT envelope (PR #168). `panic`
-/// remains the shape worth exercising for a real panic under libav; `unwind` is the regression
-/// test for the `Guard` fix itself.
+/// aborting at its `extern "C"` boundary.
 ///
 /// **Compiled out of a release build** with the rest of `devtriggers`, so a shipped binary has no
-/// path to it at all. Called after telemetry boot (so native capture can be armed) but before SDL
-/// or any screen is created, so it remains reachable when the fault being chased prevents UI boot.
+/// path to it at all. Called after the crash tracer is armed but before SDL or any screen is
+/// created, so it remains reachable when the fault being chased prevents UI boot.
 #[cfg(feature = "devtriggers")]
 pub(crate) fn crash_on_purpose() {
     let Some(kind) = nj_base::devtrig::read("crashtest") else {

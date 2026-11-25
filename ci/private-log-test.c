@@ -7,7 +7,6 @@
 #include <limits.h>
 
 int nj_run(const char *host, int port) { (void)host; (void)port; return 0; }
-int nj_sentry_spool_external(const char *path) { (void)path; return 0; }
 void nj_crash_write_image_marker(int fd) { (void)fd; }
 void nj_crash_install(int event_fd, int crash_fd) { (void)event_fd; (void)crash_fd; }
 int plx_runtime_path(const char *name, char *out, size_t cap) {

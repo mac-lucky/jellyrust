@@ -2716,7 +2716,7 @@ impl<'a> StatusOverlay<'a> {
     ///
     /// **Takes the glyph, not an optional builder** — a page-placed `Failed` read-out cannot be
     /// built without saying what failed (spec "1A"). Every caller reads it off the SAME typed
-    /// cause its copy came from (`telemetry::incident::IncidentContext::readout_glyph`, or the
+    /// cause its copy came from (`auth::incident::IncidentContext::readout_glyph`, or the
     /// fixed `Icon::ServerBadgeMinus` Home and the Library share for their own untyped "can't
     /// reach" verdict), so the glyph and the caption can never disagree. `Working`/`Empty` callers
     /// still pass one (the read-out is built once and shared across kinds in more than one

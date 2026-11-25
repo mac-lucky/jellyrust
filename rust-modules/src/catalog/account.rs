@@ -355,7 +355,7 @@ impl AccountClient {
     /// the user authorizes it on another device.
     ///
     /// When it fails, what the request observed — the sign-in flow's onboarding report classifies
-    /// it (`telemetry::incident::classify`). **No account call here answers `Option` any more**:
+    /// it (`auth::incident::classify`). **No account call here answers `Option` any more**:
     /// an `Option` folded "plex.tv refused this identity" into "plex.tv never answered", which is
     /// how a managed profile's 401 read as nothing at all (#132). See [`CallEvidence`].
     pub fn create_pin(&self) -> Result<Pin, CallEvidence> {
@@ -884,7 +884,7 @@ pub enum PinPoll {
 /// What an account request observed when it produced nothing usable: `Ok(status)` for a complete
 /// response that was refused or would not decode, `Err` for `net`'s own failure. Closed evidence
 /// only — the onboarding report reduces it to a link class plus one number
-/// (`telemetry::incident::classify`); no body, URL or header is kept.
+/// (`auth::incident::classify`); no body, URL or header is kept.
 pub type CallEvidence = Result<u16, nj_net::net::RequestFailure>;
 
 /// Is this a status by which plex.tv refused the IDENTITY a request carried (the token

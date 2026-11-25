@@ -10,7 +10,7 @@
 //! Stored Home, picker and explicit developer bootstrap use the same owner, with distinct typed
 //! authority. Network/PIN derivation remain worker operations; offline policy is retained below.
 use crate::catalog::account::{AccountClient, CallEvidence, HomeUser, PinPoll, Resource, SwitchOutcome};
-use crate::telemetry::incident::{
+use crate::auth::incident::{
     CountBucket, DiscoveryClass, DiscoveryEvidence, DiscoveryTarget, DiscoveryTrigger,
     IncidentContext, IncidentKind, NoServersEvidence,
 };
@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
+pub(crate) mod incident; // the closed vocabulary of a failed sign-in step, read by the sign-in read-out
 pub(crate) mod owner;
 pub(crate) mod observation;
 mod scripted; // the dev triggers that script the sign-in worker's outcomes (`readout`, `signinfail`)
@@ -261,18 +262,6 @@ pub struct ReadyCreds {
 
 /// Append a line to the shared on-device event log (never a token — only ids/counts/status).
 use nj_base::eventlog::log;
-
-/// Does restarting this flow begin a NEW sign-in attempt, as the diagnostics count them?
-///
-/// One line, named, because the schema states a contract that a boolean inversion here would break
-/// silently: a `SignInStarted` is bracketed by exactly one completed/failed/cancelled. An attempt
-/// still marked active has already reported its start and has not yet reported a settle, so
-/// restarting it is that attempt carrying on — which is what BOTH of the sign-in screen's timed
-/// escapes do. Only a restart from a settled read-out, whose `set_error` already reported the
-/// failure, opens a new bracket.
-fn restart_is_a_new_attempt(signin_active: bool) -> bool {
-    !signin_active
-}
 
 /// May a restart act on the flow that is live right now?
 ///
@@ -853,14 +842,14 @@ pub(crate) enum LoginProgress {
     /// screen-only like `plaintext`, `#[serde(skip)]` so no serialized copy carries it, left out of
     /// the observation digest, and never part of `incident` or a log line. `message` is then
     /// `browse.auth.no_servers`, the caption a screen shows when it has no name to say.
-    Failed { epoch: u64, message: String, incident: crate::telemetry::incident::IncidentContext,
+    Failed { epoch: u64, message: String, incident: crate::auth::incident::IncidentContext,
         plaintext: Option<PlaintextVerdict>,
         #[serde(skip)]
         account: Option<String> },
     /// plex.tv stopped answering the polls of the code on screen (`Some`, once, when the run of
     /// unanswered polls reaches [`LINK_TROUBLE_AFTER`]) or answered again (`None`). Non-terminal:
     /// the wait goes on, and the owner raises a `LinkStalled` incident from the evidence.
-    LinkTrouble { epoch: u64, trouble: Option<crate::telemetry::incident::IncidentContext> },
+    LinkTrouble { epoch: u64, trouble: Option<crate::auth::incident::IncidentContext> },
     /// Discovery and the account's Home-user fetch both finished. Carries everything
     /// the owner's resource commit needs to update the session coherently: the winning
     /// server, the reachable roster, and the Home users (empty for a single-user account, in which
@@ -1015,15 +1004,15 @@ fn discovery_failure(d: &Discovery) -> Option<(std::borrow::Cow<'static, str>, I
                     target: Some(DiscoveryTarget::Servers) }),
         )),
         Discovery::PlexTvFailed(run) => {
-            let (link, _, _) = crate::telemetry::incident::classify(Some(run.last));
+            let (link, _, _) = crate::auth::incident::classify(Some(run.last));
             let message = match link {
-                crate::telemetry::incident::LinkClass::Dns => nj_platform::i18n::msg::browse_auth_plex_dns_retry(i64::from(run.attempts)),
-                crate::telemetry::incident::LinkClass::Tls =>
+                crate::auth::incident::LinkClass::Dns => nj_platform::i18n::msg::browse_auth_plex_dns_retry(i64::from(run.attempts)),
+                crate::auth::incident::LinkClass::Tls =>
                     nj_platform::i18n::msg::browse_auth_plex_tls().into(),
-                crate::telemetry::incident::LinkClass::Answered2xx
-                | crate::telemetry::incident::LinkClass::Answered4xx
-                | crate::telemetry::incident::LinkClass::Answered5xx
-                | crate::telemetry::incident::LinkClass::AnsweredOther =>
+                crate::auth::incident::LinkClass::Answered2xx
+                | crate::auth::incident::LinkClass::Answered4xx
+                | crate::auth::incident::LinkClass::Answered5xx
+                | crate::auth::incident::LinkClass::AnsweredOther =>
                     nj_platform::i18n::msg::browse_auth_plex_unavailable().into(),
                 _ => nj_platform::i18n::msg::browse_auth_plex_connect_retry(i64::from(run.attempts)),
             };
@@ -1864,8 +1853,8 @@ pub(crate) fn insecure_only_copy(verdict: Option<&PlaintextVerdict>) -> std::bor
 
 /// The consent outcome a report carries for an insecure-only verdict — a closed code, never the
 /// server. `None` when the verdict was never offered (not eligible).
-pub(crate) fn plaintext_consent_code(verdict: &PlaintextVerdict) -> Option<crate::telemetry::incident::PlaintextConsentOutcome> {
-    use crate::telemetry::incident::PlaintextConsentOutcome as O;
+pub(crate) fn plaintext_consent_code(verdict: &PlaintextVerdict) -> Option<crate::auth::incident::PlaintextConsentOutcome> {
+    use crate::auth::incident::PlaintextConsentOutcome as O;
     verdict.offers().then_some(match verdict.choice {
         PlaintextChoice::Undecided => O::Offered,
         PlaintextChoice::Allowed => O::Accepted,
